@@ -1,0 +1,19 @@
+name: azure-service-health-slack-bot
+metadata:
+  template: azure-service-health-slack-bot@0.0.1
+services:
+  app:
+    project: .
+    language: python
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+      context: .
+hooks:
+  preprovision:
+    windows:
+      shell: pwsh
+      run: ./scripts/configure-secure-webhook.ps1
+    posix:
+      shell: pwsh
+      run: ./scripts/configure-secure-webhook.ps1
