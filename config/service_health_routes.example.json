@@ -1,0 +1,25 @@
+{
+  "default_channel_id": "C0123456789",
+  "rules": [
+    {
+      "channel_id": "C1111111111",
+      "priority": 100,
+      "subscription_ids": [
+        "00000000-0000-0000-0000-000000000000"
+      ],
+      "services": [
+        "Azure Kubernetes Service"
+      ],
+      "regions": [
+        "East US"
+      ]
+    },
+    {
+      "channel_id": "C2222222222",
+      "priority": 50,
+      "services": [
+        "Azure Storage"
+      ]
+    }
+  ]
+}
