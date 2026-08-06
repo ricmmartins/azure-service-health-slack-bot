@@ -41,12 +41,7 @@ keeps the deployment compliant with tenants/policies that require
 `publicNetworkAccess: Disabled` on these resource types. The Container App's
 public ingress (health probes and the secure webhook) is unaffected.
 
-```
-Azure Monitor (Service Health) --> Activity Log Alert --> Secure Action Group
-    --> POST /api/service-health (Easy Auth + app role check)
-    --> parse Common Alert Schema --> route by subscription/service/region
-    --> Azure Table Storage (ETag/lease idempotency) --> Slack chat.postMessage/chat.update
-```
+![Service Health to Slack processing pipeline: Azure Monitor Service Health event triggers an Activity Log Alert, which fires a Secure Action Group that calls POST /api/service-health. The app validates Easy Auth and the ActionGroupsSecureWebhook app role, parses the Common Alert Schema, routes by subscription/service/region, records ETag/lease idempotency in Azure Table Storage, and posts or updates a Slack message through its lifecycle.](img/architecture-flow.svg)
 
 ## Routes
 
