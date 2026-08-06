@@ -1,6 +1,12 @@
 param location string
 @minLength(8)
 param resourceToken string
+@allowed([
+  'Basic'
+  'Standard'
+  'Premium'
+])
+param skuName string = 'Basic'
 param tags object
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
@@ -8,7 +14,7 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = 
   location: location
   tags: tags
   sku: {
-    name: 'Basic'
+    name: skuName
   }
   properties: {
     adminUserEnabled: false
