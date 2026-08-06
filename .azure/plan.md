@@ -89,6 +89,33 @@ All commands were executed directly in this repository during this session.
 No deployment (`azd provision` / `azd deploy`) and no Microsoft Graph writes
 were performed, per the requirement to avoid live changes.
 
+## Post-merge revalidation (2026-08-06)
+
+After PR #1 merged to `main`, the full validation suite was re-run from a
+clean checkout of `main` to confirm nothing regressed and to prep the README
+deployment guide:
+
+| Check | Command | Result |
+|---|---|---|
+| Python tests | `python -m pytest -q` | **32 passed** |
+| Python lint | `python -m flake8 .` | **0 findings** |
+| Bicep compile | `az bicep build --file infra/main.bicep --stdout` | **Compiled successfully** |
+| Bicep lint | `az bicep lint --file infra/main.bicep` | **0 warnings/errors** |
+| Docker build | `docker build -t azure-service-health-slack-bot:validate2 .` | **Build succeeded** |
+| Non-root check | `docker exec shb-smoke2 whoami` | **`app`** |
+| Gunicorn smoke test | `curl /healthz`, `curl /readyz` | **HTTP 200** on both |
+| Container logs | `docker logs shb-smoke2` | Clean — no payload/secret logging |
+| AZD packaging | `azd package --no-prompt` | **SUCCESS** |
+| CI on `main` | `gh run view` (push trigger) | **All 3 jobs green**: Python tests/lint, Bicep build/lint, Docker build |
+| CI on PR #1 | `gh run list` | **Green** (merged after passing) |
+
+No deployment or Graph writes were performed. Following this revalidation,
+`README.md` was expanded with a full step-by-step deployment guide covering
+Slack app creation, AZD provisioning (including what
+`configure-secure-webhook.ps1` does under the hood), image deployment,
+end-to-end verification, multi-subscription rollout, routing updates, and
+teardown.
+
 ## Test coverage
 
 - `test/test_service_health.py` — Common Alert Schema parsing (native and
