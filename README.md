@@ -34,6 +34,13 @@ Webhook Action Group. Container Apps Easy Auth validates the Entra token and
 the application also requires the official AzNS caller application and the
 `ActionGroupsSecureWebhook` app role.
 
+Key Vault and the Storage account are provisioned with public network access
+disabled and are reachable only through Private Endpoints on a dedicated
+VNet (also used for the Container Apps environment's VNet integration); this
+keeps the deployment compliant with tenants/policies that require
+`publicNetworkAccess: Disabled` on these resource types. The Container App's
+public ingress (health probes and the secure webhook) is unaffected.
+
 ```
 Azure Monitor (Service Health) --> Activity Log Alert --> Secure Action Group
     --> POST /api/service-health (Easy Auth + app role check)
@@ -123,10 +130,17 @@ az login
 azd auth login
 azd env new
 azd env set SLACK_BOT_TOKEN "<xoxb-token>"
-azd env set SERVICE_HEALTH_ROUTES_JSON '{"default_channel_id":"C0123456789","rules":[]}'
+azd env set SERVICE_HEALTH_ROUTES_JSON_B64 ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"default_channel_id":"C0123456789","rules":[]}')))
 azd provision
 azd deploy
 ```
+
+> **Why base64?** `azd`'s parameter substitution does a raw text replace of
+> `${VAR}` into `infra/main.parameters.json` *before* parsing it as JSON, so a
+> raw JSON value containing quotes can corrupt the parameter file. Passing the
+> routing config as base64 avoids the problem entirely — Bicep decodes it
+> (`base64ToString(...)`) before writing it to the container's
+> `SERVICE_HEALTH_ROUTES_JSON` environment variable.
 
 The pre-provision hook runs `scripts/configure-secure-webhook.ps1`. It creates
 or reuses the protected API app registration, app role, API service
@@ -216,10 +230,15 @@ for the matching rules.
 ```sh
 azd env new                      # prompts for an environment name, subscription, and Azure region
 azd env set SLACK_BOT_TOKEN "xoxb-..."
-azd env set SERVICE_HEALTH_ROUTES_JSON "$(Get-Content config/service_health_routes.json -Raw)"   # PowerShell
+azd env set SERVICE_HEALTH_ROUTES_JSON_B64 ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Content config/service_health_routes.json -Raw))))   # PowerShell
 # bash/zsh equivalent:
-# azd env set SERVICE_HEALTH_ROUTES_JSON "$(cat config/service_health_routes.json)"
+# azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$(base64 -w0 config/service_health_routes.json)"
 ```
+
+> `SERVICE_HEALTH_ROUTES_JSON_B64` must be base64-encoded (see the note in
+> [Deploy with AZD](#deploy-with-azd) for why). Bicep decodes it before it
+> reaches the container as the plain-JSON `SERVICE_HEALTH_ROUTES_JSON`
+> environment variable — the application itself never sees base64.
 
 `AZURE_ENV_NAME`, `AZURE_LOCATION`, and `AZURE_SUBSCRIPTION_ID` are captured
 by `azd env new`; every other required Bicep parameter is filled in
@@ -313,9 +332,9 @@ Pull the `SERVICE_HEALTH_API_*` and `AZURE_TENANT_ID` values from
 ### 9. Update routing or redeploy later
 
 Editing `config/service_health_routes.json` requires re-running steps 4 and
-6 (`azd env set SERVICE_HEALTH_ROUTES_JSON ...` then `azd deploy`) so the new
-JSON reaches the Container App's environment variable — no image rebuild is
-required, but restarting the revision picks up the new routing.
+6 (`azd env set SERVICE_HEALTH_ROUTES_JSON_B64 ...` then `azd deploy`) so the
+new JSON reaches the Container App's environment variable — no image rebuild
+is required, but restarting the revision picks up the new routing.
 
 ### 10. Tear down
 
