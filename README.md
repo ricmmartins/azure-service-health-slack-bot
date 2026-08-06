@@ -177,7 +177,11 @@ command is safe to re-run.
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli),
   [Azure Developer CLI (`azd`)](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd),
   and PowerShell 7+ (`pwsh`) installed locally.
-- A Slack workspace where you can create/install apps.
+- A Slack workspace where you can create/install apps. You don't need a new
+  workspace for every test — reuse any workspace where you have permission to
+  create apps (e.g. your team's), or create a free one for testing at
+  <https://slack.com/get-started#/createnew> in about a minute (no credit
+  card, no company approval needed).
 
 ### 1. Create the Slack app and bot token
 
