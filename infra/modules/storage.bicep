@@ -2,6 +2,8 @@ param location string
 @minLength(8)
 param resourceToken string
 param managedIdentityPrincipalId string
+param peSubnetId string
+param tablePrivateDnsZoneId string
 param tags object
 
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
@@ -17,11 +19,48 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     supportsHttpsTrafficOnly: true
     allowBlobPublicAccess: false
     allowSharedKeyAccess: false
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: 'Disabled'
     networkAcls: {
       bypass: 'AzureServices'
-      defaultAction: 'Allow'
+      defaultAction: 'Deny'
     }
+  }
+}
+
+resource tablePrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-11-01' = {
+  name: 'pe-table-${resourceToken}'
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: peSubnetId
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'table-connection'
+        properties: {
+          privateLinkServiceId: storage.id
+          groupIds: [
+            'table'
+          ]
+        }
+      }
+    ]
+  }
+}
+
+resource tablePrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01' = {
+  parent: tablePrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'privatelink-table-core-windows-net'
+        properties: {
+          privateDnsZoneId: tablePrivateDnsZoneId
+        }
+      }
+    ]
   }
 }
 

@@ -17,6 +17,7 @@ param serviceHealthRoutesJson string
 param secureWebhookClientId string
 param secureWebhookIdentifierUri string
 param tenantId string
+param infraSubnetId string
 param tags object
 
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
@@ -30,6 +31,10 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
         customerId: logAnalyticsCustomerId
         sharedKey: logAnalyticsSharedKey
       }
+    }
+    vnetConfiguration: {
+      infrastructureSubnetId: infraSubnetId
+      internal: false
     }
   }
 }
