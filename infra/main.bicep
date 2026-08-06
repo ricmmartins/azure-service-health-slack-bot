@@ -7,14 +7,22 @@ param location string
 @secure()
 param slackBotToken string
 
-param serviceHealthRoutesJson string
+param serviceHealthRoutesJsonB64 string
 param secureWebhookClientId string
 param secureWebhookObjectId string
 param secureWebhookIdentifierUri string
 param tenantId string = tenant().tenantId
 
+@allowed([
+  'Basic'
+  'Standard'
+  'Premium'
+])
+param acrSkuName string = 'Basic'
+
 var resourceToken = toLower(uniqueString(subscription().id, environmentName))
 var resourceGroupName = 'rg-${environmentName}'
+var serviceHealthRoutesJson = base64ToString(serviceHealthRoutesJsonB64)
 var tags = {
   'azd-env-name': environmentName
   workload: 'azure-service-health-slack-bot'
@@ -42,6 +50,17 @@ module registry 'modules/registry.bicep' = {
   params: {
     location: location
     resourceToken: resourceToken
+    skuName: acrSkuName
+    tags: tags
+  }
+}
+
+module network 'modules/network.bicep' = {
+  scope: resourceGroup
+  name: 'network'
+  params: {
+    environmentName: environmentName
+    location: location
     tags: tags
   }
 }
@@ -54,6 +73,8 @@ module security 'modules/security.bicep' = {
     location: location
     resourceToken: resourceToken
     slackBotToken: slackBotToken
+    peSubnetId: network.outputs.peSubnetId
+    keyVaultPrivateDnsZoneId: network.outputs.keyVaultPrivateDnsZoneId
     tags: tags
   }
 }
@@ -65,6 +86,8 @@ module storage 'modules/storage.bicep' = {
     location: location
     resourceToken: resourceToken
     managedIdentityPrincipalId: security.outputs.managedIdentityPrincipalId
+    peSubnetId: network.outputs.peSubnetId
+    tablePrivateDnsZoneId: network.outputs.tablePrivateDnsZoneId
     tags: tags
   }
 }
@@ -89,6 +112,7 @@ module app 'modules/container-app.bicep' = {
     secureWebhookClientId: secureWebhookClientId
     secureWebhookIdentifierUri: secureWebhookIdentifierUri
     tenantId: tenantId
+    infraSubnetId: network.outputs.infraSubnetId
     tags: tags
   }
 }
