@@ -11,8 +11,8 @@
     "slackBotToken": {
       "value": "${SLACK_BOT_TOKEN}"
     },
-    "serviceHealthRoutesJson": {
-      "value": "${SERVICE_HEALTH_ROUTES_JSON}"
+    "serviceHealthRoutesJsonB64": {
+      "value": "${SERVICE_HEALTH_ROUTES_JSON_B64}"
     },
     "secureWebhookClientId": {
       "value": "${SERVICE_HEALTH_API_CLIENT_ID}"

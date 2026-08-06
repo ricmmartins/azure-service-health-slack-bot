@@ -7,6 +7,45 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# az rest --body <jsonString> is unreliable on Windows: PowerShell -> az.cmd -> cmd.exe
+# argument passing can corrupt embedded double quotes, causing Graph to reject the
+# payload with "Unable to read JSON request payload". Writing the body to a temp file
+# and passing --body @file avoids all shell quoting issues and works identically on
+# Windows and POSIX shells. This helper also checks the az CLI exit code so Graph
+# errors fail the script instead of silently leaving $application/$role as $null.
+function Invoke-GraphRest {
+    param(
+        [Parameter(Mandatory = $true)][string] $Method,
+        [Parameter(Mandatory = $true)][string] $Uri,
+        [Hashtable] $BodyObject
+    )
+
+    $azArgs = @("rest", "--method", $Method, "--uri", $Uri)
+    $tempFile = $null
+    if ($PSBoundParameters.ContainsKey("BodyObject")) {
+        $tempFile = [System.IO.Path]::GetTempFileName()
+        ($BodyObject | ConvertTo-Json -Depth 10) | Set-Content -Path $tempFile -Encoding utf8NoBOM
+        $azArgs += @("--headers", "Content-Type=application/json", "--body", "@$tempFile")
+    }
+
+    try {
+        $raw = & az @azArgs 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "az rest $Method $Uri failed (exit $LASTEXITCODE): $raw"
+        }
+    }
+    finally {
+        if ($tempFile -and (Test-Path $tempFile)) {
+            Remove-Item -Path $tempFile -Force
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        return $null
+    }
+    return $raw | ConvertFrom-Json
+}
+
 if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
     throw "Azure CLI is required. Run 'azd auth login' and install Azure CLI."
 }
@@ -17,9 +56,8 @@ if (-not $account) {
 }
 
 $tenantId = $account.tenantId
-$apps = az rest --method GET `
-    --uri "https://graph.microsoft.com/v1.0/applications?`$filter=displayName eq '$DisplayName'" `
-    | ConvertFrom-Json
+$apps = Invoke-GraphRest -Method GET `
+    -Uri "https://graph.microsoft.com/v1.0/applications?`$filter=displayName eq '$DisplayName'"
 $application = $apps.value | Select-Object -First 1
 
 if (-not $application) {
@@ -28,11 +66,10 @@ if (-not $application) {
         api = @{
             requestedAccessTokenVersion = 2
         }
-    } | ConvertTo-Json -Depth 5
-    $application = az rest --method POST `
-        --uri "https://graph.microsoft.com/v1.0/applications" `
-        --headers "Content-Type=application/json" `
-        --body $body | ConvertFrom-Json
+    }
+    $application = Invoke-GraphRest -Method POST `
+        -Uri "https://graph.microsoft.com/v1.0/applications" `
+        -BodyObject $body
 }
 
 if ($application.api.requestedAccessTokenVersion -ne 2) {
@@ -40,11 +77,10 @@ if ($application.api.requestedAccessTokenVersion -ne 2) {
         api = @{
             requestedAccessTokenVersion = 2
         }
-    } | ConvertTo-Json -Depth 5
-    az rest --method PATCH `
-        --uri "https://graph.microsoft.com/v1.0/applications/$($application.id)" `
-        --headers "Content-Type=application/json" `
-        --body $patch | Out-Null
+    }
+    Invoke-GraphRest -Method PATCH `
+        -Uri "https://graph.microsoft.com/v1.0/applications/$($application.id)" `
+        -BodyObject $patch | Out-Null
 }
 
 $identifierUri = "api://$($application.appId)"
@@ -65,46 +101,39 @@ if (-not $role) {
     $patch = @{
         identifierUris = @($identifierUri)
         appRoles = $appRoles
-    } | ConvertTo-Json -Depth 10
-    az rest --method PATCH `
-        --uri "https://graph.microsoft.com/v1.0/applications/$($application.id)" `
-        --headers "Content-Type=application/json" `
-        --body $patch | Out-Null
+    }
+    Invoke-GraphRest -Method PATCH `
+        -Uri "https://graph.microsoft.com/v1.0/applications/$($application.id)" `
+        -BodyObject $patch | Out-Null
 } elseif ($application.identifierUris -notcontains $identifierUri) {
-    $patch = @{ identifierUris = @($identifierUri) } | ConvertTo-Json
-    az rest --method PATCH `
-        --uri "https://graph.microsoft.com/v1.0/applications/$($application.id)" `
-        --headers "Content-Type=application/json" `
-        --body $patch | Out-Null
+    $patch = @{ identifierUris = @($identifierUri) }
+    Invoke-GraphRest -Method PATCH `
+        -Uri "https://graph.microsoft.com/v1.0/applications/$($application.id)" `
+        -BodyObject $patch | Out-Null
 }
 
-$servicePrincipals = az rest --method GET `
-    --uri "https://graph.microsoft.com/v1.0/servicePrincipals?`$filter=appId eq '$($application.appId)'" `
-    | ConvertFrom-Json
+$servicePrincipals = Invoke-GraphRest -Method GET `
+    -Uri "https://graph.microsoft.com/v1.0/servicePrincipals?`$filter=appId eq '$($application.appId)'"
 $apiServicePrincipal = $servicePrincipals.value | Select-Object -First 1
 if (-not $apiServicePrincipal) {
-    $body = @{ appId = $application.appId } | ConvertTo-Json
-    $apiServicePrincipal = az rest --method POST `
-        --uri "https://graph.microsoft.com/v1.0/servicePrincipals" `
-        --headers "Content-Type=application/json" `
-        --body $body | ConvertFrom-Json
+    $body = @{ appId = $application.appId }
+    $apiServicePrincipal = Invoke-GraphRest -Method POST `
+        -Uri "https://graph.microsoft.com/v1.0/servicePrincipals" `
+        -BodyObject $body
 }
 
-$aznsPrincipals = az rest --method GET `
-    --uri "https://graph.microsoft.com/v1.0/servicePrincipals?`$filter=appId eq '$AznsApplicationId'" `
-    | ConvertFrom-Json
+$aznsPrincipals = Invoke-GraphRest -Method GET `
+    -Uri "https://graph.microsoft.com/v1.0/servicePrincipals?`$filter=appId eq '$AznsApplicationId'"
 $aznsPrincipal = $aznsPrincipals.value | Select-Object -First 1
 if (-not $aznsPrincipal) {
-    $body = @{ appId = $AznsApplicationId } | ConvertTo-Json
-    $aznsPrincipal = az rest --method POST `
-        --uri "https://graph.microsoft.com/v1.0/servicePrincipals" `
-        --headers "Content-Type=application/json" `
-        --body $body | ConvertFrom-Json
+    $body = @{ appId = $AznsApplicationId }
+    $aznsPrincipal = Invoke-GraphRest -Method POST `
+        -Uri "https://graph.microsoft.com/v1.0/servicePrincipals" `
+        -BodyObject $body
 }
 
-$assignments = az rest --method GET `
-    --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$($aznsPrincipal.id)/appRoleAssignments" `
-    | ConvertFrom-Json
+$assignments = Invoke-GraphRest -Method GET `
+    -Uri "https://graph.microsoft.com/v1.0/servicePrincipals/$($aznsPrincipal.id)/appRoleAssignments"
 $assignment = $assignments.value | Where-Object {
     $_.resourceId -eq $apiServicePrincipal.id -and $_.appRoleId -eq $role.id
 }
@@ -113,11 +142,10 @@ if (-not $assignment) {
         principalId = $aznsPrincipal.id
         resourceId = $apiServicePrincipal.id
         appRoleId = $role.id
-    } | ConvertTo-Json
-    az rest --method POST `
-        --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$($aznsPrincipal.id)/appRoleAssignments" `
-        --headers "Content-Type=application/json" `
-        --body $body | Out-Null
+    }
+    Invoke-GraphRest -Method POST `
+        -Uri "https://graph.microsoft.com/v1.0/servicePrincipals/$($aznsPrincipal.id)/appRoleAssignments" `
+        -BodyObject $body | Out-Null
 }
 
 azd env set AZURE_TENANT_ID $tenantId | Out-Null
