@@ -1,0 +1,76 @@
+<svg viewBox="0 0 700 900" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">Service Health to Slack processing pipeline</title>
+  <desc id="desc">Azure Monitor Service Health alert flows through an Activity Log Alert and Secure Action Group to the app's webhook, which validates identity, parses the Common Alert Schema, routes it, records idempotency state in Table Storage, and posts or updates a Slack message.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#555555"/>
+    </marker>
+  </defs>
+
+  <!-- 1. Azure Monitor -->
+  <rect x="70" y="16" width="560" height="60" rx="10" fill="#dae8fc" stroke="#6c8ebf" stroke-width="1.5"/>
+  <text x="350" y="41" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2d3d">Azure Monitor</text>
+  <text x="350" y="60" text-anchor="middle" font-size="12" fill="#33475b">Service Health event detected</text>
+
+  <line x1="350" y1="76" x2="350" y2="106" stroke="#555555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- 2. Activity Log Alert -->
+  <rect x="70" y="106" width="560" height="60" rx="10" fill="#dae8fc" stroke="#6c8ebf" stroke-width="1.5"/>
+  <text x="350" y="141" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2d3d">Activity Log Alert</text>
+
+  <line x1="350" y1="166" x2="350" y2="196" stroke="#555555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- 3. Secure Action Group -->
+  <rect x="70" y="196" width="560" height="60" rx="10" fill="#fff2cc" stroke="#d6b656" stroke-width="1.5"/>
+  <text x="350" y="231" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2d3d">Secure Action Group</text>
+
+  <line x1="350" y1="256" x2="350" y2="286" stroke="#555555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- 4. POST /api/service-health (Easy Auth) -->
+  <rect x="70" y="286" width="560" height="76" rx="10" fill="#e1d5e7" stroke="#9673a6" stroke-width="1.5"/>
+  <text x="350" y="315" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2d3d" font-family="Consolas, monospace">POST /api/service-health</text>
+  <text x="350" y="336" text-anchor="middle" font-size="12" fill="#33475b">Easy Auth token + ActionGroupsSecureWebhook</text>
+  <text x="350" y="352" text-anchor="middle" font-size="12" fill="#33475b">app role check</text>
+
+  <line x1="350" y1="362" x2="350" y2="392" stroke="#555555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- 5. Parse Common Alert Schema -->
+  <rect x="70" y="392" width="560" height="60" rx="10" fill="#dae8fc" stroke="#6c8ebf" stroke-width="1.5"/>
+  <text x="350" y="427" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2d3d">Parse Common Alert Schema</text>
+
+  <line x1="350" y1="452" x2="350" y2="482" stroke="#555555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- 6. Route by subscription/service/region -->
+  <rect x="70" y="482" width="560" height="60" rx="10" fill="#dae8fc" stroke="#6c8ebf" stroke-width="1.5"/>
+  <text x="350" y="517" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2d3d">Route by subscription / service / region</text>
+
+  <line x1="350" y1="542" x2="350" y2="572" stroke="#555555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- 7. Azure Table Storage -->
+  <rect x="70" y="572" width="560" height="76" rx="10" fill="#d5e8d4" stroke="#82b366" stroke-width="1.5"/>
+  <text x="350" y="601" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2d3d">Azure Table Storage</text>
+  <text x="350" y="622" text-anchor="middle" font-size="12" fill="#33475b">ETag / lease idempotency keyed by</text>
+  <text x="350" y="638" text-anchor="middle" font-size="12" fill="#33475b">subscription + tracking ID</text>
+
+  <line x1="350" y1="648" x2="350" y2="678" stroke="#555555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- 8. Slack -->
+  <rect x="70" y="678" width="560" height="76" rx="10" fill="#d5e8d4" stroke="#82b366" stroke-width="1.5"/>
+  <text x="350" y="707" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2d3d" font-family="Consolas, monospace">Slack chat.postMessage / chat.update</text>
+  <text x="350" y="728" text-anchor="middle" font-size="12" fill="#33475b">One root message per subscription, updated</text>
+  <text x="350" y="744" text-anchor="middle" font-size="12" fill="#33475b">through Active → Updated → Resolved</text>
+
+  <!-- Legend -->
+  <rect x="70" y="784" width="14" height="14" rx="3" fill="#dae8fc" stroke="#6c8ebf" stroke-width="1"/>
+  <text x="92" y="795" font-size="12" fill="#33475b">Azure Monitor pipeline</text>
+
+  <rect x="240" y="784" width="14" height="14" rx="3" fill="#fff2cc" stroke="#d6b656" stroke-width="1"/>
+  <text x="262" y="795" font-size="12" fill="#33475b">Action Group</text>
+
+  <rect x="370" y="784" width="14" height="14" rx="3" fill="#e1d5e7" stroke="#9673a6" stroke-width="1"/>
+  <text x="392" y="795" font-size="12" fill="#33475b">Auth / identity check</text>
+
+  <rect x="540" y="784" width="14" height="14" rx="3" fill="#d5e8d4" stroke="#82b366" stroke-width="1"/>
+  <text x="562" y="795" font-size="12" fill="#33475b">Storage / Slack</text>
+</svg>
