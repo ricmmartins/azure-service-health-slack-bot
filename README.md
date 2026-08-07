@@ -51,6 +51,16 @@ public ingress (health probes and the secure webhook) is unaffected.
 | `GET /healthz` | Process liveness (public) |
 | `GET /readyz` | Service Health configuration readiness (public) |
 
+The webhook consumes Azure Monitor's
+[Common Alert Schema](https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-common-schema):
+standard fields are under `data.essentials`, and alert-specific fields are
+under `data.alertContext`. For Service Health, the app confirms
+`eventSource: ServiceHealth` and reads `subscriptionId`, Active/Resolved
+`status`, and `Properties.title`, `Properties.communication`,
+`Properties.trackingId`, and `Properties.impactedServices`. The last field is
+itself escaped JSON containing `ServiceName` and `RegionName`, as documented in
+[Service Health notification properties](https://learn.microsoft.com/azure/service-health/service-health-notifications-properties).
+
 ## Prerequisites
 
 - Python 3.13 for local development
@@ -102,6 +112,10 @@ example an unknown channel) return `4xx` and are not retried.
 ## Security
 
 - **Easy Auth (Entra ID)**: validates the caller's Microsoft Entra token.
+  Container Apps documents that the configured client ID is always an allowed
+  audience and that the default App ID URI is
+  `api://<APPLICATION_CLIENT_ID>`; see
+  [Microsoft Entra authentication for Container Apps](https://learn.microsoft.com/azure/container-apps/authentication-entra).
 - **App-level check**: the app additionally requires the official AzNS AAD
   Webhook application ID (`461e8683-5575-4561-ac7f-899cc907d62a`), the
   `ActionGroupsSecureWebhook` app role, and the configured audience —
@@ -164,7 +178,8 @@ user-assigned managed identity and RBAC — never shared keys.
 
 The registry defaults to the `Basic` SKU and intentionally has no untagged
 manifest retention policy. Azure Container Registry retention is a
-Premium-only feature; configuring it on `Basic` causes provisioning to fail.
+[preview, Premium-only feature](https://learn.microsoft.com/azure/container-registry/container-registry-retention-policy);
+configuring it on `Basic` causes provisioning to fail.
 
 ### Multi-subscription / tenant-wide alerting (Management Group scope)
 
@@ -227,6 +242,12 @@ terminal in the repository root.
   create apps (e.g. your team's), or create a free one for testing at
   <https://slack.com/get-started#/createnew> in about a minute (no credit
   card, no company approval needed).
+
+The official Linux installer for `azd` is:
+
+```bash
+curl -fsSL https://aka.ms/install-azd.sh | bash
+```
 
 Use current stable tool releases. This deployment was revalidated with Azure
 CLI 2.84.0, Docker 29.6.2, and the WSL 2 backend. `azd` 1.24.1 completed the
@@ -386,7 +407,9 @@ script), and the Activity Log Alert + Secure Action Group targeting the
 current subscription. The Service Health Activity Log Alert and Action Group
 are both created in the `Global` location. Service Health notifications require
 a Global Action Group; a regional Action Group does not work for this alert
-type.
+type. Microsoft documents this requirement, the Secure Webhook AzNS ownership
+and application-role setup, and retry behavior in
+[Create and manage Action Groups](https://learn.microsoft.com/azure/azure-monitor/alerts/action-groups).
 
 The protected API exposes `api://<client-id>`, requests Entra v2 tokens, and
 configures Easy Auth to accept both valid audience forms: the client ID GUID
@@ -414,6 +437,15 @@ APP_NAME="$(azd env get-value SERVICE_APP_NAME)"
 ENV_NAME="$(azd env get-value AZURE_ENV_NAME)"
 ACTION_GROUP="ag-${ENV_NAME}-service-health"
 ACTIVITY_ALERT="ala-${ENV_NAME}-service-health"
+API_CLIENT_ID="$(azd env get-value SERVICE_HEALTH_API_CLIENT_ID)"
+API_IDENTIFIER_URI="$(azd env get-value SERVICE_HEALTH_API_IDENTIFIER_URI)"
+ACR_LOGIN_SERVER="$(azd env get-value AZURE_CONTAINER_REGISTRY_ENDPOINT)"
+ACR_NAME="${ACR_LOGIN_SERVER%%.*}"
+STORAGE_NAME="$(az storage account list --resource-group "$RESOURCE_GROUP" --query '[0].name' -o tsv)"
+KEY_VAULT_NAME="$(az keyvault list --resource-group "$RESOURCE_GROUP" --query '[0].name' -o tsv)"
+IDENTITY_ID="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
+  --query 'keys(identity.userAssignedIdentities)[0]' -o tsv)"
+IDENTITY_PRINCIPAL_ID="$(az identity show --ids "$IDENTITY_ID" --query principalId -o tsv)"
 ```
 
 `SERVICE_APP_URI` already includes `https://`; do not prepend another scheme.
@@ -484,43 +516,135 @@ PY
 
 Delete the test message in Slack if it is not needed.
 
-#### 7.3 Azure resources and Secure Webhook
+#### 7.3 Azure resources, Secure Webhook, and secret wiring
 
 ```bash
-test "$(az monitor action-group show \
-  --resource-group "$RESOURCE_GROUP" --name "$ACTION_GROUP" \
-  --query location -o tsv | tr '[:upper:]' '[:lower:]')" = "global"
+(
+  set -euo pipefail
+  expect() {
+    [[ "$1" == "$2" ]] || {
+      printf 'Expected %s, got %s\n' "$2" "$1" >&2
+      return 1
+    }
+  }
 
-test "$(az monitor activity-log alert show \
-  --resource-group "$RESOURCE_GROUP" --name "$ACTIVITY_ALERT" \
-  --query location -o tsv | tr '[:upper:]' '[:lower:]')" = "global"
+  expect "$(az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" \
+    --query properties.runningStatus -o tsv)" "Running"
+  expect "$(az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" \
+    --query properties.provisioningState -o tsv)" "Succeeded"
+  expect "$(az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" \
+    --query properties.template.scale.minReplicas -o tsv)" "1"
+  expect "$(az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" \
+    --query properties.configuration.ingress.external -o tsv)" "true"
+  expect "$(az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" \
+    --query properties.configuration.ingress.allowInsecure -o tsv)" "false"
 
-az monitor action-group show \
-  --resource-group "$RESOURCE_GROUP" --name "$ACTION_GROUP" \
-  --query 'webhookReceivers[0].{aad:useAadAuth,objectId:objectId,identifierUri:identifierUri,commonSchema:useCommonAlertSchema}' \
-  -o yaml
+  AUTH_RESOURCE_TYPE="Microsoft.App/containerApps/authConfigs"
+  expect "$(az resource show -g "$RESOURCE_GROUP" --resource-type "$AUTH_RESOURCE_TYPE" \
+    --name "$APP_NAME/current" --api-version 2024-03-01 \
+    --query properties.platform.enabled -o tsv)" "true"
+  expect "$(az resource show -g "$RESOURCE_GROUP" --resource-type "$AUTH_RESOURCE_TYPE" \
+    --name "$APP_NAME/current" --api-version 2024-03-01 \
+    --query 'properties.identityProviders.azureActiveDirectory.validation.defaultAuthorizationPolicy.allowedApplications[0]' \
+    -o tsv)" "461e8683-5575-4561-ac7f-899cc907d62a"
+  ACTUAL_AUDIENCES="$(az resource show -g "$RESOURCE_GROUP" \
+    --resource-type "$AUTH_RESOURCE_TYPE" --name "$APP_NAME/current" \
+    --api-version 2024-03-01 \
+    --query 'properties.identityProviders.azureActiveDirectory.validation.allowedAudiences' \
+    -o tsv | sort)"
+  EXPECTED_AUDIENCES="$(printf '%s\n%s\n' "$API_CLIENT_ID" "$API_IDENTIFIER_URI" | sort)"
+  expect "$ACTUAL_AUDIENCES" "$EXPECTED_AUDIENCES"
 
-az monitor activity-log alert show \
-  --resource-group "$RESOURCE_GROUP" --name "$ACTIVITY_ALERT" \
-  --query '{enabled:enabled,scopes:scopes,actionGroups:actions.actionGroups}' \
-  -o yaml
+  expect "$(az monitor action-group show -g "$RESOURCE_GROUP" -n "$ACTION_GROUP" \
+    --query location -o tsv | tr '[:upper:]' '[:lower:]')" "global"
+  expect "$(az monitor action-group show -g "$RESOURCE_GROUP" -n "$ACTION_GROUP" \
+    --query enabled -o tsv)" "true"
+  expect "$(az monitor action-group show -g "$RESOURCE_GROUP" -n "$ACTION_GROUP" \
+    --query 'webhookReceivers[0].useAadAuth' -o tsv)" "true"
+  expect "$(az monitor action-group show -g "$RESOURCE_GROUP" -n "$ACTION_GROUP" \
+    --query 'webhookReceivers[0].useCommonAlertSchema' -o tsv)" "true"
+
+  expect "$(az monitor activity-log alert show -g "$RESOURCE_GROUP" -n "$ACTIVITY_ALERT" \
+    --query location -o tsv | tr '[:upper:]' '[:lower:]')" "global"
+  expect "$(az monitor activity-log alert show -g "$RESOURCE_GROUP" -n "$ACTIVITY_ALERT" \
+    --query enabled -o tsv)" "true"
+  expect "$(az monitor activity-log alert show -g "$RESOURCE_GROUP" -n "$ACTIVITY_ALERT" \
+    --query 'condition.allOf[0].equals' -o tsv)" "ServiceHealth"
+
+  expect "$(az acr show --name "$ACR_NAME" --query sku.name -o tsv)" "Basic"
+  expect "$(az acr show --name "$ACR_NAME" --query adminUserEnabled -o tsv)" "false"
+
+  expect "$(az storage account show -g "$RESOURCE_GROUP" -n "$STORAGE_NAME" \
+    --query enableHttpsTrafficOnly -o tsv)" "true"
+  expect "$(az storage account show -g "$RESOURCE_GROUP" -n "$STORAGE_NAME" \
+    --query minimumTlsVersion -o tsv)" "TLS1_2"
+  expect "$(az storage account show -g "$RESOURCE_GROUP" -n "$STORAGE_NAME" \
+    --query allowSharedKeyAccess -o tsv)" "false"
+  expect "$(az storage account show -g "$RESOURCE_GROUP" -n "$STORAGE_NAME" \
+    --query publicNetworkAccess -o tsv)" "Disabled"
+  STORAGE_ID="$(az storage account show -g "$RESOURCE_GROUP" -n "$STORAGE_NAME" \
+    --query id -o tsv)"
+  TABLE_NAME="$(az rest --method get \
+    --url "https://management.azure.com${STORAGE_ID}/tableServices/default/tables/ServiceHealthIncidents?api-version=2023-05-01" \
+    --query name -o tsv)"
+  [[ "$TABLE_NAME" == "default/ServiceHealthIncidents" ||
+     "$TABLE_NAME" == "ServiceHealthIncidents" ]]
+
+  expect "$(az keyvault show -g "$RESOURCE_GROUP" -n "$KEY_VAULT_NAME" \
+    --query properties.enableRbacAuthorization -o tsv)" "true"
+  expect "$(az keyvault show -g "$RESOURCE_GROUP" -n "$KEY_VAULT_NAME" \
+    --query properties.enablePurgeProtection -o tsv)" "true"
+  expect "$(az keyvault show -g "$RESOURCE_GROUP" -n "$KEY_VAULT_NAME" \
+    --query properties.softDeleteRetentionInDays -o tsv)" "90"
+  expect "$(az keyvault show -g "$RESOURCE_GROUP" -n "$KEY_VAULT_NAME" \
+    --query properties.publicNetworkAccess -o tsv)" "Disabled"
+
+  ACTUAL_ROLES="$(az role assignment list --assignee-object-id "$IDENTITY_PRINCIPAL_ID" \
+    --all --query '[].roleDefinitionName' -o tsv | sort -u)"
+  EXPECTED_ROLES="$(printf '%s\n' AcrPull 'Key Vault Secrets User' \
+    'Storage Table Data Contributor' | sort)"
+  expect "$ACTUAL_ROLES" "$EXPECTED_ROLES"
+
+  SECRET_REFERENCE="$(az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" \
+    --query "properties.configuration.secrets[?name=='slack-bot-token'] | [0].keyVaultUrl" \
+    -o tsv)"
+  [[ "$SECRET_REFERENCE" == \
+    "https://${KEY_VAULT_NAME}.vault.azure.net/secrets/slack-bot-token/"* ]]
+)
 ```
 
-The receiver must show `aad: true`, a nonempty protected API object ID, the
-`api://<client-id>` identifier URI, and Common Alert Schema enabled. The setup
-script has already made the official AzNS service principal an owner of that
-API app and assigned its `ActionGroupsSecureWebhook` application role.
+These checks use Azure Resource Manager metadata. They confirm that the secret
+reference points to a versioned `slack-bot-token` URI, but never request the
+secret value. A deployer without Key Vault data-plane access should get an
+authorization error if they try to read the value; that is expected and is not
+a reason to grant themselves `Key Vault Secrets User`. The Container App's
+managed identity is the intended secret reader.
 
 #### 7.4 Official Service Health Action Group test
 
 Use Azure Monitor's signed Service Health test, not a hand-crafted webhook
-payload:
+payload. The CLI command does **not** reuse the receivers stored on the named
+Action Group; omitting `--add-action` returns
+`BadRequest: There are no valid receivers in the request`. Read the deployed
+receiver metadata and pass it back to the
+[`test-notifications create` command](https://learn.microsoft.com/cli/azure/monitor/action-group/test-notifications#az-monitor-action-group-test-notifications-create):
 
 ```bash
+URI="$(az monitor action-group show -g "$RESOURCE_GROUP" -n "$ACTION_GROUP" \
+  --query 'webhookReceivers[0].serviceUri' -o tsv)"
+OBJECT_ID="$(az monitor action-group show -g "$RESOURCE_GROUP" -n "$ACTION_GROUP" \
+  --query 'webhookReceivers[0].objectId' -o tsv)"
+IDENTIFIER_URI="$(az monitor action-group show -g "$RESOURCE_GROUP" -n "$ACTION_GROUP" \
+  --query 'webhookReceivers[0].identifierUri' -o tsv)"
+
 az monitor action-group test-notifications create \
   --resource-group "$RESOURCE_GROUP" \
-  --action-group "$ACTION_GROUP" \
-  --alert-type servicehealth
+  --action-group-name "$ACTION_GROUP" \
+  --alert-type servicehealth \
+  --add-action webhook slack-service-health "$URI" \
+    useaadauth "$OBJECT_ID" "$IDENTIFIER_URI" usecommonalertschema \
+  --only-show-errors \
+  -o json
 
 az containerapp logs show \
   --resource-group "$RESOURCE_GROUP" \
@@ -531,14 +655,16 @@ az containerapp logs show \
 
 The equivalent portal path is **Monitor → Alerts → Action groups → select the
 action group → Test → Service Health**. A successful result must produce an
-HTTP `200` request in the Container App/Application Insights logs and a
-formatted Service Health message in Slack.
+operation state of `Complete`, an HTTP `200` `POST /api/service-health` from
+`IcMBroadcaster/1.0` in the Container App access log, and a formatted Service
+Health message in Slack.
 
 Do not repeatedly run failing tests. Azure Monitor retries retryable webhook
-failures and, after the retry sequence is exhausted, suppresses all Action
-Group calls to that endpoint for 15 minutes. Fix the underlying issue, wait
-the full cooldown, and then run one official `servicehealth` test. During the
-cooldown, even correct configuration can appear broken.
+failures up to five times. HTTP `408`, `429`, `503`, and `504`, plus transport
+exceptions, are retryable. After the retry sequence is exhausted, Action
+Groups suppress all calls to that endpoint for 15 minutes. Fix the underlying
+issue, wait the full cooldown, and then run one official `servicehealth` test.
+During the cooldown, even correct configuration can appear broken.
 
 ### 8. Add more subscriptions (optional)
 

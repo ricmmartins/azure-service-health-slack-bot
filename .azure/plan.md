@@ -239,6 +239,11 @@ The exercise reconciled these production details:
    Monitor's webhook retries and suppress all Action Group calls to the
    endpoint for 15 minutes. After correcting a failure, wait for the cooldown
    before running one official test.
+10. **CLI test receiver behavior.** `test-notifications create` does not reuse
+    receivers from the named Action Group. The validated command reads the
+    deployed URI, object ID, and identifier URI, then supplies the Secure
+    Webhook receiver with `--add-action webhook ... useaadauth ...
+    usecommonalertschema`.
 
 | Live check | Expected and observed result |
 |---|---|
@@ -249,8 +254,8 @@ The exercise reconciled these production details:
 | Slack `chat.postMessage` | Visible test message in the configured channel |
 | Action Group and alert location | Both `Global` |
 | Secure Webhook receiver | Entra auth and Common Alert Schema enabled with protected API object/identifier values |
-| `az monitor action-group test-notifications create --alert-type servicehealth` | Signed request accepted and formatted Service Health message delivered to Slack |
-| Container App logs | Successful webhook request with no credential or payload logging |
+| `az monitor action-group test-notifications create --alert-type servicehealth --add-action webhook ...` | Operation state `Complete`; signed request accepted and formatted Service Health message delivered to Slack |
+| Container App logs | `POST /api/service-health` HTTP 200 from `IcMBroadcaster/1.0`, with no credential or payload logging |
 
 The canonical reproducible commands, troubleshooting, cooldown warning,
 cleanup, and rollback procedure now live in the README rather than a duplicate
