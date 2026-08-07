@@ -294,10 +294,12 @@ before touching any Azure resource. The script:
 3. Ensures a service principal exists for that app, and for Microsoft's
    official **AzNS AAD Webhook** application
    (`461e8683-5575-4561-ac7f-899cc907d62a`).
-4. Grants the AzNS service principal the `ActionGroupsSecureWebhook` app
+4. Adds the AzNS service principal as an owner of the protected API app, as
+   required by Azure Monitor to create, modify, and test Secure Webhook actions.
+5. Grants the AzNS service principal the `ActionGroupsSecureWebhook` app
    role on your API app — this is what lets Azure Monitor's Secure Webhook
    Action Group call your endpoint with a verifiable Entra token.
-5. Writes `AZURE_TENANT_ID`, `SERVICE_HEALTH_API_CLIENT_ID`,
+6. Writes `AZURE_TENANT_ID`, `SERVICE_HEALTH_API_CLIENT_ID`,
    `SERVICE_HEALTH_API_OBJECT_ID`, and `SERVICE_HEALTH_API_IDENTIFIER_URI`
    into the AZD environment for the Bicep deployment to consume.
 

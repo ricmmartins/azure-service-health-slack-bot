@@ -132,6 +132,18 @@ if (-not $aznsPrincipal) {
         -BodyObject $body
 }
 
+$owners = Invoke-GraphRest -Method GET `
+    -Uri "https://graph.microsoft.com/v1.0/applications/$($application.id)/owners?`$select=id"
+$aznsOwner = $owners.value | Where-Object { $_.id -eq $aznsPrincipal.id }
+if (-not $aznsOwner) {
+    $body = @{
+        '@odata.id' = "https://graph.microsoft.com/v1.0/directoryObjects/$($aznsPrincipal.id)"
+    }
+    Invoke-GraphRest -Method POST `
+        -Uri "https://graph.microsoft.com/v1.0/applications/$($application.id)/owners/`$ref" `
+        -BodyObject $body | Out-Null
+}
+
 $assignments = Invoke-GraphRest -Method GET `
     -Uri "https://graph.microsoft.com/v1.0/servicePrincipals/$($aznsPrincipal.id)/appRoleAssignments"
 $assignment = $assignments.value | Where-Object {
