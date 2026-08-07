@@ -47,7 +47,7 @@ function Invoke-GraphRest {
 }
 
 if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
-    throw "Azure CLI is required. Run 'azd auth login' and install Azure CLI."
+    throw "Azure CLI is required. Install it and run 'az login'."
 }
 
 $account = az account show --output json | ConvertFrom-Json

@@ -1,4 +1,4 @@
-# Azure Service Health Slack Bot — Delivery Plan
+# Azure Service Health Slack Bot — Delivery and Deployment Record
 
 ## Summary
 
@@ -23,7 +23,7 @@ was already self-contained and had zero dependency on the excluded code.
 ## Architecture
 
 - **Compute**: Azure Container Apps (single container, Gunicorn, non-root,
-  1 vCPU / 1Gi min, HTTP autoscale 1–3 replicas)
+  0.5 vCPU / 1Gi, HTTP autoscale 1–3 replicas)
 - **Identity**: user-assigned managed identity with exactly three role
   assignments:
   - `AcrPull` on the Container Registry
@@ -43,7 +43,7 @@ was already self-contained and had zero dependency on the excluded code.
 - **Registry**: Azure Container Registry (SKU parameterized, default `Basic`;
   admin user disabled, anonymous pull disabled — override to `Standard`/
   `Premium` via the `acrSkuName` Bicep parameter if your subscription policy
-  rejects the cheaper SKUs, as MCAPS-Hybrid-REQ subscriptions do)
+  rejects the cheaper SKUs)
 - **Networking**: Key Vault and Storage are provisioned with
   `publicNetworkAccess: 'Disabled'` and reached only via Private Endpoints on
   a dedicated VNet (`infra/modules/network.bicep`), which also provides the
@@ -54,14 +54,11 @@ was already self-contained and had zero dependency on the excluded code.
   (`infra/modules/service-health-alert.bicep`), isolated so it can be
   redeployed per additional subscription
 
-## Explicit exclusions (per requirements)
+## Scope exclusions
 
 - No Slack Bolt / signing secret / inbound events
 - No Azure support-ticket workflow (`azure-mgmt-support` not a dependency)
 - No `support-rbac.bicep` module (Reader, Support Request Contributor)
-- No deployment performed by this work, and no Microsoft Graph writes were
-  made — `scripts/configure-secure-webhook.ps1` is provided but was not
-  executed against any tenant
 
 ## Repository layout
 
@@ -76,7 +73,7 @@ test/                           Parser/routing/auth/storage/processor/Slack/app/
 .github/workflows/ci.yml        pytest+flake8, bicep build/lint, docker build
 ```
 
-## Validation proof
+## Initial validation proof
 
 All commands were executed directly in this repository during this session.
 
@@ -94,8 +91,8 @@ All commands were executed directly in this repository during this session.
 | Container logs | `docker logs shb-smoke` | Clean gunicorn startup logs only — **no payload or secret values logged** |
 | AZD packaging | `azd package --no-prompt` | **SUCCESS** — image tagged `azure-service-health-slack-bot/app-<env>:azd-deploy-<ts>` |
 
-No deployment (`azd provision` / `azd deploy`) and no Microsoft Graph writes
-were performed, per the requirement to avoid live changes.
+These initial checks intentionally stopped before deployment. Live deployment
+validation and the resulting corrections are recorded below.
 
 ## Post-merge revalidation (2026-08-06)
 
@@ -117,12 +114,9 @@ deployment guide:
 | CI on `main` | `gh run view` (push trigger) | **All 3 jobs green**: Python tests/lint, Bicep build/lint, Docker build |
 | CI on PR #1 | `gh run list` | **Green** (merged after passing) |
 
-No deployment or Graph writes were performed. Following this revalidation,
-`README.md` was expanded with a full step-by-step deployment guide covering
-Slack app creation, AZD provisioning (including what
-`configure-secure-webhook.ps1` does under the hood), image deployment,
-end-to-end verification, multi-subscription rollout, routing updates, and
-teardown.
+This post-merge pass also stopped before deployment. Following it, `README.md`
+was expanded with the step-by-step deployment guide that was later exercised
+against real WSL, Azure, and Slack environments.
 
 ## Test coverage
 
@@ -148,19 +142,14 @@ teardown.
   `chat.postMessage` and persisting `messageTs` to Table Storage. Recovery is
   manual (see README Operations section). A transactional queue would close
   this window but is out of scope for this MVP.
-- `configure-secure-webhook.ps1` requires interactive Graph/Azure CLI
-  authentication and was validated only for syntax (AST parse), not executed
-  against a tenant, per the "no Graph writes" requirement.
 
-## Live deployment validation (2026-08-06, follow-up session)
+## First live infrastructure validation (2026-08-06)
 
 A real end-to-end deployment was executed in an internal Microsoft dev/test
-subscription (`MCAPS-Hybrid-REQ-71914-2024-ricardomac`) to prove the whole
-pipeline works, using a placeholder Slack bot token and placeholder routing
-config (`SLACK_BOT_TOKEN=xoxb-PLACEHOLDER-REPLACE-ME`, a fallback-only routes
-JSON) since only the account owner can create a real Slack app/token. This
-uncovered and fixed three real bugs, plus one environment-specific
-accommodation, all committed here:
+subscription to prove the Azure infrastructure path, using nonfunctional test
+Slack configuration. No subscription IDs, resource names, tenant details, or
+credentials are retained in this record. This uncovered and fixed three real
+bugs, plus one environment-specific accommodation:
 
 1. **`scripts/configure-secure-webhook.ps1` silently failed on Windows.**
    `az rest --body <jsonstring>` gets mangled by PowerShell → `az.cmd` →
@@ -198,18 +187,71 @@ not previously registered — a one-time step, not a repo bug.
 | Python tests (post-fix) | `python -m pytest -q` | **32 passed** |
 | Python lint (post-fix) | `python -m flake8 .` | **0 findings** |
 | PowerShell parse (post-fix) | AST parse of `configure-secure-webhook.ps1` | **PARSE OK** |
-| Real `azd provision` | `azd provision --no-prompt` | **SUCCESS** — resource group, VNet, 2 Private Endpoints, Log Analytics, App Insights, Key Vault (+secret), Storage Account/Table, ACR, Container Apps Environment (VNet-integrated), Container App, Entra app registration + `ActionGroupsSecureWebhook` role + AzNS role assignment, Action Group, Activity Log Alert all created in `rg-ricmmartins-turbo-guacamole` |
+| Real `azd provision` | `azd provision --no-prompt` | **SUCCESS** — resource group, VNet, 2 Private Endpoints, Log Analytics, App Insights, Key Vault (+secret), Storage Account/Table, ACR, Container Apps Environment (VNet-integrated), Container App, Entra app registration + `ActionGroupsSecureWebhook` role + AzNS role assignment, Action Group, and Activity Log Alert created |
 | Real `azd deploy` | `azd deploy --no-prompt` | **SUCCESS** — real app image built, pushed to ACR, deployed as the active Container App revision |
 | Live `/healthz` | `curl https://<fqdn>/healthz` | **HTTP 200** `{"status":"healthy"}` |
 | Live `/readyz` | `curl https://<fqdn>/readyz` | **HTTP 200** `{"status":"ready"}` (confirms live Key Vault + Table Storage connectivity through the Private Endpoints) |
 | Live webhook auth | `curl -X POST https://<fqdn>/api/service-health` (no token) | **HTTP 401** `authentication_required` — confirms Easy Auth is enforced |
-| Live Action Group/Alert | `az monitor action-group list` / `az monitor activity-log alert list` | Both exist: `ag-ricmmartins-turbo-guacamole-service-health`, `ala-ricmmartins-turbo-guacamole-service-health` |
+| Live Action Group/Alert | `az monitor action-group list` / `az monitor activity-log alert list` | Both resources exist with `Global` location |
 
-Not exercised live: an actual Slack message post (blocked on the placeholder
-bot token — this is expected and requires the account owner to create a real
-Slack app, per the Slack app-creation constraint noted above). The
-`/readyz`-confirmed live connectivity to Key Vault and Table Storage, plus
-the 401 on the unauthenticated webhook call, demonstrate the rest of the
-pipeline (Managed Identity, Key Vault, Storage, Easy Auth, VNet/Private
-Endpoints) is genuinely live and working, not just compiled/tested in
-isolation.
+At this stage, Slack delivery was the only untested boundary.
+
+## Full WSL, Azure, and Slack validation (2026-08-07)
+
+The README procedure was then run from Ubuntu on WSL with a real Slack app and
+channel. Credentials were entered only through a hidden terminal prompt and
+were never copied into chat, commands, logs, source files, or this record. The
+run proved `auth.test`, a direct `chat.postMessage`, and Azure Monitor's
+official `servicehealth` Action Group test through the Secure Webhook into the
+configured Slack channel.
+
+The exercise reconciled these production details:
+
+1. **Authentication under Conditional Access.** Azure CLI and AZD use separate
+   sessions. Device-code flow can be blocked by tenant policy, so both logins
+   must use interactive browser authentication from a browser-capable WSL
+   session (`az login`, `azd auth login --use-device-code=false`).
+2. **Docker/WSL readiness.** Docker Desktop must use its WSL 2 backend, Linux
+   containers, and integration for the active distribution. Validate the
+   effective context and daemon with `docker context show`, `docker info`, and
+   a disposable `hello-world` container before invoking AZD.
+3. **Secret handling.** Capture the `xoxb` value with Bash `read -s`, pass only
+   the variable reference to `azd env set`, and immediately unset it. This
+   prevents terminal echo and literal-token shell history. AZD's local
+   environment remains credential-bearing and must never be printed or
+   committed.
+4. **Slack routing.** Configure Slack channel IDs, not display names. The ID is
+   available from the channel details opened through the channel name or three
+   dots menu. The bot must be invited to every configured channel.
+5. **ACR SKU compatibility.** `Basic` cannot accept the Premium-only untagged
+   manifest retention policy. The registry module now omits that policy while
+   preserving disabled admin and anonymous pull access.
+6. **Secure Webhook trust.** The official AzNS service principal must both own
+   the protected API application and receive its application-only
+   `ActionGroupsSecureWebhook` role. The setup script enforces both
+   relationships idempotently.
+7. **Entra v2 audience.** The issued token can contain the client ID GUID as
+   `aud` rather than only `api://<client-id>`. Easy Auth and the application
+   explicitly accept and validate both representations.
+8. **Service Health location.** The Activity Log Alert and Action Group are
+   `Global`; Service Health does not support a regional Action Group.
+9. **Webhook retry suppression.** Repeated failed tests can exhaust Azure
+   Monitor's webhook retries and suppress all Action Group calls to the
+   endpoint for 15 minutes. After correcting a failure, wait for the cooldown
+   before running one official test.
+
+| Live check | Expected and observed result |
+|---|---|
+| `GET /healthz` | HTTP 200, `{"status":"healthy"}` |
+| `GET /readyz` | HTTP 200, `{"status":"ready"}` |
+| Unauthenticated `POST /api/service-health` | HTTP 401, `authentication_required` |
+| Slack `auth.test` | `ok: true` for the configured bot |
+| Slack `chat.postMessage` | Visible test message in the configured channel |
+| Action Group and alert location | Both `Global` |
+| Secure Webhook receiver | Entra auth and Common Alert Schema enabled with protected API object/identifier values |
+| `az monitor action-group test-notifications create --alert-type servicehealth` | Signed request accepted and formatted Service Health message delivered to Slack |
+| Container App logs | Successful webhook request with no credential or payload logging |
+
+The canonical reproducible commands, troubleshooting, cooldown warning,
+cleanup, and rollback procedure now live in the README rather than a duplicate
+runbook.
