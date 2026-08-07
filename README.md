@@ -103,7 +103,9 @@ example an unknown channel) return `4xx` and are not retried.
 - **App-level check**: the app additionally requires the official AzNS AAD
   Webhook application ID (`461e8683-5575-4561-ac7f-899cc907d62a`), the
   `ActionGroupsSecureWebhook` app role, and the configured audience —
-  see `service_health/auth.py`.
+  see `service_health/auth.py`. Entra v2 tokens identify the audience with the
+  API client ID; both that GUID and its `api://<client-id>` identifier URI are
+  accepted explicitly.
 - **Managed Identity**: the Container App uses a user-assigned managed
   identity with exactly three roles: **AcrPull** (registry), **Key Vault
   Secrets User** (Slack bot token), and **Storage Table Data Contributor**
@@ -294,10 +296,12 @@ before touching any Azure resource. The script:
 3. Ensures a service principal exists for that app, and for Microsoft's
    official **AzNS AAD Webhook** application
    (`461e8683-5575-4561-ac7f-899cc907d62a`).
-4. Grants the AzNS service principal the `ActionGroupsSecureWebhook` app
+4. Adds the AzNS service principal as an owner of the protected API app, as
+   required by Azure Monitor to create, modify, and test Secure Webhook actions.
+5. Grants the AzNS service principal the `ActionGroupsSecureWebhook` app
    role on your API app — this is what lets Azure Monitor's Secure Webhook
    Action Group call your endpoint with a verifiable Entra token.
-5. Writes `AZURE_TENANT_ID`, `SERVICE_HEALTH_API_CLIENT_ID`,
+6. Writes `AZURE_TENANT_ID`, `SERVICE_HEALTH_API_CLIENT_ID`,
    `SERVICE_HEALTH_API_OBJECT_ID`, and `SERVICE_HEALTH_API_IDENTIFIER_URI`
    into the AZD environment for the Bicep deployment to consume.
 

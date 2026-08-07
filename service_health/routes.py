@@ -85,7 +85,12 @@ def create_service_health_blueprint(get_runtime):
                 401,
                 response_headers,
             )
-        except InvalidWebhookIdentity:
+        except InvalidWebhookIdentity as exc:
+            logger.warning(
+                "Service Health webhook authorization rejected: %s",
+                exc,
+                extra={"correlation_id": correlation_id},
+            )
             return (
                 jsonify({
                     "error": "forbidden",

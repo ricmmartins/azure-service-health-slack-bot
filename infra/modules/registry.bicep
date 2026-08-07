@@ -20,12 +20,6 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = 
     adminUserEnabled: false
     anonymousPullEnabled: false
     publicNetworkAccess: 'Enabled'
-    policies: {
-      retentionPolicy: {
-        days: 7
-        status: 'enabled'
-      }
-    }
   }
 }
 
