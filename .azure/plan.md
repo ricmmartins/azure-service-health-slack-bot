@@ -215,14 +215,18 @@ The exercise reconciled these production details:
    containers, and integration for the active distribution. Validate the
    effective context and daemon with `docker context show`, `docker info`, and
    a disposable `hello-world` container before invoking AZD.
-3. **Secret handling.** Capture the `xoxb` value with Bash `read -s`, pass only
-   the variable reference to `azd env set`, and immediately unset it. This
-   prevents terminal echo and literal-token shell history. AZD's local
-   environment remains credential-bearing and must never be printed or
-   committed.
-4. **Slack routing.** Configure Slack channel IDs, not display names. The ID is
-   available from the channel details opened through the channel name or three
-   dots menu. The bot must be invited to every configured channel.
+3. **Secret handling.** Capture the `xoxb` bot token with Bash `read -s`, pass
+   only the variable reference to `azd env set` or Slack's HTTP `Authorization`
+   header, and immediately unset it. This prevents terminal echo and
+   literal-token shell history. AZD's local environment remains
+   credential-bearing and must never be printed or committed.
+4. **Slack least privilege and routing.** Grant only granular `chat:write`;
+   avoid `chat:write.public` and explicitly invite the bot to every configured
+   channel. Configure channel IDs, not display names. The ID is available from
+   channel details opened through the channel name or three-dots menu; API-based
+   discovery uses `conversations.list` but requires additional read scopes.
+   Messages retain top-level `text` as the notification and screen-reader
+   fallback for their Block Kit content.
 5. **ACR SKU compatibility.** `Basic` cannot accept the Premium-only untagged
    manifest retention policy. The registry module now omits that policy while
    preserving disabled admin and anonymous pull access.

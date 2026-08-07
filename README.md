@@ -67,8 +67,9 @@ itself escaped JSON containing `ServiceName` and `RegionName`, as documented in
 - Current stable [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli),
   [Azure Developer CLI (`azd`)](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd),
   PowerShell 7+ (`pwsh`), and Docker with a Linux container engine
-- A Slack app with a bot token (`chat:write` scope) invited to every
-  configured destination channel
+- A Slack app with an [`xoxb-` bot token](https://docs.slack.dev/authentication/tokens/#bot)
+  limited to the granular [`chat:write` scope](https://docs.slack.dev/reference/scopes/chat.write)
+  and invited to every configured destination channel
 - An Azure subscription where you can create the resources in `infra/`
 - `Application Administrator` (or equivalent Graph permission) while running
   the Secure Webhook setup script
@@ -277,20 +278,23 @@ the distribution when using Docker Desktop.
    scratch**. Give it a name (e.g. `Azure Service Health`) and pick your
    workspace.
 2. Open **OAuth & Permissions** in the left sidebar. Under **Scopes → Bot
-   Token Scopes**, add `chat:write` (and `chat:write.public` if you want the
-   bot to post to public channels without being explicitly invited).
+   Token Scopes**, add only `chat:write`. Do not add the broader
+   `chat:write.public` scope; preserve least privilege by explicitly inviting
+   the bot to each destination channel.
 3. Click **Install to Workspace** at the top of the same page, review the
    permissions, and approve.
 4. Leave the **Bot User OAuth Token** (starts with `xoxb-`) in the Slack UI
-   until step 4. Do not paste it into chat, source files, screenshots, or a
-   literal shell command.
+   until step 4. Treat the token as a secret: do not paste it into chat, source
+   files, screenshots, logs, or a literal shell command.
 5. Invite the bot to every channel it needs to post in, e.g.
    `/invite @Azure Service Health` in each destination channel — the bot
    token alone does not grant channel membership.
 
 This app only ever calls `chat.postMessage`/`chat.update`; it never receives
 events, so **no Signing Secret, Event Subscriptions, slash commands, or app
-manifest are required.**
+manifest are required.** Its Slack messages include both blocks and a top-level
+`text` value, which Slack uses as the notification and screen-reader
+[accessibility fallback](https://docs.slack.dev/reference/methods/chat.postMessage/#accessibility-considerations).
 
 ### 2. Clone the repo and sign in
 
@@ -325,6 +329,11 @@ name or the **three dots** menu, choose **View channel details**, and select
 **Copy channel ID** at the bottom. Public channel IDs normally start with `C`;
 private channel IDs can start with `G`. A copied channel URL also contains the
 ID, but do not configure `#channel-name`.
+
+Slack's API-based discovery method is
+[`conversations.list`](https://docs.slack.dev/reference/methods/conversations.list),
+but it requires additional read scopes. The UI procedure above avoids expanding
+this bot's permissions beyond `chat:write`.
 
 `default_channel_id` is mandatory; it's where anything that doesn't match a
 rule is posted. See [Service Health routing](#service-health-routing) above
@@ -472,46 +481,81 @@ and Table Storage. The unauthenticated webhook must return HTTP `401` with
 
 #### 7.2 Slack authentication and a visible test post
 
-This uses the stored token without displaying it or placing it in shell
-history. It prints only nonsecret Slack IDs and creates one visible test
-message in the configured fallback channel.
+[`auth.test`](https://docs.slack.dev/reference/methods/auth.test) is Slack's
+supported authentication connectivity check. This test reads the `xoxb-` token
+at a hidden prompt, sends it only in the HTTP `Authorization` header, and unsets
+it immediately after both calls. The literal token is never displayed, written
+to disk, or placed in shell history. The test prints only nonsecret Slack IDs
+and creates one visible
+[`chat.postMessage`](https://docs.slack.dev/reference/methods/chat.postMessage)
+post in the configured fallback channel.
 
 ```bash
 CHANNEL_ID="$(python3 -c \
   'import json; print(json.load(open("config/service_health_routes.json"))["default_channel_id"])')"
 
-SLACK_BOT_TOKEN="$(azd env get-value SLACK_BOT_TOKEN)" \
-SLACK_CHANNEL_ID="$CHANNEL_ID" python3 - <<'PY'
+read -rsp "Slack bot token (input hidden): " SLACK_BOT_TOKEN; printf '\n'
+if [[ "$SLACK_BOT_TOKEN" != xoxb-* ]]; then
+  unset SLACK_BOT_TOKEN
+  echo "Expected an xoxb bot token." >&2
+  exit 1
+fi
+
+AUTH_RESPONSE="$(mktemp)"
+POST_PAYLOAD="$(mktemp)"
+POST_RESPONSE="$(mktemp)"
+cleanup_slack_test() {
+  unset SLACK_BOT_TOKEN
+  rm -f "$AUTH_RESPONSE" "$POST_PAYLOAD" "$POST_RESPONSE"
+}
+trap cleanup_slack_test EXIT
+
+# Supplying the header through stdin keeps the expanded token out of curl's
+# command-line arguments as well as shell history.
+slack_api() {
+  curl --silent --show-error --fail-with-body \
+    --config <(printf 'header = "Authorization: Bearer %s"\n' "$SLACK_BOT_TOKEN") \
+    "$@"
+}
+
+slack_api https://slack.com/api/auth.test > "$AUTH_RESPONSE"
+
+SLACK_CHANNEL_ID="$CHANNEL_ID" python3 - <<'PY' > "$POST_PAYLOAD"
 import json
 import os
-import urllib.request
+import sys
 
-token = os.environ["SLACK_BOT_TOKEN"]
-channel = os.environ["SLACK_CHANNEL_ID"]
+json.dump({
+    "channel": os.environ["SLACK_CHANNEL_ID"],
+    "text": "Azure Service Health deployment validation",
+}, sys.stdout)
+PY
 
-def call(method, payload):
-    request = urllib.request.Request(
-        f"https://slack.com/api/{method}",
-        data=json.dumps(payload).encode(),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json; charset=utf-8",
-        },
-    )
-    with urllib.request.urlopen(request) as response:
+slack_api \
+  -H 'Content-Type: application/json; charset=utf-8' \
+  --data-binary "@$POST_PAYLOAD" \
+  https://slack.com/api/chat.postMessage > "$POST_RESPONSE"
+unset SLACK_BOT_TOKEN
+
+AUTH_RESPONSE="$AUTH_RESPONSE" POST_RESPONSE="$POST_RESPONSE" python3 - <<'PY'
+import json
+import os
+
+def load_result(method, path):
+    with open(path, encoding="utf-8") as response:
         result = json.load(response)
     if not result.get("ok"):
         raise SystemExit(f"{method} failed: {result.get('error', 'unknown_error')}")
     return result
 
-auth = call("auth.test", {})
-message = call("chat.postMessage", {
-    "channel": channel,
-    "text": "Azure Service Health deployment validation",
-})
+auth = load_result("auth.test", os.environ["AUTH_RESPONSE"])
+message = load_result("chat.postMessage", os.environ["POST_RESPONSE"])
 print(f"Slack auth OK: team={auth.get('team_id')} bot={auth.get('user_id')}")
 print(f"Slack post OK: channel={message.get('channel')} ts={message.get('ts')}")
 PY
+
+cleanup_slack_test
+trap - EXIT
 ```
 
 Delete the test message in Slack if it is not needed.
