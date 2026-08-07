@@ -215,14 +215,18 @@ The exercise reconciled these production details:
    containers, and integration for the active distribution. Validate the
    effective context and daemon with `docker context show`, `docker info`, and
    a disposable `hello-world` container before invoking AZD.
-3. **Secret handling.** Capture the `xoxb` value with Bash `read -s`, pass only
-   the variable reference to `azd env set`, and immediately unset it. This
-   prevents terminal echo and literal-token shell history. AZD's local
-   environment remains credential-bearing and must never be printed or
-   committed.
-4. **Slack routing.** Configure Slack channel IDs, not display names. The ID is
-   available from the channel details opened through the channel name or three
-   dots menu. The bot must be invited to every configured channel.
+3. **Secret handling.** Capture the `xoxb` bot token with Bash `read -s`, pass
+   only the variable reference to `azd env set` or Slack's HTTP `Authorization`
+   header, and immediately unset it. This prevents terminal echo and
+   literal-token shell history. AZD's local environment remains
+   credential-bearing and must never be printed or committed.
+4. **Slack least privilege and routing.** Grant only granular `chat:write`;
+   avoid `chat:write.public` and explicitly invite the bot to every configured
+   channel. Configure channel IDs, not display names. The ID is available from
+   channel details opened through the channel name or three-dots menu; API-based
+   discovery uses `conversations.list` but requires additional read scopes.
+   Messages retain top-level `text` as the notification and screen-reader
+   fallback for their Block Kit content.
 5. **ACR SKU compatibility.** `Basic` cannot accept the Premium-only untagged
    manifest retention policy. The registry module now omits that policy while
    preserving disabled admin and anonymous pull access.
@@ -239,6 +243,11 @@ The exercise reconciled these production details:
    Monitor's webhook retries and suppress all Action Group calls to the
    endpoint for 15 minutes. After correcting a failure, wait for the cooldown
    before running one official test.
+10. **CLI test receiver behavior.** `test-notifications create` does not reuse
+    receivers from the named Action Group. The validated command reads the
+    deployed URI, object ID, and identifier URI, then supplies the Secure
+    Webhook receiver with `--add-action webhook ... useaadauth ...
+    usecommonalertschema`.
 
 | Live check | Expected and observed result |
 |---|---|
@@ -249,8 +258,8 @@ The exercise reconciled these production details:
 | Slack `chat.postMessage` | Visible test message in the configured channel |
 | Action Group and alert location | Both `Global` |
 | Secure Webhook receiver | Entra auth and Common Alert Schema enabled with protected API object/identifier values |
-| `az monitor action-group test-notifications create --alert-type servicehealth` | Signed request accepted and formatted Service Health message delivered to Slack |
-| Container App logs | Successful webhook request with no credential or payload logging |
+| `az monitor action-group test-notifications create --alert-type servicehealth --add-action webhook ...` | Operation state `Complete`; signed request accepted and formatted Service Health message delivered to Slack |
+| Container App logs | `POST /api/service-health` HTTP 200 from `IcMBroadcaster/1.0`, with no credential or payload logging |
 
 The canonical reproducible commands, troubleshooting, cooldown warning,
 cleanup, and rollback procedure now live in the README rather than a duplicate
