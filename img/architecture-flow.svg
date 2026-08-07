@@ -1,23 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 920" role="img" aria-labelledby="diagram-title diagram-desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1100" role="img" aria-labelledby="diagram-title diagram-desc">
   <title id="diagram-title">Azure Service Health to Slack operator architecture</title>
   <desc id="diagram-desc">Numbered Service Health events cross Global Azure Monitor resources into an Easy Auth protected Container App in East US 2, then reach Slack. Separate delivery, private network, managed identity RBAC, data, and observability paths explain the supporting resources in the Azure resource group.</desc>
   <metadata>Source: Microsoft Azure Architecture Icons V24, https://arch-center.azureedge.net/icons/Azure_Public_Service_Icons_V24.zip. Terms: https://learn.microsoft.com/azure/architecture/icons/#icon-terms. Official product artwork is embedded unmodified, uniformly scaled, and shown beside its Azure product name.</metadata>
 
   <defs>
-    <marker id="arrow-event" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M0 0 10 5 0 10Z" fill="#0078d4"/>
+    <marker id="arrow-event" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto" overflow="visible">
+      <path d="M0 0L10 5L0 10Z" fill="#0078d4"/>
     </marker>
-    <marker id="arrow-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M0 0 10 5 0 10Z" fill="#107c10"/>
+    <marker id="arrow-data" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto" overflow="visible">
+      <path d="M0 0L10 5L0 10Z" fill="#107c10"/>
     </marker>
-    <marker id="arrow-rbac" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M0 0 10 5 0 10Z" fill="#8661c5"/>
+    <marker id="arrow-rbac" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto" overflow="visible">
+      <path d="M0 0L10 5L0 10Z" fill="#8661c5"/>
     </marker>
-    <marker id="arrow-delivery" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M0 0 10 5 0 10Z" fill="#d47c00"/>
+    <marker id="arrow-delivery" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto" overflow="visible">
+      <path d="M0 0L10 5L0 10Z" fill="#d47c00"/>
     </marker>
-    <marker id="arrow-telemetry" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M0 0 10 5 0 10Z" fill="#5f6b7a"/>
+    <marker id="arrow-telemetry" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto" overflow="visible">
+      <path d="M0 0L10 5L0 10Z" fill="#5f6b7a"/>
     </marker>
 
     <symbol id="icon-resource-group" viewBox="0 0 18 18"><g xmlns="http://www.w3.org/2000/svg"><g><path d="M.5,15.08a.16.16,0,0,0,.08.14l1.16.65L3.7,17a.17.17,0,0,0,.23-.06l.66-1.12a.16.16,0,0,0-.06-.21l-2.3-1.3a.17.17,0,0,1-.08-.14V3.85a.16.16,0,0,1,.08-.14l2.3-1.3a.16.16,0,0,0,.06-.21L3.93,1.08A.17.17,0,0,0,3.7,1L1.78,2.11l-1.2.67a.16.16,0,0,0-.08.14V15.08Z" fill="#949494" /><path d="M2.14,3.77l.06-.06,2.3-1.3a.14.14,0,0,0,.06-.21L3.9,1.08A.15.15,0,0,0,3.68,1L1.75,2.11.56,2.78s-.05,0-.06.06l.9.51Z" fill="#a3a3a3" /><path d="M4.5,15.59l-2.3-1.3a.22.22,0,0,1-.07-.09l-1.62,1,.05,0,1.15.65,2,1.11a.15.15,0,0,0,.22-.06l.66-1.12A.14.14,0,0,0,4.5,15.59Z" fill="#a3a3a3" /></g><path d="M17.5,15.08a.16.16,0,0,1-.08.14l-1.16.65L14.3,17a.17.17,0,0,1-.23-.06l-.66-1.12a.16.16,0,0,1,.06-.21l2.3-1.3a.17.17,0,0,0,.08-.14V3.85a.16.16,0,0,0-.08-.14l-2.3-1.3a.16.16,0,0,1-.06-.21l.66-1.12A.17.17,0,0,1,14.3,1l1.92,1.09,1.2.67a.16.16,0,0,1,.08.14V15.08Z" fill="#949494" /><path d="M15.86,3.77l-.06-.06-2.3-1.3a.14.14,0,0,1-.06-.21l.66-1.12A.15.15,0,0,1,14.32,1l1.93,1.09,1.19.67s0,0,.06.06l-.9.51Z" fill="#a3a3a3" /><path d="M13.5,15.59l2.3-1.3a.22.22,0,0,0,.07-.09l1.62,1,0,0-1.15.65-2,1.11a.15.15,0,0,1-.22-.06l-.66-1.12A.14.14,0,0,1,13.5,15.59Z" fill="#a3a3a3" /><polygon points="14.31 5.93 14.31 12.07 8.99 15.16 8.99 9.01 14.31 5.93" fill="#32bedd" /><polygon points="14.31 5.93 9 9.02 3.68 5.93 9 2.84 14.31 5.93" fill="#9cebff" /><polygon points="8.99 9.02 8.99 15.16 3.68 12.07 3.68 5.93 8.99 9.02" fill="#50e6ff" /><polygon points="3.68 12.07 8.99 9.01 8.99 15.16 3.68 12.07" fill="#9cebff" /><polygon points="14.31 12.07 8.99 9.01 8.99 15.16 14.31 12.07" fill="#50e6ff" /></g></symbol>
@@ -44,11 +44,11 @@
     text { font-family: "Segoe UI", Arial, sans-serif; fill: #25313c; }
     .canvas { fill: #ffffff; }
     .resource-group { fill: #f7fbff; stroke: #0078d4; stroke-width: 2; }
-    .global-zone { fill: #f5f5f5; stroke: #6b7280; stroke-width: 1.5; stroke-dasharray: 6 4; }
+    .global-zone { fill: #f5f5f5; stroke: #6b7280; stroke-width: 1.5; stroke-dasharray: 7 5; }
     .region-zone { fill: #eef6fc; stroke: #6c8ebf; stroke-width: 1.5; }
-    .vnet { fill: #f7fbff; fill-opacity: 0.22; stroke: #0078d4; stroke-width: 1.5; }
-    .subnet { fill: #ffffff; fill-opacity: 0.22; stroke: #82b366; stroke-width: 1.25; stroke-dasharray: 5 3; }
-    .environment { fill: #f5f9ff; fill-opacity: 0.22; stroke: #6c8ebf; stroke-width: 1.5; }
+    .vnet { fill: #f7fbff; fill-opacity: 0.35; stroke: #0078d4; stroke-width: 1.5; }
+    .subnet { fill: #ffffff; fill-opacity: 0.42; stroke: #82b366; stroke-width: 1.25; stroke-dasharray: 6 4; }
+    .environment { fill: #f5f9ff; fill-opacity: 0.5; stroke: #6c8ebf; stroke-width: 1.5; }
     .card { fill: #ffffff; stroke: #7a8793; stroke-width: 1.25; }
     .event-card { fill: #dae8fc; stroke: #6c8ebf; stroke-width: 1.5; }
     .security-card { fill: #e1d5e7; stroke: #9673a6; stroke-width: 1.5; }
@@ -57,20 +57,27 @@
     .support-card { fill: #f5f5f5; stroke: #7a8793; stroke-width: 1.25; }
     .external-card { fill: #ffffff; stroke: #5f6b7a; stroke-width: 1.5; }
     .chip { fill: #ffffff; stroke: #6c8ebf; stroke-width: 1; }
-    .title { font-size: 16px; font-weight: 700; fill: #14395b; }
-    .boundary-title { font-size: 13px; font-weight: 700; fill: #14395b; }
-    .node-title { font-size: 11px; font-weight: 700; }
-    .detail { font-size: 9px; fill: #4d5d6c; }
-    .tiny { font-size: 8px; fill: #4d5d6c; }
+    .title { font-size: 19px; font-weight: 700; fill: #14395b; }
+    .boundary-title { font-size: 15px; font-weight: 700; fill: #14395b; }
+    .node-title { font-size: 13px; font-weight: 700; }
+    .compact-title { font-size: 12px; }
+    .detail { font-size: 10px; fill: #4d5d6c; }
+    .tiny { font-size: 9px; fill: #4d5d6c; }
     .badge { fill: #0078d4; stroke: #ffffff; stroke-width: 1.5; }
-    .badge-text { fill: #ffffff; font-size: 10px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; }
-    .event-line { fill: none; stroke: #0078d4; stroke-width: 2.5; marker-end: url(#arrow-event); }
-    .data-line { fill: none; stroke: #107c10; stroke-width: 2; marker-end: url(#arrow-data); }
-    .dns-line { fill: none; stroke: #107c10; stroke-width: 1.75; stroke-dasharray: 2 3; marker-end: url(#arrow-data); }
-    .rbac-line { fill: none; stroke: #8661c5; stroke-width: 1.8; stroke-dasharray: 6 4; marker-end: url(#arrow-rbac); }
-    .delivery-line { fill: none; stroke: #d47c00; stroke-width: 2; marker-end: url(#arrow-delivery); }
-    .telemetry-line { fill: none; stroke: #5f6b7a; stroke-width: 1.8; stroke-dasharray: 2 4; marker-end: url(#arrow-telemetry); }
-    .line-label { font-size: 8px; font-weight: 600; paint-order: stroke; stroke: #ffffff; stroke-width: 3px; stroke-linejoin: round; }
+    .badge-text { fill: #ffffff; font-size: 11px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; }
+    .event-line, .data-line, .dns-line, .rbac-line, .delivery-line, .telemetry-line {
+      fill: none;
+      stroke-linecap: square;
+      stroke-linejoin: round;
+    }
+    .event-line { stroke: #0078d4; stroke-width: 2.5; marker-end: url(#arrow-event); }
+    .data-line { stroke: #107c10; stroke-width: 2; marker-end: url(#arrow-data); }
+    .dns-line { stroke: #107c10; stroke-width: 1.8; stroke-dasharray: 3 4; marker-end: url(#arrow-data); }
+    .rbac-line { stroke: #8661c5; stroke-width: 1.9; stroke-dasharray: 7 5; marker-end: url(#arrow-rbac); }
+    .delivery-line { stroke: #d47c00; stroke-width: 2; marker-end: url(#arrow-delivery); }
+    .telemetry-line { stroke: #5f6b7a; stroke-width: 1.8; stroke-dasharray: 3 5; marker-end: url(#arrow-telemetry); }
+    .label-bg { fill: #ffffff; stroke: #d4d9de; stroke-width: 0.75; }
+    .line-label { font-size: 9px; font-weight: 600; dominant-baseline: middle; text-anchor: middle; }
     @media (prefers-color-scheme: dark) {
       .canvas { fill: #0d1117; }
       .resource-group { fill: #111c26; }
@@ -80,247 +87,283 @@
       text, .node-title { fill: #e6edf3; }
       .title, .boundary-title { fill: #c9e7ff; }
       .detail, .tiny { fill: #b8c2cc; }
-      .line-label { stroke: #0d1117; }
+      .label-bg { fill: #161b22; stroke: #4d5966; }
     }
   </style>
 
-  <rect class="canvas" width="1200" height="920"/>
-  <text class="title" x="20" y="28">Azure Service Health to Slack - operator architecture</text>
-  <text class="detail" x="20" y="44">One resource group, two Azure scopes, and five relationship types</text>
+  <rect class="canvas" width="1440" height="1100"/>
+  <text class="title" x="24" y="31">Azure Service Health to Slack - operator architecture</text>
+  <text class="detail" x="24" y="50">One resource group, two Azure scopes, and five relationship types</text>
 
-  <rect class="resource-group" x="165" y="58" width="870" height="782" rx="16"/>
-  <use href="#icon-resource-group" x="184" y="70" width="24" height="24"/>
-  <text class="boundary-title" x="216" y="86">Azure resource group</text>
+  <rect class="resource-group" x="220" y="64" width="1000" height="941" rx="18"/>
+  <use href="#icon-resource-group" x="244" y="78" width="28" height="28"/>
+  <text class="boundary-title" x="282" y="98">Azure resource group</text>
 
-  <rect class="global-zone" x="185" y="102" width="830" height="132" rx="10"/>
-  <text class="boundary-title" x="202" y="121">Global resources</text>
+  <rect class="global-zone" x="250" y="125" width="940" height="180" rx="12"/>
+  <text class="boundary-title" x="275" y="154">Global resources</text>
 
-  <rect class="region-zone" x="185" y="252" width="830" height="568" rx="12"/>
-  <text class="boundary-title" x="202" y="273">East US 2 resources</text>
+  <rect class="region-zone" x="250" y="340" width="940" height="655" rx="14"/>
+  <text class="boundary-title" x="275" y="371">East US 2 resources</text>
 
-  <path class="event-line" d="M150 167H210"/>
-  <path class="event-line" d="M400 167H425"/>
-  <path class="event-line" d="M555 205V260H322V405"/>
-  <path class="event-line" d="M385 450H405"/>
-  <path class="event-line" d="M690 460H1045"/>
-  <text class="line-label" x="356" y="255" fill="#0078d4">signed HTTPS + Entra token</text>
+  <rect class="vnet" x="280" y="400" width="650" height="500" rx="12"/>
+  <use href="#icon-vnet" x="300" y="410" width="28" height="28"/>
+  <text class="boundary-title" x="338" y="430">Virtual network</text>
 
-  <path class="delivery-line" d="M1045 331H1000"/>
-  <path class="delivery-line" d="M760 338H720V415H690"/>
-  <text class="line-label" x="650" y="389" fill="#9a5a00">ACR image to revision</text>
+  <rect class="subnet" x="310" y="450" width="590" height="270" rx="10"/>
+  <use href="#icon-subnet" x="329" y="461" width="24" height="24"/>
+  <text class="node-title" x="364" y="480">Infrastructure subnet</text>
 
-  <path class="data-line" d="M500 530V585H350V620"/>
-  <path class="data-line" d="M590 530V585H600V620"/>
-  <path class="data-line" d="M450 655H465V585H740V630H760"/>
-  <path class="data-line" d="M700 655H730V742H760"/>
-  <path class="dns-line" d="M775 205V276H715V320"/>
-  <text class="line-label" x="525" y="563" fill="#107c10">private data paths</text>
-  <text class="line-label" x="788" y="270" fill="#107c10">VNet links</text>
+  <rect class="environment" x="335" y="500" width="540" height="200" rx="10"/>
+  <use href="#icon-container-env" x="355" y="512" width="28" height="28"/>
+  <text class="node-title" x="394" y="529">Container Apps Environment</text>
+  <text class="detail" x="394" y="547">VNet-integrated compute boundary</text>
 
-  <path class="rbac-line" d="M840 500V380"/>
-  <path class="rbac-line" d="M760 535H690"/>
-  <path class="rbac-line" d="M840 570V590"/>
-  <path class="rbac-line" d="M920 570H1004V742H1000"/>
-  <text class="line-label" x="847" y="442" fill="#6f42b5">AcrPull</text>
-  <text class="line-label" x="847" y="585" fill="#6f42b5">Secrets User</text>
-  <text class="line-label" x="916" y="681" fill="#6f42b5">Storage Table Data</text>
-  <text class="line-label" x="936" y="692" fill="#6f42b5">Contributor</text>
+  <rect class="subnet" x="310" y="735" width="590" height="135" rx="10"/>
+  <use href="#icon-subnet" x="329" y="745" width="24" height="24"/>
+  <text class="node-title" x="364" y="763">Private endpoint subnet</text>
 
-  <path class="telemetry-line" d="M470 530V742H330V760"/>
-  <path class="telemetry-line" d="M435 790H470"/>
-  <text class="line-label" x="350" y="752" fill="#5f6b7a">requests, dependencies, exceptions</text>
+  <path class="event-line" d="M190 220H280"/>
+  <path class="event-line" d="M490 220H520"/>
+  <path class="event-line" d="M645 270V320H265V615H360"/>
+  <path class="event-line" d="M540 615H570"/>
+  <path class="event-line" d="M845 615H910V380H1220V700H1250"/>
+
+  <path class="delivery-line" d="M1250 447H1170"/>
+  <path class="delivery-line" d="M950 447H915V510H805V570"/>
+
+  <path class="dns-line" d="M885 270V400"/>
+  <path class="data-line" d="M650 680V715H460V785"/>
+  <path class="data-line" d="M770 680V705H745V785"/>
+  <path class="data-line" d="M460 850V885H920V735H950"/>
+  <path class="data-line" d="M745 850V875H935V845H950"/>
+
+  <path class="rbac-line" d="M950 585H910V645H845"/>
+  <path class="rbac-line" d="M1055 540V490"/>
+  <path class="rbac-line" d="M1020 630V690"/>
+  <path class="rbac-line" d="M1100 630V655H1178V845H1160"/>
+
+  <path class="telemetry-line" d="M820 680V710H890V915H435V925"/>
+  <path class="telemetry-line" d="M560 955H610"/>
 
   <g>
-    <rect class="external-card event-card" x="20" y="124" width="130" height="86" rx="10"/>
-    <circle class="badge" cx="29" cy="132" r="11"/>
-    <text class="badge-text" x="29" y="132">1</text>
-    <use href="#icon-service-health" x="35" y="142" width="34" height="34"/>
-    <text class="node-title" x="78" y="151">Azure Service</text>
-    <text class="node-title" x="78" y="165">Health</text>
-    <text class="detail" x="35" y="194">platform event</text>
+    <rect class="label-bg" x="435" y="307" width="210" height="22" rx="11"/>
+    <text class="line-label" x="540" y="318" fill="#0078d4">signed HTTPS + Entra token</text>
+  </g>
+  <g>
+    <rect class="label-bg" x="972" y="367" width="166" height="22" rx="11"/>
+    <text class="line-label" x="1055" y="378" fill="#0078d4">Slack API request</text>
+  </g>
+  <g>
+    <rect class="label-bg" x="815" y="497" width="96" height="22" rx="11"/>
+    <text class="line-label" x="863" y="508" fill="#9a5a00">image pull</text>
+  </g>
+  <g>
+    <rect class="label-bg" x="810" y="307" width="150" height="22" rx="11"/>
+    <text class="line-label" x="885" y="318" fill="#107c10">VNet DNS links</text>
+  </g>
+  <g>
+    <rect class="label-bg" x="515" y="703" width="180" height="22" rx="11"/>
+    <text class="line-label" x="605" y="714" fill="#107c10">private data paths</text>
+  </g>
+  <g>
+    <rect class="label-bg" x="856" y="632" width="104" height="22" rx="11"/>
+    <text class="line-label" x="908" y="643" fill="#6f42b5">assigned identity</text>
+  </g>
+  <g>
+    <rect class="label-bg" x="1008" y="503" width="94" height="22" rx="11"/>
+    <text class="line-label" x="1055" y="514" fill="#6f42b5">AcrPull</text>
+  </g>
+  <g>
+    <rect class="label-bg" x="938" y="642" width="164" height="22" rx="11"/>
+    <text class="line-label" x="1020" y="653" fill="#6f42b5">Key Vault Secrets User</text>
+  </g>
+  <g>
+    <rect class="label-bg" x="988" y="666" width="180" height="22" rx="11"/>
+    <text class="line-label" x="1078" y="678" fill="#6f42b5">Storage Table Data Contributor</text>
+  </g>
+  <g>
+    <rect class="label-bg" x="560" y="903" width="250" height="22" rx="11"/>
+    <text class="line-label" x="685" y="914" fill="#5f6b7a">requests, dependencies, exceptions</text>
   </g>
 
   <g>
-    <rect class="event-card" x="210" y="132" width="190" height="73" rx="8"/>
-    <circle class="badge" cx="219" cy="140" r="11"/>
-    <text class="badge-text" x="219" y="140">2</text>
-    <use href="#icon-alerts" x="230" y="151" width="32" height="32"/>
-    <text class="node-title" x="271" y="158">Activity Log Alert</text>
-    <text class="detail" x="271" y="175">ServiceHealth category</text>
-    <text class="tiny" x="271" y="188">subscription / management group</text>
-    <text class="tiny" x="271" y="199">scope</text>
+    <rect class="external-card event-card" x="20" y="170" width="170" height="100" rx="11"/>
+    <circle class="badge" cx="30" cy="180" r="12"/>
+    <text class="badge-text" x="30" y="180">1</text>
+    <use href="#icon-service-health" x="40" y="194" width="38" height="38"/>
+    <text class="node-title" x="90" y="205">Azure Service</text>
+    <text class="node-title" x="90" y="222">Health</text>
+    <text class="detail" x="40" y="251">platform event</text>
   </g>
 
   <g>
-    <rect class="delivery-card" x="425" y="132" width="260" height="73" rx="8"/>
-    <circle class="badge" cx="434" cy="140" r="11"/>
-    <text class="badge-text" x="434" y="140">3</text>
-    <use href="#icon-monitor" x="447" y="151" width="32" height="32"/>
-    <text class="node-title" x="488" y="156">Action Group</text>
-    <text class="detail" x="488" y="173">Secure Webhook + Entra authentication</text>
-    <text class="detail" x="488" y="188">Common Alert Schema</text>
+    <rect class="event-card" x="280" y="170" width="210" height="100" rx="9"/>
+    <circle class="badge" cx="290" cy="180" r="12"/>
+    <text class="badge-text" x="290" y="180">2</text>
+    <use href="#icon-alerts" x="300" y="195" width="36" height="36"/>
+    <text class="node-title" x="347" y="202">Activity Log Alert</text>
+    <text class="detail" x="347" y="220">ServiceHealth category</text>
+    <text class="tiny" x="347" y="237">subscription / management group</text>
+    <text class="tiny" x="347" y="252">scope</text>
   </g>
 
   <g>
-    <rect class="support-card" x="700" y="132" width="145" height="73" rx="8"/>
-    <use href="#icon-dns" x="713" y="151" width="30" height="30"/>
-    <text class="node-title" x="751" y="156">Private DNS zones (2)</text>
-    <text class="tiny" x="751" y="173">Key Vault + Table</text>
-    <text class="tiny" x="751" y="187">linked to the VNet</text>
+    <rect class="delivery-card" x="520" y="170" width="250" height="100" rx="9"/>
+    <circle class="badge" cx="530" cy="180" r="12"/>
+    <text class="badge-text" x="530" y="180">3</text>
+    <use href="#icon-monitor" x="542" y="195" width="36" height="36"/>
+    <text class="node-title" x="590" y="201">Action Group</text>
+    <text class="detail" x="590" y="220">Secure Webhook + Entra authentication</text>
+    <text class="detail" x="590" y="239">Common Alert Schema</text>
   </g>
 
   <g>
-    <rect class="support-card" x="860" y="132" width="135" height="73" rx="8"/>
-    <use href="#icon-alerts" x="872" y="151" width="30" height="30"/>
-    <text class="node-title" x="910" y="156">Failure Anomalies</text>
-    <text class="tiny" x="910" y="173">auto-created supporting</text>
-    <text class="tiny" x="910" y="187">App Insights alert</text>
-  </g>
-
-  <rect class="vnet" x="205" y="286" width="540" height="448" rx="10"/>
-  <use href="#icon-vnet" x="221" y="299" width="24" height="24"/>
-  <text class="boundary-title" x="253" y="315">Virtual network</text>
-
-  <rect class="subnet" x="225" y="320" width="500" height="230" rx="8"/>
-  <use href="#icon-subnet" x="238" y="331" width="21" height="21"/>
-  <text class="node-title" x="267" y="345">Infrastructure subnet</text>
-
-  <rect class="environment" x="240" y="352" width="470" height="188" rx="8"/>
-  <use href="#icon-container-env" x="252" y="362" width="24" height="24"/>
-  <text class="node-title" x="284" y="377">Container Apps Environment</text>
-  <text class="tiny" x="284" y="390">VNet integrated compute boundary</text>
-
-  <g>
-    <rect class="security-card" x="260" y="395" width="125" height="90" rx="8"/>
-    <circle class="badge" cx="269" cy="403" r="11"/>
-    <text class="badge-text" x="269" y="403">4</text>
-    <path d="M309 423h27v22h-27zM315 423v-7a7 7 0 0 1 14 0v7" fill="none" stroke="#6f42b5" stroke-width="2"/>
-    <text class="node-title" x="322" y="459" text-anchor="middle">Public HTTPS ingress</text>
-    <text class="detail" x="322" y="473" text-anchor="middle">Easy Auth / Entra</text>
+    <rect class="support-card" x="790" y="170" width="190" height="100" rx="9"/>
+    <use href="#icon-dns" x="807" y="195" width="36" height="36"/>
+    <text class="node-title compact-title" x="854" y="199">Private DNS zones</text>
+    <text class="node-title compact-title" x="854" y="215">(2)</text>
+    <text class="tiny" x="854" y="235">Key Vault + Table</text>
+    <text class="tiny" x="854" y="251">linked to the VNet</text>
   </g>
 
   <g>
-    <rect class="event-card" x="405" y="395" width="285" height="135" rx="8"/>
-    <circle class="badge" cx="414" cy="403" r="11"/>
-    <text class="badge-text" x="414" y="403">5</text>
-    <use href="#icon-container-app" x="425" y="413" width="34" height="34"/>
-    <text class="node-title" x="468" y="424">Container App application</text>
-    <text class="detail" x="468" y="440">POST /api/service-health</text>
-    <rect class="chip" x="425" y="459" width="72" height="22" rx="5"/>
-    <text class="tiny" x="461" y="473" text-anchor="middle">auth</text>
-    <rect class="chip" x="504" y="459" width="72" height="22" rx="5"/>
-    <text class="tiny" x="540" y="473" text-anchor="middle">parser</text>
-    <rect class="chip" x="583" y="459" width="87" height="22" rx="5"/>
-    <text class="tiny" x="626" y="473" text-anchor="middle">router</text>
-    <rect class="chip" x="425" y="489" width="110" height="22" rx="5"/>
-    <text class="tiny" x="480" y="503" text-anchor="middle">idempotency</text>
-    <rect class="chip" x="542" y="489" width="128" height="22" rx="5"/>
-    <text class="tiny" x="606" y="503" text-anchor="middle">Slack client</text>
-  </g>
-
-  <rect class="subnet" x="225" y="570" width="500" height="150" rx="8"/>
-  <use href="#icon-subnet" x="238" y="581" width="21" height="21"/>
-  <text class="node-title" x="267" y="595">Private endpoint subnet</text>
-
-  <g>
-    <rect class="data-card" x="250" y="620" width="200" height="70" rx="8"/>
-    <use href="#icon-private-endpoint" x="264" y="638" width="30" height="30"/>
-    <text class="node-title" x="304" y="643">Key Vault private endpoint</text>
-    <text class="tiny" x="304" y="659">private IP + generated NIC</text>
-    <text class="tiny" x="304" y="674">privatelink.vaultcore.azure.net</text>
+    <rect class="support-card" x="1010" y="170" width="160" height="100" rx="9"/>
+    <use href="#icon-alerts" x="1025" y="195" width="34" height="34"/>
+    <text class="node-title compact-title" x="1068" y="198">Failure</text>
+    <text class="node-title compact-title" x="1068" y="214">Anomalies</text>
+    <text class="tiny" x="1068" y="235">auto-created supporting</text>
+    <text class="tiny" x="1068" y="251">App Insights alert</text>
   </g>
 
   <g>
-    <rect class="data-card" x="500" y="620" width="200" height="70" rx="8"/>
-    <use href="#icon-private-endpoint" x="514" y="638" width="30" height="30"/>
-    <text class="node-title" x="554" y="643">Table private endpoint</text>
-    <text class="tiny" x="554" y="659">private IP + generated NIC</text>
-    <text class="tiny" x="554" y="674">privatelink.table.core.windows.net</text>
+    <rect class="security-card" x="360" y="570" width="180" height="90" rx="9"/>
+    <circle class="badge" cx="370" cy="580" r="12"/>
+    <text class="badge-text" x="370" y="580">4</text>
+    <path d="M438 591h28v23h-28zM444 591v-7a8 8 0 0 1 16 0v7" fill="none" stroke="#6f42b5" stroke-width="2.2"/>
+    <text class="node-title" x="450" y="636" text-anchor="middle">Public HTTPS ingress</text>
+    <text class="detail" x="450" y="652" text-anchor="middle">Easy Auth / Entra</text>
   </g>
 
   <g>
-    <rect class="delivery-card" x="760" y="298" width="240" height="80" rx="8"/>
-    <use href="#icon-acr" x="777" y="319" width="34" height="34"/>
-    <text class="node-title" x="821" y="324">Azure Container Registry</text>
-    <text class="detail" x="821" y="341">private image repository</text>
-    <text class="detail" x="821" y="356">admin disabled; Basic by default</text>
+    <rect class="event-card" x="570" y="570" width="275" height="110" rx="9"/>
+    <circle class="badge" cx="580" cy="580" r="12"/>
+    <text class="badge-text" x="580" y="580">5</text>
+    <use href="#icon-container-app" x="590" y="585" width="38" height="38"/>
+    <text class="node-title" x="640" y="596">Container App application</text>
+    <text class="detail" x="640" y="613">POST /api/service-health</text>
+    <rect class="chip" x="590" y="624" width="72" height="20" rx="5"/>
+    <text class="tiny" x="626" y="637" text-anchor="middle">auth</text>
+    <rect class="chip" x="669" y="624" width="72" height="20" rx="5"/>
+    <text class="tiny" x="705" y="637" text-anchor="middle">parser</text>
+    <rect class="chip" x="748" y="624" width="82" height="20" rx="5"/>
+    <text class="tiny" x="789" y="637" text-anchor="middle">router</text>
+    <rect class="chip" x="590" y="651" width="112" height="20" rx="5"/>
+    <text class="tiny" x="646" y="664" text-anchor="middle">idempotency</text>
+    <rect class="chip" x="710" y="651" width="120" height="20" rx="5"/>
+    <text class="tiny" x="770" y="664" text-anchor="middle">Slack client</text>
   </g>
 
   <g>
-    <rect class="security-card" x="760" y="500" width="240" height="70" rx="8"/>
-    <use href="#icon-managed-identity" x="777" y="519" width="32" height="32"/>
-    <text class="node-title" x="820" y="523">User-assigned managed identity</text>
-    <text class="detail" x="820" y="541">runtime authentication; no app secrets</text>
-    <text class="detail" x="820" y="556">three least-privilege Azure roles</text>
+    <rect class="data-card" x="335" y="785" width="250" height="65" rx="9"/>
+    <use href="#icon-private-endpoint" x="350" y="801" width="32" height="32"/>
+    <text class="node-title" x="394" y="808">Key Vault private endpoint</text>
+    <text class="tiny" x="394" y="825">private IP + generated NIC</text>
+    <text class="tiny" x="394" y="840">privatelink.vaultcore.azure.net</text>
   </g>
 
   <g>
-    <rect class="data-card" x="760" y="590" width="240" height="80" rx="8"/>
-    <use href="#icon-key-vault" x="777" y="611" width="34" height="34"/>
-    <text class="node-title" x="821" y="616">Azure Key Vault</text>
-    <text class="detail" x="821" y="634">Slack bot token</text>
-    <text class="detail" x="821" y="650">public access disabled</text>
+    <rect class="data-card" x="620" y="785" width="250" height="65" rx="9"/>
+    <use href="#icon-private-endpoint" x="635" y="801" width="32" height="32"/>
+    <text class="node-title" x="679" y="808">Table private endpoint</text>
+    <text class="tiny" x="679" y="825">private IP + generated NIC</text>
+    <text class="tiny" x="679" y="840">privatelink.table.core.windows.net</text>
   </g>
 
   <g>
-    <rect class="data-card" x="760" y="700" width="240" height="85" rx="8"/>
-    <use href="#icon-storage" x="777" y="720" width="34" height="34"/>
-    <use href="#icon-table" x="807" y="746" width="20" height="20"/>
-    <text class="node-title" x="836" y="724">Storage account / Table</text>
-    <text class="detail" x="836" y="742">incident state, ETags, leases</text>
-    <text class="detail" x="836" y="758">deduplication + lifecycle</text>
-    <text class="detail" x="836" y="773">public access disabled</text>
+    <rect class="delivery-card" x="950" y="400" width="220" height="90" rx="9"/>
+    <use href="#icon-acr" x="968" y="423" width="38" height="38"/>
+    <text class="node-title compact-title" x="1018" y="427">Azure Container Registry</text>
+    <text class="detail" x="1018" y="446">private image repository</text>
+    <text class="detail" x="1018" y="464">admin disabled; Basic by default</text>
   </g>
 
   <g>
-    <rect class="support-card" x="225" y="760" width="210" height="60" rx="8"/>
-    <use href="#icon-app-insights" x="239" y="775" width="30" height="30"/>
-    <text class="node-title" x="279" y="780">Application Insights</text>
-    <text class="tiny" x="279" y="797">OpenTelemetry application telemetry</text>
-    <text class="tiny" x="279" y="810">drives Failure Anomalies support alert</text>
+    <rect class="security-card" x="950" y="540" width="210" height="90" rx="9"/>
+    <use href="#icon-managed-identity" x="968" y="565" width="36" height="36"/>
+    <text class="node-title" x="1016" y="567">User-assigned</text>
+    <text class="node-title" x="1016" y="584">managed identity</text>
+    <text class="detail" x="1016" y="603">runtime auth; no app secrets</text>
+    <text class="detail" x="1016" y="619">three least-privilege roles</text>
   </g>
 
   <g>
-    <rect class="support-card" x="470" y="760" width="210" height="60" rx="8"/>
-    <use href="#icon-log-analytics" x="484" y="775" width="30" height="30"/>
-    <text class="node-title" x="524" y="780">Log Analytics workspace</text>
-    <text class="tiny" x="524" y="797">Container Apps platform and app logs</text>
-    <text class="tiny" x="524" y="810">query and retention backend</text>
+    <rect class="data-card" x="950" y="690" width="210" height="80" rx="9"/>
+    <use href="#icon-key-vault" x="968" y="711" width="38" height="38"/>
+    <text class="node-title" x="1018" y="716">Azure Key Vault</text>
+    <text class="detail" x="1018" y="736">Slack bot token</text>
+    <text class="detail" x="1018" y="753">public access disabled</text>
   </g>
 
   <g>
-    <rect class="external-card delivery-card" x="1045" y="286" width="135" height="90" rx="10"/>
-    <rect x="1059" y="307" width="32" height="24" rx="3" fill="#25313c"/>
-    <path d="M1065 314l5 5-5 5M1074 325h10" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-    <rect x="1064" y="334" width="22" height="3" rx="1.5" fill="#5f6b7a"/>
-    <text class="node-title" x="1101" y="311">Developer</text>
-    <text class="detail" x="1101" y="327">azd + Docker build</text>
-    <text class="detail" x="1059" y="355">provision / deploy</text>
+    <rect class="data-card" x="950" y="800" width="210" height="95" rx="9"/>
+    <use href="#icon-storage" x="968" y="822" width="38" height="38"/>
+    <use href="#icon-table" x="1000" y="850" width="22" height="22"/>
+    <text class="node-title compact-title" x="1032" y="820">Storage account</text>
+    <text class="node-title compact-title" x="1032" y="836">/ Table</text>
+    <text class="detail" x="1032" y="854">incident state, ETags, leases</text>
+    <text class="detail" x="1032" y="871">deduplication + lifecycle</text>
+    <text class="detail" x="1032" y="888">public access disabled</text>
   </g>
 
   <g>
-    <rect class="external-card data-card" x="1045" y="397" width="135" height="92" rx="10"/>
-    <circle class="badge" cx="1054" cy="405" r="11"/>
-    <text class="badge-text" x="1054" y="405">6</text>
-    <text class="node-title" x="1112" y="426" text-anchor="middle">Slack API / channel</text>
-    <text class="detail" x="1112" y="445" text-anchor="middle">chat.postMessage</text>
-    <text class="detail" x="1112" y="460" text-anchor="middle">chat.update</text>
-    <text class="detail" x="1112" y="477" text-anchor="middle">Active to Resolved</text>
+    <rect class="support-card" x="310" y="925" width="250" height="60" rx="9"/>
+    <use href="#icon-app-insights" x="327" y="941" width="32" height="32"/>
+    <text class="node-title" x="371" y="945">Application Insights</text>
+    <text class="tiny" x="371" y="963">OpenTelemetry application telemetry</text>
+    <text class="tiny" x="371" y="978">drives Failure Anomalies alert</text>
   </g>
 
-  <g transform="translate(165 854)">
-    <rect class="card" width="870" height="48" rx="8"/>
-    <text class="node-title" x="16" y="18">Legend</text>
-    <line class="event-line" x1="72" y1="15" x2="112" y2="15"/>
-    <text class="tiny" x="120" y="18">event / request</text>
-    <line class="delivery-line" x1="225" y1="15" x2="265" y2="15"/>
-    <text class="tiny" x="273" y="18">build / image delivery</text>
-    <line class="data-line" x1="405" y1="15" x2="445" y2="15"/>
-    <text class="tiny" x="453" y="18">private network / data</text>
-    <line class="rbac-line" x1="605" y1="15" x2="645" y2="15"/>
-    <text class="tiny" x="653" y="18">RBAC / control</text>
-    <line class="telemetry-line" x1="744" y1="15" x2="784" y2="15"/>
-    <text class="tiny" x="792" y="18">telemetry</text>
-    <text class="tiny" x="16" y="37">Global boundaries are dashed; East US 2 and VNet boundaries are solid. Private endpoint NICs are intentionally summarized, not drawn as separate nodes.</text>
+  <g>
+    <rect class="support-card" x="610" y="925" width="250" height="60" rx="9"/>
+    <use href="#icon-log-analytics" x="627" y="941" width="32" height="32"/>
+    <text class="node-title" x="671" y="945">Log Analytics workspace</text>
+    <text class="tiny" x="671" y="963">Container Apps platform and app logs</text>
+    <text class="tiny" x="671" y="978">query and retention backend</text>
+  </g>
+
+  <g>
+    <rect class="external-card delivery-card" x="1250" y="400" width="170" height="95" rx="11"/>
+    <rect x="1268" y="423" width="36" height="27" rx="3" fill="#25313c"/>
+    <path d="M1275 431l6 5-6 6M1285 443h12" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="1273" y="454" width="26" height="3" rx="1.5" fill="#5f6b7a"/>
+    <text class="node-title" x="1317" y="427">Developer</text>
+    <text class="detail" x="1317" y="445">azd + Docker build</text>
+    <text class="detail" x="1268" y="477">provision / deploy</text>
+  </g>
+
+  <g>
+    <rect class="external-card data-card" x="1250" y="650" width="170" height="100" rx="11"/>
+    <circle class="badge" cx="1260" cy="660" r="12"/>
+    <text class="badge-text" x="1260" y="660">6</text>
+    <text class="node-title" x="1335" y="682" text-anchor="middle">Slack API / channel</text>
+    <text class="detail" x="1335" y="704" text-anchor="middle">chat.postMessage</text>
+    <text class="detail" x="1335" y="721" text-anchor="middle">chat.update</text>
+    <text class="detail" x="1335" y="739" text-anchor="middle">Active to Resolved</text>
+  </g>
+
+  <g transform="translate(220 1020)">
+    <rect class="card" width="1000" height="58" rx="9"/>
+    <text class="node-title" x="18" y="21">Legend</text>
+    <line class="event-line" x1="88" y1="18" x2="132" y2="18"/>
+    <text class="tiny" x="145" y="21">event / request</text>
+    <line class="delivery-line" x1="274" y1="18" x2="318" y2="18"/>
+    <text class="tiny" x="331" y="21">build / image delivery</text>
+    <line class="data-line" x1="487" y1="18" x2="531" y2="18"/>
+    <text class="tiny" x="544" y="21">private network / data</text>
+    <line class="rbac-line" x1="720" y1="18" x2="764" y2="18"/>
+    <text class="tiny" x="777" y="21">RBAC / control</text>
+    <line class="telemetry-line" x1="872" y1="18" x2="916" y2="18"/>
+    <text class="tiny" x="929" y="21">telemetry</text>
+    <text class="tiny" x="18" y="45">Global boundaries are dashed; East US 2 and VNet boundaries are solid. Private endpoint NICs are intentionally summarized, not drawn as separate nodes.</text>
   </g>
 </svg>
