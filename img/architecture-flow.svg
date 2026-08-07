@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 920" role="img" aria-labelledby="diagram-title diagram-desc">
   <title id="diagram-title">Azure Service Health to Slack operator architecture</title>
   <desc id="diagram-desc">Numbered Service Health events cross Global Azure Monitor resources into an Easy Auth protected Container App in East US 2, then reach Slack. Separate delivery, private network, managed identity RBAC, data, and observability paths explain the supporting resources in the Azure resource group.</desc>
-  <metadata>Azure service symbols are from Microsoft Azure Architecture Icons V24 and are embedded without alteration for architectural documentation.</metadata>
+  <metadata>Source: Microsoft Azure Architecture Icons V24, https://arch-center.azureedge.net/icons/Azure_Public_Service_Icons_V24.zip. Terms: https://learn.microsoft.com/azure/architecture/icons/#icon-terms. Official product artwork is embedded unmodified, uniformly scaled, and shown beside its Azure product name.</metadata>
 
   <defs>
     <marker id="arrow-event" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
@@ -290,7 +290,9 @@
 
   <g>
     <rect class="external-card delivery-card" x="1045" y="286" width="135" height="90" rx="10"/>
-    <use href="#icon-cloud-shell" x="1059" y="307" width="32" height="32"/>
+    <rect x="1059" y="307" width="32" height="24" rx="3" fill="#25313c"/>
+    <path d="M1065 314l5 5-5 5M1074 325h10" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="1064" y="334" width="22" height="3" rx="1.5" fill="#5f6b7a"/>
     <text class="node-title" x="1101" y="311">Developer</text>
     <text class="detail" x="1101" y="327">azd + Docker build</text>
     <text class="detail" x="1059" y="355">provision / deploy</text>

@@ -47,7 +47,10 @@ public ingress (health probes and the secure webhook) is unaffected.
 container delivery, green is private network/data access, dashed purple is
 RBAC/control, and dotted gray is telemetry. Azure service symbols use the
 official [Microsoft Azure Architecture Icons](https://learn.microsoft.com/azure/architecture/icons/)
-V24 under Microsoft's published icon terms.*
+from the [V24 SVG pack](https://arch-center.azureedge.net/icons/Azure_Public_Service_Icons_V24.zip)
+under Microsoft's [published icon terms](https://learn.microsoft.com/azure/architecture/icons/#icon-terms).
+The embedded product artwork is unmodified (not cropped, flipped, rotated,
+distorted, or recolored), and each icon has its Azure product name nearby.*
 
 ### Why these resources exist
 
