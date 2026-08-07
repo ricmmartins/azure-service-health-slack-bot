@@ -1,76 +1,326 @@
-<svg viewBox="0 0 700 900" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif" role="img" aria-labelledby="title desc">
-  <title id="title">Service Health to Slack processing pipeline</title>
-  <desc id="desc">Azure Monitor Service Health alert flows through an Activity Log Alert and Secure Action Group to the app's webhook, which validates identity, parses the Common Alert Schema, routes it, records idempotency state in Table Storage, and posts or updates a Slack message.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 920" role="img" aria-labelledby="diagram-title diagram-desc">
+  <title id="diagram-title">Azure Service Health to Slack operator architecture</title>
+  <desc id="diagram-desc">Numbered Service Health events cross Global Azure Monitor resources into an Easy Auth protected Container App in East US 2, then reach Slack. Separate delivery, private network, managed identity RBAC, data, and observability paths explain the supporting resources in the Azure resource group.</desc>
+  <metadata>Source: Microsoft Azure Architecture Icons V24, https://arch-center.azureedge.net/icons/Azure_Public_Service_Icons_V24.zip. Terms: https://learn.microsoft.com/azure/architecture/icons/#icon-terms. Official product artwork is embedded unmodified, uniformly scaled, and shown beside its Azure product name.</metadata>
 
   <defs>
-    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#555555"/>
+    <marker id="arrow-event" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#0078d4"/>
     </marker>
+    <marker id="arrow-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#107c10"/>
+    </marker>
+    <marker id="arrow-rbac" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#8661c5"/>
+    </marker>
+    <marker id="arrow-delivery" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#d47c00"/>
+    </marker>
+    <marker id="arrow-telemetry" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#5f6b7a"/>
+    </marker>
+
+    <symbol id="icon-resource-group" viewBox="0 0 18 18"><g xmlns="http://www.w3.org/2000/svg"><g><path d="M.5,15.08a.16.16,0,0,0,.08.14l1.16.65L3.7,17a.17.17,0,0,0,.23-.06l.66-1.12a.16.16,0,0,0-.06-.21l-2.3-1.3a.17.17,0,0,1-.08-.14V3.85a.16.16,0,0,1,.08-.14l2.3-1.3a.16.16,0,0,0,.06-.21L3.93,1.08A.17.17,0,0,0,3.7,1L1.78,2.11l-1.2.67a.16.16,0,0,0-.08.14V15.08Z" fill="#949494" /><path d="M2.14,3.77l.06-.06,2.3-1.3a.14.14,0,0,0,.06-.21L3.9,1.08A.15.15,0,0,0,3.68,1L1.75,2.11.56,2.78s-.05,0-.06.06l.9.51Z" fill="#a3a3a3" /><path d="M4.5,15.59l-2.3-1.3a.22.22,0,0,1-.07-.09l-1.62,1,.05,0,1.15.65,2,1.11a.15.15,0,0,0,.22-.06l.66-1.12A.14.14,0,0,0,4.5,15.59Z" fill="#a3a3a3" /></g><path d="M17.5,15.08a.16.16,0,0,1-.08.14l-1.16.65L14.3,17a.17.17,0,0,1-.23-.06l-.66-1.12a.16.16,0,0,1,.06-.21l2.3-1.3a.17.17,0,0,0,.08-.14V3.85a.16.16,0,0,0-.08-.14l-2.3-1.3a.16.16,0,0,1-.06-.21l.66-1.12A.17.17,0,0,1,14.3,1l1.92,1.09,1.2.67a.16.16,0,0,1,.08.14V15.08Z" fill="#949494" /><path d="M15.86,3.77l-.06-.06-2.3-1.3a.14.14,0,0,1-.06-.21l.66-1.12A.15.15,0,0,1,14.32,1l1.93,1.09,1.19.67s0,0,.06.06l-.9.51Z" fill="#a3a3a3" /><path d="M13.5,15.59l2.3-1.3a.22.22,0,0,0,.07-.09l1.62,1,0,0-1.15.65-2,1.11a.15.15,0,0,1-.22-.06l-.66-1.12A.14.14,0,0,1,13.5,15.59Z" fill="#a3a3a3" /><polygon points="14.31 5.93 14.31 12.07 8.99 15.16 8.99 9.01 14.31 5.93" fill="#32bedd" /><polygon points="14.31 5.93 9 9.02 3.68 5.93 9 2.84 14.31 5.93" fill="#9cebff" /><polygon points="8.99 9.02 8.99 15.16 3.68 12.07 3.68 5.93 8.99 9.02" fill="#50e6ff" /><polygon points="3.68 12.07 8.99 9.01 8.99 15.16 3.68 12.07" fill="#9cebff" /><polygon points="14.31 12.07 8.99 9.01 8.99 15.16 14.31 12.07" fill="#50e6ff" /></g></symbol>
+    <symbol id="icon-service-health" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><linearGradient id="f5e553fa-756a-4028-aba5-719555f5d693" x1="8.66" y1="17.12" x2="8.66" y2="1.03" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#1988d9" /><stop offset="0.22" stop-color="#218ddc" /><stop offset="0.56" stop-color="#379ce5" /><stop offset="0.9" stop-color="#54aef0" /></linearGradient></defs><path d="M8.66,17.12c8.18-5.86,8.46-9.28,8.49-10.35C17.2,5.27,17,1.36,13,1.05A4.26,4.26,0,0,0,8.66,3.9,4.28,4.28,0,0,0,4.27,1.05C.32,1.36.11,5.27.16,6.77c0,1.07.32,4.49,8.5,10.35" fill="url(#f5e553fa-756a-4028-aba5-719555f5d693)" xmlns="http://www.w3.org/2000/svg" /><path d="M17.15,6.77C17.2,5.27,17,1.36,13,1.05A4.26,4.26,0,0,0,8.66,3.9,4.28,4.28,0,0,0,4.27,1.05C.32,1.36.11,5.27.16,6.77c0,1.07.24,4.44,8.43,10.3" fill="none" xmlns="http://www.w3.org/2000/svg" /><path d="M17.15,6.18h-4a.17.17,0,0,0-.13.07L11.81,8.34a.16.16,0,0,1-.27,0L9.81,5.05a.31.31,0,0,0-.56,0L7.59,10a.16.16,0,0,1-.29,0L5.88,6.71a.31.31,0,0,0-.55,0L3.39,10.2a.16.16,0,0,1-.13.08H1.42a13,13,0,0,0,.9,1.22H4a.13.13,0,0,0,.13-.08L5.34,9.19a.16.16,0,0,1,.28,0l1.66,3.86a.31.31,0,0,0,.58,0L9.61,7.85a.15.15,0,0,1,.28,0l1.46,2.77a.3.3,0,0,0,.53,0l1.86-3.13a.16.16,0,0,1,.13-.08H17.1" fill="#fff" xmlns="http://www.w3.org/2000/svg" /></symbol>
+    <symbol id="icon-alerts" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><linearGradient id="e4e1e494-21f1-4e9c-a6fa-0993efff08d3" x1="9" y1="17.2" x2="9" y2="-3.28" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#5e9624" /><stop offset="0.18" stop-color="#629c25" /><stop offset="0.44" stop-color="#6dae2a" /><stop offset="0.73" stop-color="#7fcb30" /><stop offset="0.82" stop-color="#86d633" /></linearGradient></defs><g xmlns="http://www.w3.org/2000/svg"><path d="M17.5,2.5V13.33a.58.58,0,0,1-.58.58H12.4a.15.15,0,0,0-.15.14V15.8a.28.28,0,0,1-.45.23L9.08,13.94l-.09,0H1.08a.58.58,0,0,1-.58-.58V2.5a.58.58,0,0,1,.58-.59H16.92A.58.58,0,0,1,17.5,2.5Z" fill="url(#e4e1e494-21f1-4e9c-a6fa-0993efff08d3)" /><path d="M9.54,9.63H8.38A.36.36,0,0,1,8,9.29L7.8,3.43a.35.35,0,0,1,.35-.36h1.7a.35.35,0,0,1,.35.37L9.89,9.3A.35.35,0,0,1,9.54,9.63Z" fill="#fff" /><rect x="8.13" y="10.62" width="1.69" height="1.69" rx="0.61" fill="#fff" /></g></symbol>
+    <symbol id="icon-monitor" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><radialGradient id="ac8b32da-30ca-4b92-8d0f-8d2d5ef278a0" cx="5.72" cy="7.45" r="8.42" gradientTransform="translate(3.23 1.51) scale(1.01 1.01)" gradientUnits="userSpaceOnUse"><stop offset="0.18" stop-color="#5ea0ef" /><stop offset="0.56" stop-color="#5c9fee" /><stop offset="0.69" stop-color="#559ced" /><stop offset="0.78" stop-color="#4a97e9" /><stop offset="0.86" stop-color="#3990e4" /><stop offset="0.93" stop-color="#2387de" /><stop offset="0.99" stop-color="#087bd6" /><stop offset="1" stop-color="#0078d4" /></radialGradient><radialGradient id="a9954820-cb38-4943-9842-f0a568d2b015" cx="28.18" cy="202.29" r="2.7" gradientTransform="translate(-17.77 -185.01) scale(0.95)" gradientUnits="userSpaceOnUse"><stop offset="0.19" stop-color="#8c8e90" /><stop offset="0.35" stop-color="#848688" /><stop offset="0.6" stop-color="#6e7071" /><stop offset="0.91" stop-color="#4a4b4c" /><stop offset="1" stop-color="#3e3f3f" /></radialGradient></defs><ellipse cx="9" cy="9" rx="8.5" ry="8.47" fill="url(#ac8b32da-30ca-4b92-8d0f-8d2d5ef278a0)" xmlns="http://www.w3.org/2000/svg" /><ellipse cx="9" cy="9" rx="7.4" ry="7.37" fill="#fff" xmlns="http://www.w3.org/2000/svg" /><path d="M2.72,9.44a6.24,6.24,0,0,0,1.82,4l2-2a3.53,3.53,0,0,1-1-2Z" fill="#9cebff" xmlns="http://www.w3.org/2000/svg" /><path d="M13.13,4.27A6.25,6.25,0,0,0,9.44,2.74V5.53a3.41,3.41,0,0,1,1.71.7Z" fill="#32bedd" xmlns="http://www.w3.org/2000/svg" /><path d="M4.87,4.27l2,2a3.41,3.41,0,0,1,1.71-.7V2.74A6.25,6.25,0,0,0,4.87,4.27Z" fill="#32bedd" xmlns="http://www.w3.org/2000/svg" /><path d="M11.78,6.85a3.6,3.6,0,0,1,.71,1.71h2.79a6.16,6.16,0,0,0-1.53-3.67Z" fill="#32bedd" xmlns="http://www.w3.org/2000/svg" /><path d="M6.22,6.85l-2-2A6.16,6.16,0,0,0,2.72,8.56H5.51A3.6,3.6,0,0,1,6.22,6.85Z" fill="#50e6ff" xmlns="http://www.w3.org/2000/svg" /><path d="M14.14,7a.45.45,0,0,0-.57-.25L9.45,8.41l.32.81,4.12-1.63A.44.44,0,0,0,14.14,7Z" fill="#f04049" xmlns="http://www.w3.org/2000/svg" /><ellipse cx="9" cy="9" rx="1.2" ry="1.2" fill="url(#a9954820-cb38-4943-9842-f0a568d2b015)" xmlns="http://www.w3.org/2000/svg" /></symbol>
+    <symbol id="icon-cloud-shell" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><linearGradient id="ba88ea91-3b3a-4da0-9b97-9a10ebaa3e50" x1="12.805" y1="15.237" x2="12.805" y2="7.962" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#0078d4" /><stop offset=".156" stop-color="#1380da" /><stop offset=".528" stop-color="#3c91e5" /><stop offset=".822" stop-color="#559cec" /><stop offset="1" stop-color="#5ea0ef" /></linearGradient></defs><path d="M15.6 5.7H.067V2.99a.226.226 0 0 1 .226-.226H15.37a.227.227 0 0 1 .227.226z" fill="#949494" xmlns="http://www.w3.org/2000/svg" /><path d="M.063 5.7h15.53a0 0 0 0 1 0 0v9.254a.231.231 0 0 1-.231.231H.294a.231.231 0 0 1-.231-.231V5.7a0 0 0 0 1 0 0z" fill="#bfbfbf" xmlns="http://www.w3.org/2000/svg" /><path fill="#005ba1" d="M1.135 6.5h13.37v7.57H1.135z" xmlns="http://www.w3.org/2000/svg" /><g fill="#fff" xmlns="http://www.w3.org/2000/svg"><rect x="4.576" y="10.738" width="2.837" height=".527" rx=".263" /><path d="M2.675 11.215L4.35 9.54a.169.169 0 0 0 0-.243l-1.7-1.633a.17.17 0 0 0-.244.01L2.28 7.8a.17.17 0 0 0 .01.236L3.623 9.3a.171.171 0 0 1 0 .242l-1.3 1.333a.171.171 0 0 0 0 .239l.1.1a.17.17 0 0 0 .252.001z" /></g><path d="M17.937 12.958a2.3 2.3 0 0 0-2-2.216 2.906 2.906 0 0 0-2.994-2.78A2.982 2.982 0 0 0 10.092 9.9a2.752 2.752 0 0 0-2.42 2.648 2.793 2.793 0 0 0 2.89 2.684l.255-.01H15.5a.465.465 0 0 0 .124-.019 2.333 2.333 0 0 0 2.313-2.244z" fill="url(#ba88ea91-3b3a-4da0-9b97-9a10ebaa3e50)" xmlns="http://www.w3.org/2000/svg" /></symbol>
+    <symbol id="icon-vnet" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><linearGradient id="f020fb7e-2243-4501-8153-5d69bd3c34f7" x1="9.88" y1="8.59" x2="11.52" y2="10.23" gradientTransform="translate(2.03 -0.4) rotate(-0.08)" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#86d633" /><stop offset="1" stop-color="#5e9624" /></linearGradient><linearGradient id="b3c2bc94-8c7c-48a2-9719-6ee899a43a97" x1="6.18" y1="8.59" x2="7.81" y2="10.23" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#86d633" /><stop offset="1" stop-color="#5e9624" /></linearGradient><linearGradient id="e900c35d-0958-4d4f-b28f-302eeaaf52f5" x1="2.48" y1="8.59" x2="4.11" y2="10.23" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#86d633" /><stop offset="1" stop-color="#5e9624" /></linearGradient></defs><circle cx="12.74" cy="8.99" r="1.16" fill="url(#f020fb7e-2243-4501-8153-5d69bd3c34f7)" xmlns="http://www.w3.org/2000/svg" /><circle cx="9.04" cy="9" r="1.16" fill="url(#b3c2bc94-8c7c-48a2-9719-6ee899a43a97)" xmlns="http://www.w3.org/2000/svg" /><circle cx="5.34" cy="9" r="1.16" fill="url(#e900c35d-0958-4d4f-b28f-302eeaaf52f5)" xmlns="http://www.w3.org/2000/svg" /><path d="M2.61,7.28h.94a.3.3,0,0,1,.3.3v6.94a.6.6,0,0,1-.6.6H2.31a0,0,0,0,1,0,0V7.58a.3.3,0,0,1,.3-.3Z" transform="translate(13.18 16.93) rotate(134.92)" fill="#50e6ff" xmlns="http://www.w3.org/2000/svg" /><path d="M2.56,2.91H3.5a.3.3,0,0,1,.3.3v7.43a0,0,0,0,1,0,0H2.86a.6.6,0,0,1-.6-.6V3.21a.3.3,0,0,1,.3-.3Z" transform="translate(5.66 -0.16) rotate(44.92)" fill="#1490df" xmlns="http://www.w3.org/2000/svg" /><path d="M14.15,7.28h.94a.6.6,0,0,1,.6.6v6.94a.3.3,0,0,1-.3.3h-.94a.3.3,0,0,1-.3-.3V7.28a0,0,0,0,1,0,0Z" transform="translate(12.32 -7.28) rotate(45.08)" fill="#50e6ff" xmlns="http://www.w3.org/2000/svg" /><path d="M14.81,2.91h.94a0,0,0,0,1,0,0v7.43a.3.3,0,0,1-.3.3H14.5a.3.3,0,0,1-.3-.3V3.51a.6.6,0,0,1,.6-.6Z" transform="translate(30.36 0.99) rotate(135.08)" fill="#1490df" xmlns="http://www.w3.org/2000/svg" /></symbol>
+    <symbol id="icon-subnet" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><linearGradient id="bceb60dd-8b8c-4098-94f8-aeb4db2edaef" x1="9.033" y1="10.305" x2="9.033" y2="7.695" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#5e9624" /><stop offset="0.241" stop-color="#6fb02a" /><stop offset="0.501" stop-color="#7cc52f" /><stop offset="0.756" stop-color="#83d232" /><stop offset="1" stop-color="#86d633" /></linearGradient></defs><g id="ac75c21e-2a93-464f-8048-f1518dab8b75" xmlns="http://www.w3.org/2000/svg"><g><path d="M9.031,7.7A1.305,1.305,0,1,0,10.338,9,1.305,1.305,0,0,0,9.031,7.7Z" fill="url(#bceb60dd-8b8c-4098-94f8-aeb4db2edaef)" /><g><path d="M2.961,7.374h.888a.284.284,0,0,1,.284.284v6.551a.568.568,0,0,1-.568.568H2.677a0,0,0,0,1,0,0V7.659A.284.284,0,0,1,2.961,7.374Z" transform="translate(13.653 16.485) rotate(134.919)" fill="#50e6ff" /><path d="M2.913,3.244H3.8a.284.284,0,0,1,.284.284v7.015a0,0,0,0,1,0,0H3.2a.568.568,0,0,1-.568-.568V3.528a.284.284,0,0,1,.284-.284Z" transform="translate(5.847 -0.358) rotate(44.919)" fill="#1490df" /><path d="M13.867,7.374h.888a.568.568,0,0,1,.568.568v6.551a.284.284,0,0,1-.284.284h-.888a.284.284,0,0,1-.284-.284V7.374a0,0,0,0,1,0,0Z" transform="translate(12.132 -7.079) rotate(45.081)" fill="#50e6ff" /><path d="M14.483,3.244h.888a0,0,0,0,1,0,0v7.015a.284.284,0,0,1-.284.284H14.2a.284.284,0,0,1-.284-.284V3.812a.568.568,0,0,1,.568-.568Z" transform="translate(29.879 1.435) rotate(135.081)" fill="#1490df" /></g></g></g></symbol>
+    <symbol id="icon-container-env" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><linearGradient id="a3a44093-b157-426e-a8fe-cec9f9c23978" x1="11.729" y1="4.88" x2="11.729" y2="13.099" gradientUnits="userSpaceOnUse"><stop offset="0.001" stop-color="#773adc" /><stop offset="0.528" stop-color="#6635bb" /><stop offset="1" stop-color="#552f99" /></linearGradient><linearGradient id="ad838859-03f4-472f-81bc-ebc921d71335" x1="6.35" y1="13.914" x2="6.35" y2="4.198" gradientUnits="userSpaceOnUse"><stop offset="0.001" stop-color="#773adc" /><stop offset="0.307" stop-color="#793ddd" /><stop offset="0.532" stop-color="#8046e1" /><stop offset="0.731" stop-color="#8c56e7" /><stop offset="0.915" stop-color="#9c6def" /><stop offset="1" stop-color="#a67af4" /></linearGradient></defs><g id="ae82470d-7a6c-4dfe-8533-59d8ff948629" xmlns="http://www.w3.org/2000/svg"><g><path d="M8.617,8.644H.639V1.784A1.16,1.16,0,0,1,1.788.624H8.617ZM1.63,7.653h6V1.594H1.788a.158.158,0,0,0-.158.158h0Z" fill="#949494" /><path d="M17.5,8.644H9.523V.624h6.828A1.16,1.16,0,0,1,17.5,1.784Zm-6.987-.991h6V1.784a.157.157,0,0,0-.123-.187.2.2,0,0,0-.035,0H10.513Z" fill="#949494" /><path d="M8.617,17.485H1.788A1.149,1.149,0,0,1,.639,16.347V9.476H8.617ZM1.63,10.467v5.88a.158.158,0,0,0,.158.158H7.626V10.467Z" fill="#949494" /><path d="M16.351,17.485H9.523V9.476H17.5v6.871A1.149,1.149,0,0,1,16.351,17.485Zm-5.838-.991h5.838a.157.157,0,0,0,.158-.158V10.467h-6Z" fill="#949494" /><path d="M14.6,6.294a.294.294,0,0,0-.2-.278L9.044,4.205A.128.128,0,0,0,9,4.2H9a.132.132,0,0,0-.133.133v9.445A.133.133,0,0,0,9,13.911H9a.138.138,0,0,0,.049-.01l5.365-2.145a.292.292,0,0,0,.184-.272Z" fill="url(#a3a44093-b157-426e-a8fe-cec9f9c23978)" /><path d="M8.966,4.2l-5.293.966a.161.161,0,0,0-.13.158V12.63a.16.16,0,0,0,.126.157L8.962,13.91a.161.161,0,0,0,.191-.121.22.22,0,0,0,0-.036V4.358A.16.16,0,0,0,9,4.2.163.163,0,0,0,8.966,4.2Z" fill="url(#ad838859-03f4-472f-81bc-ebc921d71335)" /><path d="M6.52,5.656v6.8l1.842.3V5.335Zm-2.262.367v5.955l1.6.326V5.754Z" fill="#b796f9" opacity="0.5" /></g></g></symbol>
+    <symbol id="icon-container-app" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><linearGradient id="b27f1ad0-7d11-4247-9da3-91bce6211f32" x1="8.798" y1="8.703" x2="14.683" y2="8.703" gradientUnits="userSpaceOnUse"><stop offset="0.001" stop-color="#773adc" /><stop offset="1" stop-color="#552f99" /></linearGradient><linearGradient id="b2f92112-4ca9-4b17-a019-c9f26c1a4a8f" x1="5.764" y1="3.777" x2="5.764" y2="13.78" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#a67af4" /><stop offset="0.999" stop-color="#773adc" /></linearGradient></defs><g id="b8a0486a-5501-4d92-b540-a766c4b3b548" xmlns="http://www.w3.org/2000/svg"><g><g><g><path d="M16.932,11.578a8.448,8.448,0,0,1-7.95,5.59,8.15,8.15,0,0,1-2.33-.33,2.133,2.133,0,0,0,.18-.83c.01,0,.03.01.04.01a7.422,7.422,0,0,0,2.11.3,7.646,7.646,0,0,0,6.85-4.28l.01-.01Z" fill="#32bedd" /><path d="M3.582,14.068a2.025,2.025,0,0,0-.64.56,8.6,8.6,0,0,1-1.67-2.44l1.04.23v.26a.6.6,0,0,0,.47.59l.14.03a6.136,6.136,0,0,0,.62.73Z" fill="#32bedd" /><path d="M12.352.958a2.28,2.28,0,0,0-.27.81c-.02-.01-.05-.02-.07-.03a7.479,7.479,0,0,0-3.03-.63,7.643,7.643,0,0,0-5.9,2.8l-.29.06a.6.6,0,0,0-.48.58v.46l-1.02.19A8.454,8.454,0,0,1,8.982.268,8.6,8.6,0,0,1,12.352.958Z" fill="#32bedd" /><path d="M16.872,5.7l-1.09-.38a6.6,6.6,0,0,0-.72-1.16c-.02-.03-.04-.05-.05-.07a2.083,2.083,0,0,0,.72-.45A7.81,7.81,0,0,1,16.872,5.7Z" fill="#32bedd" /><path d="M10.072,11.908l2.54.56L8.672,14.1c-.02,0-.03.01-.05.01a.154.154,0,0,1-.15-.15V3.448a.154.154,0,0,1,.15-.15.09.09,0,0,1,.05.01l4.46,1.56-3.05.57a.565.565,0,0,0-.44.54v5.4A.537.537,0,0,0,10.072,11.908Z" fill="#fff" /><g><g id="e918f286-5032-4942-ad29-ea17e6f1cc90"><path d="M1.1,5.668l1.21-.23v6.55l-1.23-.27-.99-.22a.111.111,0,0,1-.09-.12v-5.4a.12.12,0,0,1,.09-.12Z" fill="#a67af4" /></g><g><g id="a47a99dd-4d47-4c70-8c42-c5ac274ce496"><g><path d="M10.072,11.908l2.54.56L8.672,14.1c-.02,0-.03.01-.05.01a.154.154,0,0,1-.15-.15V3.448a.154.154,0,0,1,.15-.15.09.09,0,0,1,.05.01l4.46,1.56-3.05.57a.565.565,0,0,0-.44.54v5.4A.537.537,0,0,0,10.072,11.908Z" fill="url(#b27f1ad0-7d11-4247-9da3-91bce6211f32)" /><path d="M8.586,3.3,2.878,4.378a.177.177,0,0,0-.14.175V12.68a.177.177,0,0,0,.137.174L8.581,14.1a.176.176,0,0,0,.21-.174V3.478A.175.175,0,0,0,8.619,3.3Z" fill="url(#b2f92112-4ca9-4b17-a019-c9f26c1a4a8f)" /></g></g><polygon points="5.948 4.921 5.948 12.483 7.934 12.814 7.934 4.564 5.948 4.921" fill="#b796f9" opacity="0.5" /><polygon points="3.509 5.329 3.509 11.954 5.238 12.317 5.238 5.031 3.509 5.329" fill="#b796f9" opacity="0.5" /></g></g></g><path d="M16,2.048a1.755,1.755,0,1,1-1.76-1.76A1.756,1.756,0,0,1,16,2.048Z" fill="#32bedd" /><circle cx="4.65" cy="15.973" r="1.759" fill="#32bedd" /></g><path d="M18,6.689v3.844a.222.222,0,0,1-.133.2l-.766.316-3.07,1.268-.011,0a.126.126,0,0,1-.038,0,.1.1,0,0,1-.1-.1V5.234a.1.1,0,0,1,.054-.088l0,0,.019,0a.031.031,0,0,1,.019,0,.055.055,0,0,1,.034.008l.011,0,.012,0L17.05,6.2l.8.282A.213.213,0,0,1,18,6.689Z" fill="#773adc" /><path d="M13.959,5.14l-3.8.715a.118.118,0,0,0-.093.117v5.409a.118.118,0,0,0,.091.116l3.8.831a.115.115,0,0,0,.137-.09.109.109,0,0,0,0-.026V5.256a.117.117,0,0,0-.115-.118A.082.082,0,0,0,13.959,5.14Z" fill="#a67af4" /></g></g></symbol>
+    <symbol id="icon-acr" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><linearGradient id="bdf27dc6-025c-4805-8bfd-3a05defd3fbd" x1="8.637" y1="-1.991" x2="8.637" y2="16.739" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#5ea0ef" /><stop offset="1" stop-color="#0078d4" /></linearGradient><linearGradient id="fcd6c6c7-e2eb-4a32-b914-3a8485585a1b" x1="12.96" y1="8.561" x2="12.96" y2="6.141" gradientTransform="matrix(1, 0, 0, -1, 0, 20)" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#333132" /><stop offset="1" stop-color="#5b5a5c" /></linearGradient></defs><path d="M7.43,8.178l2.589-1.573,7.255,2.731A3.664,3.664,0,0,0,16.23,7.49l-.01-.05A4.194,4.194,0,0,0,14,6.32a4.91,4.91,0,0,0-5.1-4.7A5.071,5.071,0,0,0,4.06,4.91,4.621,4.621,0,0,0,0,9.39a4.73,4.73,0,0,0,4.89,4.54H7.43Z" fill="url(#bdf27dc6-025c-4805-8bfd-3a05defd3fbd)" xmlns="http://www.w3.org/2000/svg" /><polygon points="10.07 7.159 10.08 11.439 17.99 13.119 17.99 10.139 10.07 7.159" fill="#767676" xmlns="http://www.w3.org/2000/svg" /><polyline points="10.07 7.159 7.93 8.459 7.93 12.439 10.08 11.439" fill="#999" xmlns="http://www.w3.org/2000/svg" /><polygon points="13.68 11.499 14.4 11.699 14.4 9.369 13.68 9.119 13.68 11.499" fill="#a3a3a3" xmlns="http://www.w3.org/2000/svg" /><polygon points="12.96 8.889 12.24 8.629 12.24 11.119 12.96 11.319 12.96 8.889" fill="#a3a3a3" xmlns="http://www.w3.org/2000/svg" /><polygon points="15.12 11.889 15.82 12.079 15.84 9.859 15.12 9.619 15.12 11.889" fill="#a3a3a3" xmlns="http://www.w3.org/2000/svg" /><polygon points="10.81 10.749 11.53 10.929 11.53 8.399 10.81 8.159 10.81 10.749" fill="#a3a3a3" xmlns="http://www.w3.org/2000/svg" /><polygon points="17.27 10.349 16.55 10.099 16.55 12.269 17.27 12.469 17.27 10.349" fill="#a3a3a3" xmlns="http://www.w3.org/2000/svg" /><path id="ef0d1b54-a1e7-4cb9-a4e5-8a8518e7c127" d="M8.66,11.369l-.36.21V8.749l.36-.19Zm.71-3.22L9,8.389v2.75l.37-.2Z" fill="#b3b3b3" xmlns="http://www.w3.org/2000/svg" /><polygon points="17.99 13.119 15.83 13.859 7.93 12.439 10.08 11.439 17.99 13.119" fill="url(#fcd6c6c7-e2eb-4a32-b914-3a8485585a1b)" xmlns="http://www.w3.org/2000/svg" /><polygon points="17.99 16.169 10.04 17.679 10.08 12.089 17.99 13.559 17.99 16.169" fill="#767676" xmlns="http://www.w3.org/2000/svg" /><polygon points="10.81 16.759 10.81 13.209 11.53 13.299 11.53 16.639 10.81 16.759" fill="#a3a3a3" xmlns="http://www.w3.org/2000/svg" /><polygon points="12.96 16.399 12.24 16.529 12.24 13.389 12.96 13.499 12.96 16.399 12.96 16.399" fill="#a3a3a3" xmlns="http://www.w3.org/2000/svg" /><polygon points="13.68 16.289 13.68 13.569 14.4 13.659 14.4 16.159 13.68 16.289" fill="#a3a3a3" xmlns="http://www.w3.org/2000/svg" /><polygon points="15.83 15.909 15.12 16.039 15.12 13.749 15.83 13.859 15.83 15.909" fill="#a3a3a3" xmlns="http://www.w3.org/2000/svg" /><polygon points="17.29 15.679 16.55 15.809 16.55 13.929 17.24 14.019 17.29 15.679" fill="#a3a3a3" xmlns="http://www.w3.org/2000/svg" /><path id="b9f25eb4-4c88-45c2-bc4d-f992757d7e0e" d="M7.93,16.4v-3.26l2.16-1v5.6Z" fill="#999" xmlns="http://www.w3.org/2000/svg" /><path id="eb9200a7-4693-4427-bdae-b33ce90ff7f2" d="M8.61,16.389l-.32-.16v-2.76l.32-.15Zm.77-3.45-.38.19v3.48l.37.19v-3.86Z" fill="#b3b3b3" xmlns="http://www.w3.org/2000/svg" /></symbol>
+    <symbol id="icon-managed-identity" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><linearGradient id="bb67b154-af8f-4a53-a9ce-aa046b9398e9" x1="13.18" y1="13.01" x2="8.63" y2="4.38" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#1988d9" /><stop offset="0.9" stop-color="#54aef0" /></linearGradient><linearGradient id="a47d7138-084a-471d-8d63-744e75b9e8a3" x1="11.22" y1="10.5" x2="14.37" y2="15.93" gradientUnits="userSpaceOnUse"><stop offset="0.1" stop-color="#54aef0" /><stop offset="0.29" stop-color="#4fabee" /><stop offset="0.51" stop-color="#41a2e9" /><stop offset="0.74" stop-color="#2a93e0" /><stop offset="0.88" stop-color="#1988d9" /></linearGradient></defs><g xmlns="http://www.w3.org/2000/svg"><polygon points="1.15 10.22 8.93 15.27 16.85 10.21 17.85 11.36 8.93 17.11 0.15 11.37 1.15 10.22" fill="#50e6ff" /><polygon points="1.73 9.58 8.93 1 16.28 9.59 8.93 14.23 1.73 9.58" fill="#fff" /><polygon points="8.93 1 8.93 14.23 1.73 9.58 8.93 1" fill="#50e6ff" /><polygon points="8.93 1 8.93 14.23 16.28 9.59 8.93 1" fill="url(#bb67b154-af8f-4a53-a9ce-aa046b9398e9)" /><polygon points="8.93 7.83 16.28 9.59 8.93 14.23 8.93 7.83" fill="#53b1e0" /><polygon points="8.93 14.23 1.73 9.58 8.93 7.83 8.93 14.23" fill="#9cebff" /><polygon points="8.93 17.11 17.85 11.36 16.85 10.21 8.93 15.27 8.93 17.11" fill="url(#a47d7138-084a-471d-8d63-744e75b9e8a3)" /><g><path id="e189a61f-631a-4122-bb2b-079e86004d96" d="M16.32,11.88a1.16,1.16,0,0,0,0-1.65h0l-2-2a1.16,1.16,0,0,0-1.64,0h0l-2,2a1.18,1.18,0,0,0,0,1.65l1.67,1.67a.32.32,0,0,1,.09.23v3.1a.36.36,0,0,0,.12.28l.76.76a.25.25,0,0,0,.37,0l.73-.73h0l.44-.44a.15.15,0,0,0,0-.21l-.31-.31a.16.16,0,0,1,0-.24l.31-.31a.16.16,0,0,0,0-.22l-.31-.31a.15.15,0,0,1,0-.23l.31-.32a.15.15,0,0,0,0-.21l-.44-.44v-.16ZM13.5,8.71a.66.66,0,1,1-.66.66.66.66,0,0,1,.66-.66Z" fill="#ffca00" /><path id="fb7033ee-4650-4886-80c7-eddf62560f85" d="M13,17h0a.14.14,0,0,0,.24-.11V14.33a.16.16,0,0,0-.06-.13h0a.14.14,0,0,0-.22.13v2.51A.15.15,0,0,0,13,17Z" fill="#ff9300" opacity="0.75" /><rect id="b166b8c2-b9ee-4c3d-bf7a-77bd5ce0570b" x="11.9" y="10.9" width="3.29" height="0.39" rx="0.18" fill="#ff9300" opacity="0.75" /><rect id="baf437fe-3483-4a25-94ba-1e84a64cd2eb" x="11.9" y="11.53" width="3.29" height="0.39" rx="0.18" fill="#ff9300" opacity="0.75" /></g></g></symbol>
+    <symbol id="icon-key-vault" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><radialGradient id="fb114c93-7c16-4540-899a-0796041629e6" cx="9" cy="9" r="8.5" gradientUnits="userSpaceOnUse"><stop offset="0.18" stop-color="#5ea0ef" /><stop offset="0.56" stop-color="#5c9fee" /><stop offset="0.69" stop-color="#559ced" /><stop offset="0.78" stop-color="#4a97e9" /><stop offset="0.86" stop-color="#3990e4" /><stop offset="0.93" stop-color="#2387de" /><stop offset="0.99" stop-color="#087bd6" /><stop offset="1" stop-color="#0078d4" /></radialGradient><radialGradient id="ec478bd3-5b38-4e7f-b661-11f355578bff" cx="38.95" cy="182.07" r="9.88" gradientTransform="translate(-28.71 -163.24) scale(0.94 0.94)" gradientUnits="userSpaceOnUse"><stop offset="0.27" stop-color="#ffd70f" /><stop offset="0.49" stop-color="#ffcb12" /><stop offset="0.88" stop-color="#feac19" /><stop offset="1" stop-color="#fea11b" /></radialGradient></defs><path id="aacf8311-a317-400f-b613-74bd00da5ce3" d="M9,.5A8.5,8.5,0,1,0,17.5,9,8.51,8.51,0,0,0,9,.5ZM9,16.34A7.34,7.34,0,1,1,16.34,9,7.34,7.34,0,0,1,9,16.34Z" fill="url(#fb114c93-7c16-4540-899a-0796041629e6)" xmlns="http://www.w3.org/2000/svg" /><circle cx="9" cy="9" r="7.34" fill="#fff" xmlns="http://www.w3.org/2000/svg" /><g xmlns="http://www.w3.org/2000/svg"><path id="bd983c41-db73-40ec-a4f4-da1213fc9924" d="M13.44,7.33a1.84,1.84,0,0,0,0-2.59h0L10.29,1.58a1.83,1.83,0,0,0-2.58,0h0L4.56,4.74a1.84,1.84,0,0,0,0,2.59L7.18,10a.51.51,0,0,1,.15.36v4.88a.63.63,0,0,0,.18.44l1.2,1.2a.41.41,0,0,0,.58,0l1.16-1.16h0l.68-.68a.25.25,0,0,0,0-.34l-.49-.49a.27.27,0,0,1,0-.37l.49-.49a.25.25,0,0,0,0-.34l-.49-.49a.27.27,0,0,1,0-.37l.49-.49a.25.25,0,0,0,0-.34l-.68-.69v-.25ZM9,2.35A1,1,0,0,1,9,4.42,1,1,0,1,1,9,2.35Z" fill="url(#ec478bd3-5b38-4e7f-b661-11f355578bff)" /><path id="ad2e7e44-9bfd-4775-8bf4-8ef26a544921" d="M8.18,15.3h0a.23.23,0,0,0,.38-.17v-4a.24.24,0,0,0-.11-.2h0a.22.22,0,0,0-.34.2v4A.28.28,0,0,0,8.18,15.3Z" fill="#ff9300" opacity="0.75" /><rect id="a996fbff-3936-4b24-b407-369336c143ba" x="6.48" y="5.79" width="5.17" height="0.61" rx="0.28" fill="#ff9300" opacity="0.75" /><rect id="bb12d31c-3352-4a18-87dd-a169a4a8721d" x="6.48" y="6.78" width="5.17" height="0.61" rx="0.28" fill="#ff9300" opacity="0.75" /></g></symbol>
+    <symbol id="icon-storage" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><linearGradient id="ad4c4f96-09aa-4f91-ba10-5cb8ad530f74" x1="9" y1="15.83" x2="9" y2="5.79" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#b3b3b3" /><stop offset="0.26" stop-color="#c1c1c1" /><stop offset="1" stop-color="#e6e6e6" /></linearGradient></defs><path d="M.5,5.79h17a0,0,0,0,1,0,0v9.48a.57.57,0,0,1-.57.57H1.07a.57.57,0,0,1-.57-.57V5.79A0,0,0,0,1,.5,5.79Z" fill="url(#ad4c4f96-09aa-4f91-ba10-5cb8ad530f74)" xmlns="http://www.w3.org/2000/svg" /><path d="M1.07,2.17H16.93a.57.57,0,0,1,.57.57V5.79a0,0,0,0,1,0,0H.5a0,0,0,0,1,0,0V2.73A.57.57,0,0,1,1.07,2.17Z" fill="#37c2b1" xmlns="http://www.w3.org/2000/svg" /><path d="M2.81,6.89H15.18a.27.27,0,0,1,.26.27v1.4a.27.27,0,0,1-.26.27H2.81a.27.27,0,0,1-.26-.27V7.16A.27.27,0,0,1,2.81,6.89Z" fill="#fff" xmlns="http://www.w3.org/2000/svg" /><path d="M2.82,9.68H15.19a.27.27,0,0,1,.26.27v1.41a.27.27,0,0,1-.26.27H2.82a.27.27,0,0,1-.26-.27V10A.27.27,0,0,1,2.82,9.68Z" fill="#37c2b1" xmlns="http://www.w3.org/2000/svg" /><path d="M2.82,12.5H15.19a.27.27,0,0,1,.26.27v1.41a.27.27,0,0,1-.26.27H2.82a.27.27,0,0,1-.26-.27V12.77A.27.27,0,0,1,2.82,12.5Z" fill="#258277" xmlns="http://www.w3.org/2000/svg" /></symbol>
+    <symbol id="icon-table" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><linearGradient id="fc742b2b-5750-4864-b8dc-cdccaac6f13c" x1="9" y1="15.834" x2="9" y2="5.788" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#0078d4" /><stop offset="0.502" stop-color="#4093e6" /><stop offset="0.775" stop-color="#5ea0ef" /></linearGradient></defs><g id="fb33f902-6783-4db3-88ea-a4524e356c77" xmlns="http://www.w3.org/2000/svg"><g><path d="M.5,5.788h17a0,0,0,0,1,0,0v9.478a.568.568,0,0,1-.568.568H1.068A.568.568,0,0,1,.5,15.266V5.788A0,0,0,0,1,.5,5.788Z" fill="url(#fc742b2b-5750-4864-b8dc-cdccaac6f13c)" /><path d="M1.071,2.166H16.929a.568.568,0,0,1,.568.568V5.788a0,0,0,0,1,0,0H.5a0,0,0,0,1,0,0V2.734A.568.568,0,0,1,1.071,2.166Z" fill="#0078d4" /><rect x="2.304" y="7.121" width="3.65" height="1.85" rx="0.283" fill="#fff" opacity="0.9" /><rect x="7.2" y="7.095" width="3.65" height="1.85" rx="0.283" fill="#fff" opacity="0.9" /><rect x="12.096" y="7.095" width="3.65" height="1.85" rx="0.283" fill="#fff" opacity="0.9" /><rect x="2.358" y="9.767" width="3.65" height="1.85" rx="0.283" fill="#fff" opacity="0.9" /><rect x="7.254" y="9.741" width="3.65" height="1.85" rx="0.283" fill="#ffd400" /><rect x="12.15" y="9.741" width="3.65" height="1.85" rx="0.283" fill="#ffd400" /><rect x="2.358" y="12.439" width="3.65" height="1.85" rx="0.283" fill="#ffd400" /><rect x="7.254" y="12.413" width="3.65" height="1.85" rx="0.283" fill="#ffd400" /><rect x="12.15" y="12.413" width="3.65" height="1.85" rx="0.283" fill="#ffd400" /></g></g></symbol>
+    <symbol id="icon-private-endpoint" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><linearGradient id="f386bb7a-bcb2-4b67-b5b2-06819618ff51" x1="9.084" y1="790.967" x2="9.084" y2="787.492" gradientTransform="matrix(1, 0, 0, -1, 0, 791.516)" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#50e6ff" /><stop offset="1" stop-color="#32bedd" /></linearGradient><linearGradient id="a62a9cad-b173-4785-ba81-8ee30d4dc6eb" x1="9.065" y1="13.843" x2="9.065" y2="10.368" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#5e9624" /><stop offset="0.183" stop-color="#629c25" /><stop offset="0.435" stop-color="#6dae2a" /><stop offset="0.726" stop-color="#7fcb30" /><stop offset="0.822" stop-color="#86d633" /></linearGradient></defs><g id="bdcd7268-31fc-4163-9544-651d61f1498e" xmlns="http://www.w3.org/2000/svg"><g><path d="M7.85,13.342a1.738,1.738,0,1,0,2.436-2.479,1.715,1.715,0,0,0-.626-.389V3.009H8.548v7.444a1.729,1.729,0,0,0-.7,2.891Z" fill="#b3b3b3" /><circle cx="9.084" cy="2.209" r="1.738" fill="url(#f386bb7a-bcb2-4b67-b5b2-06819618ff51)" /><g><path d="M2.632,10.449h.937a.3.3,0,0,1,.3.3v6.909a.6.6,0,0,1-.6.6H2.332a0,0,0,0,1,0,0V10.749A.3.3,0,0,1,2.632,10.449Z" transform="translate(15.452 22.292) rotate(134.919)" fill="#50e6ff" /><path d="M2.581,6.093h.937a.3.3,0,0,1,.3.3v7.4a0,0,0,0,1,0,0H2.88a.6.6,0,0,1-.6-.6v-6.8A.3.3,0,0,1,2.581,6.093Z" transform="translate(7.91 0.749) rotate(44.919)" fill="#1490df" /><path d="M14.132,10.449h.937a.6.6,0,0,1,.6.6v6.909a.3.3,0,0,1-.3.3h-.937a.3.3,0,0,1-.3-.3V10.449a0,0,0,0,1,0,0Z" transform="translate(14.542 -6.333) rotate(45.081)" fill="#50e6ff" /><path d="M14.782,6.093h.937a0,0,0,0,1,0,0v7.4a.3.3,0,0,1-.3.3h-.937a.3.3,0,0,1-.3-.3v-6.8A.6.6,0,0,1,14.782,6.093Z" transform="translate(32.558 6.424) rotate(135.081)" fill="#1490df" /></g><circle cx="9.065" cy="12.106" r="1.738" fill="url(#a62a9cad-b173-4785-ba81-8ee30d4dc6eb)" /></g></g></symbol>
+    <symbol id="icon-dns" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><radialGradient id="e7579f4d-36a3-4693-a726-7a6050ac5671" cx="-6811.4" cy="6729.69" r="17" gradientTransform="matrix(0.5, 0, 0, -0.5, 3414.91, 3374.05)" gradientUnits="userSpaceOnUse"><stop offset="0.18" stop-color="#5ea0ef" /><stop offset="1" stop-color="#0078d4" /></radialGradient></defs><path id="f57e105d-6d2d-4ad7-b8c3-c10684c9f9b8" d="M14.21,15.72A8.5,8.5,0,0,1,3.79,2.28l.09-.06a8.5,8.5,0,0,1,10.33,13.5" fill="url(#e7579f4d-36a3-4693-a726-7a6050ac5671)" xmlns="http://www.w3.org/2000/svg" /><path d="M9,1.31A7.69,7.69,0,1,0,16.69,9,7.7,7.7,0,0,0,9,1.31ZM14.15,3.9A7.37,7.37,0,0,1,12,4.7,8.83,8.83,0,0,0,10.75,2,7.2,7.2,0,0,1,14.15,3.9ZM9,1.74a6.59,6.59,0,0,1,1.09.09h0a7.48,7.48,0,0,1,1.53,3,15.12,15.12,0,0,1-5.45,0A7.38,7.38,0,0,1,7.68,1.89l0,0A7.34,7.34,0,0,1,9,1.74ZM7,2A8.72,8.72,0,0,0,5.73,4.68a5.58,5.58,0,0,1-1.9-.77A7.35,7.35,0,0,1,7,2ZM3.72,14a5.27,5.27,0,0,1,1.78-.76,7.08,7.08,0,0,0,1.35,2.72A7.25,7.25,0,0,1,3.72,14Zm6.41,2.2A7.08,7.08,0,0,1,9,16.26a6.83,6.83,0,0,1-1.44-.15l0,0a6,6,0,0,1-1.67-3,14.73,14.73,0,0,1,5.88,0,6,6,0,0,1-1.69,3Zm.73-.16a7.13,7.13,0,0,0,1.38-2.8,6.68,6.68,0,0,1,2,.83A7.13,7.13,0,0,1,10.86,16Zm1.48-3.22c.08-.36.15-.73.2-1.12l-.46.11c-.05.31-.1.62-.17.91a15.23,15.23,0,0,0-6.09,0c-.07-.27-.12-.56-.17-.86a.28.28,0,0,1,0-.09l-.46-.13a2.36,2.36,0,0,0,0,.28c0,.32.11.62.17.91a5.9,5.9,0,0,0-2,.85,7.24,7.24,0,0,1,.11-9.4,6.29,6.29,0,0,0,2.08.86c-.07.24-.13.5-.18.76s0,.25-.08.37l.47-.11,0-.17c.06-.26.12-.51.19-.75A14.89,14.89,0,0,0,9,5.48a15,15,0,0,0,2.78-.26c.07.27.14.56.2.85l.46.11q-.11-.54-.24-1a7.73,7.73,0,0,0,2.3-.91,7.22,7.22,0,0,1,.06,9.49A7.28,7.28,0,0,0,12.34,12.79Z" fill="#5ea0ef" xmlns="http://www.w3.org/2000/svg" /><path d="M3.69,7a7.92,7.92,0,0,1,1.16-.08,2.44,2.44,0,0,1,1.71.52A2,2,0,0,1,7.15,8.9a2.21,2.21,0,0,1-.61,1.64,2.6,2.6,0,0,1-1.86.61,9.17,9.17,0,0,1-1-.05Zm.55,3.73a4,4,0,0,0,.55,0A1.62,1.62,0,0,0,6.58,8.92,1.5,1.5,0,0,0,4.87,7.3a3.17,3.17,0,0,0-.63,0Z" fill="#fff" xmlns="http://www.w3.org/2000/svg" /><path d="M7.86,11.11V6.9h.59L9.8,9a12.18,12.18,0,0,1,.76,1.37h0c-.05-.56-.06-1.07-.06-1.73V6.9H11v4.21h-.55L9.13,9c-.29-.47-.57-1-.79-1.4h0c0,.53,0,1,0,1.74v1.8Z" fill="#fff" xmlns="http://www.w3.org/2000/svg" /><path d="M11.89,10.45a2,2,0,0,0,1,.27c.56,0,.88-.29.88-.72s-.22-.62-.79-.83-1.12-.6-1.12-1.2a1.22,1.22,0,0,1,1.37-1.14,2,2,0,0,1,.93.2L14,7.48a1.63,1.63,0,0,0-.8-.2c-.58,0-.8.34-.8.63s.26.59.84.81,1.08.62,1.08,1.24-.48,1.21-1.48,1.21a2.16,2.16,0,0,1-1.07-.27Z" fill="#fff" xmlns="http://www.w3.org/2000/svg" /></symbol>
+    <symbol id="icon-app-insights" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><radialGradient id="a7a1c431-6c6d-4a8f-9a69-8da437e5b0c5" cx="9" cy="7.35" r="6.42" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#b77af4" /><stop offset="0.21" stop-color="#b378f2" /><stop offset="0.43" stop-color="#a672ed" /><stop offset="0.65" stop-color="#9267e4" /><stop offset="0.88" stop-color="#7559d8" /><stop offset="1" stop-color="#624fd0" /></radialGradient><linearGradient id="ec0c4f0d-5c8e-4882-96a1-89d61808eb49" x1="9.02" y1="3.91" x2="9.08" y2="11.49" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#f2f2f2" /><stop offset="0.23" stop-color="#f1f1f2" stop-opacity="0.99" /><stop offset="0.37" stop-color="#ededf1" stop-opacity="0.95" /><stop offset="0.48" stop-color="#e7e5f0" stop-opacity="0.89" /><stop offset="0.58" stop-color="#dedbee" stop-opacity="0.81" /><stop offset="0.67" stop-color="#d3ceeb" stop-opacity="0.7" /><stop offset="0.76" stop-color="#c4bee8" stop-opacity="0.57" /><stop offset="0.84" stop-color="#b4abe5" stop-opacity="0.41" /><stop offset="0.92" stop-color="#a095e1" stop-opacity="0.22" /><stop offset="0.99" stop-color="#8b7ddc" stop-opacity="0.02" /><stop offset="1" stop-color="#897bdc" stop-opacity="0" /></linearGradient></defs><path d="M10.23,17.39l.81-.87V14.2H7v2.32l.81.87A.32.32,0,0,0,8,17.5h2A.32.32,0,0,0,10.23,17.39Z" fill="#cecece" xmlns="http://www.w3.org/2000/svg" /><path d="M9,.5A5.89,5.89,0,0,0,3.09,7.07c.27,2.47,2.62,3.62,3.29,6.75a.49.49,0,0,0,.47.38h4.3a.49.49,0,0,0,.47-.38c.67-3.13,3-4.28,3.29-6.75A5.89,5.89,0,0,0,9,.5ZM7,14.2" fill="url(#a7a1c431-6c6d-4a8f-9a69-8da437e5b0c5)" xmlns="http://www.w3.org/2000/svg" /><path d="M11.46,3.79a1.4,1.4,0,0,0-1.35,1.44V6H8V5.23A1.41,1.41,0,0,0,6.59,3.79,1.4,1.4,0,0,0,5.24,5.23,1.41,1.41,0,0,0,6.59,6.68h.64v6a.36.36,0,0,0,.72,0v-6h2.16v6a.36.36,0,1,0,.72,0v-6h.63a1.4,1.4,0,0,0,1.35-1.45A1.4,1.4,0,0,0,11.46,3.79ZM7.23,6H6.55a.74.74,0,0,1-.68-.77.74.74,0,0,1,.68-.77.74.74,0,0,1,.68.77Zm4.28,0h-.68V5.19a.68.68,0,1,1,1.35,0A.73.73,0,0,1,11.51,6Z" fill="url(#ec0c4f0d-5c8e-4882-96a1-89d61808eb49)" xmlns="http://www.w3.org/2000/svg" /><polygon points="6.96 15.8 11.04 15.01 11.04 14.56 6.96 15.36 6.96 15.8" fill="#999" xmlns="http://www.w3.org/2000/svg" /><polygon points="11.04 16.11 11.04 15.67 6.96 16.48 6.96 16.52 7.27 16.86 11.04 16.11" fill="#999" xmlns="http://www.w3.org/2000/svg" /></symbol>
+    <symbol id="icon-log-analytics" viewBox="0 0 18 18"><defs xmlns="http://www.w3.org/2000/svg"><linearGradient id="a997e203-1d7d-4cb9-b131-5dc44e029b46" x1="5.23" y1="17.45" x2="5.23" y2="8.09" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#1988d9" /><stop offset="0.9" stop-color="#54aef0" /></linearGradient><linearGradient id="e122e9d8-aee5-4f1a-a60e-b1eae355daa5" x1="11.5" y1="12.45" x2="11.5" y2="0.55" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#198ab3" /><stop offset="0.01" stop-color="#198bb4" /><stop offset="0.44" stop-color="#27b2d7" /><stop offset="0.79" stop-color="#2fcbed" /><stop offset="1" stop-color="#32d4f5" /></linearGradient></defs><path d="M5.59,13.13H9.91v4.32H5.59ZM1.15,17.45H4.87V13.13H.55v3.72A.6.6,0,0,0,1.15,17.45Zm-.6-5H4.87V8.09H.55Z" fill="url(#a997e203-1d7d-4cb9-b131-5dc44e029b46)" xmlns="http://www.w3.org/2000/svg" /><path d="M11.5.55a5.89,5.89,0,0,1,5.95,6,5.89,5.89,0,0,1-5.95,5.95H5.55V6.5A5.89,5.89,0,0,1,11.5.55Z" fill-rule="evenodd" fill="url(#e122e9d8-aee5-4f1a-a60e-b1eae355daa5)" xmlns="http://www.w3.org/2000/svg" /><rect x="7.59" y="5.65" width="1.36" height="4.08" fill="#fff" xmlns="http://www.w3.org/2000/svg" /><rect x="10.31" y="7.01" width="1.36" height="2.72" fill="#fff" xmlns="http://www.w3.org/2000/svg" /><rect x="13.03" y="4.29" width="1.36" height="5.44" fill="#fff" xmlns="http://www.w3.org/2000/svg" /></symbol>
   </defs>
 
-  <!-- 1. Azure Monitor -->
-  <rect x="70" y="16" width="560" height="60" rx="10" fill="#dae8fc" stroke="#6c8ebf" stroke-width="1.5"/>
-  <text x="350" y="41" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2d3d">Azure Monitor</text>
-  <text x="350" y="60" text-anchor="middle" font-size="12" fill="#33475b">Service Health event detected</text>
+  <style>
+    text { font-family: "Segoe UI", Arial, sans-serif; fill: #25313c; }
+    .canvas { fill: #ffffff; }
+    .resource-group { fill: #f7fbff; stroke: #0078d4; stroke-width: 2; }
+    .global-zone { fill: #f5f5f5; stroke: #6b7280; stroke-width: 1.5; stroke-dasharray: 6 4; }
+    .region-zone { fill: #eef6fc; stroke: #6c8ebf; stroke-width: 1.5; }
+    .vnet { fill: #f7fbff; fill-opacity: 0.22; stroke: #0078d4; stroke-width: 1.5; }
+    .subnet { fill: #ffffff; fill-opacity: 0.22; stroke: #82b366; stroke-width: 1.25; stroke-dasharray: 5 3; }
+    .environment { fill: #f5f9ff; fill-opacity: 0.22; stroke: #6c8ebf; stroke-width: 1.5; }
+    .card { fill: #ffffff; stroke: #7a8793; stroke-width: 1.25; }
+    .event-card { fill: #dae8fc; stroke: #6c8ebf; stroke-width: 1.5; }
+    .security-card { fill: #e1d5e7; stroke: #9673a6; stroke-width: 1.5; }
+    .data-card { fill: #d5e8d4; stroke: #82b366; stroke-width: 1.5; }
+    .delivery-card { fill: #fff2cc; stroke: #d6b656; stroke-width: 1.5; }
+    .support-card { fill: #f5f5f5; stroke: #7a8793; stroke-width: 1.25; }
+    .external-card { fill: #ffffff; stroke: #5f6b7a; stroke-width: 1.5; }
+    .chip { fill: #ffffff; stroke: #6c8ebf; stroke-width: 1; }
+    .title { font-size: 16px; font-weight: 700; fill: #14395b; }
+    .boundary-title { font-size: 13px; font-weight: 700; fill: #14395b; }
+    .node-title { font-size: 11px; font-weight: 700; }
+    .detail { font-size: 9px; fill: #4d5d6c; }
+    .tiny { font-size: 8px; fill: #4d5d6c; }
+    .badge { fill: #0078d4; stroke: #ffffff; stroke-width: 1.5; }
+    .badge-text { fill: #ffffff; font-size: 10px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; }
+    .event-line { fill: none; stroke: #0078d4; stroke-width: 2.5; marker-end: url(#arrow-event); }
+    .data-line { fill: none; stroke: #107c10; stroke-width: 2; marker-end: url(#arrow-data); }
+    .dns-line { fill: none; stroke: #107c10; stroke-width: 1.75; stroke-dasharray: 2 3; marker-end: url(#arrow-data); }
+    .rbac-line { fill: none; stroke: #8661c5; stroke-width: 1.8; stroke-dasharray: 6 4; marker-end: url(#arrow-rbac); }
+    .delivery-line { fill: none; stroke: #d47c00; stroke-width: 2; marker-end: url(#arrow-delivery); }
+    .telemetry-line { fill: none; stroke: #5f6b7a; stroke-width: 1.8; stroke-dasharray: 2 4; marker-end: url(#arrow-telemetry); }
+    .line-label { font-size: 8px; font-weight: 600; paint-order: stroke; stroke: #ffffff; stroke-width: 3px; stroke-linejoin: round; }
+    @media (prefers-color-scheme: dark) {
+      .canvas { fill: #0d1117; }
+      .resource-group { fill: #111c26; }
+      .global-zone, .support-card { fill: #1b2128; }
+      .region-zone, .vnet, .environment { fill: #12202c; }
+      .subnet, .card, .external-card, .chip { fill: #161b22; }
+      text, .node-title { fill: #e6edf3; }
+      .title, .boundary-title { fill: #c9e7ff; }
+      .detail, .tiny { fill: #b8c2cc; }
+      .line-label { stroke: #0d1117; }
+    }
+  </style>
 
-  <line x1="350" y1="76" x2="350" y2="106" stroke="#555555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect class="canvas" width="1200" height="920"/>
+  <text class="title" x="20" y="28">Azure Service Health to Slack - operator architecture</text>
+  <text class="detail" x="20" y="44">One resource group, two Azure scopes, and five relationship types</text>
 
-  <!-- 2. Activity Log Alert -->
-  <rect x="70" y="106" width="560" height="60" rx="10" fill="#dae8fc" stroke="#6c8ebf" stroke-width="1.5"/>
-  <text x="350" y="141" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2d3d">Activity Log Alert</text>
+  <rect class="resource-group" x="165" y="58" width="870" height="782" rx="16"/>
+  <use href="#icon-resource-group" x="184" y="70" width="24" height="24"/>
+  <text class="boundary-title" x="216" y="86">Azure resource group</text>
 
-  <line x1="350" y1="166" x2="350" y2="196" stroke="#555555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect class="global-zone" x="185" y="102" width="830" height="132" rx="10"/>
+  <text class="boundary-title" x="202" y="121">Global resources</text>
 
-  <!-- 3. Secure Action Group -->
-  <rect x="70" y="196" width="560" height="60" rx="10" fill="#fff2cc" stroke="#d6b656" stroke-width="1.5"/>
-  <text x="350" y="231" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2d3d">Secure Action Group</text>
+  <rect class="region-zone" x="185" y="252" width="830" height="568" rx="12"/>
+  <text class="boundary-title" x="202" y="273">East US 2 resources</text>
 
-  <line x1="350" y1="256" x2="350" y2="286" stroke="#555555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path class="event-line" d="M150 167H210"/>
+  <path class="event-line" d="M400 167H425"/>
+  <path class="event-line" d="M555 205V260H322V405"/>
+  <path class="event-line" d="M385 450H405"/>
+  <path class="event-line" d="M690 460H1045"/>
+  <text class="line-label" x="356" y="255" fill="#0078d4">signed HTTPS + Entra token</text>
 
-  <!-- 4. POST /api/service-health (Easy Auth) -->
-  <rect x="70" y="286" width="560" height="76" rx="10" fill="#e1d5e7" stroke="#9673a6" stroke-width="1.5"/>
-  <text x="350" y="315" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2d3d" font-family="Consolas, monospace">POST /api/service-health</text>
-  <text x="350" y="336" text-anchor="middle" font-size="12" fill="#33475b">Easy Auth token + ActionGroupsSecureWebhook</text>
-  <text x="350" y="352" text-anchor="middle" font-size="12" fill="#33475b">app role check</text>
+  <path class="delivery-line" d="M1045 331H1000"/>
+  <path class="delivery-line" d="M760 338H720V415H690"/>
+  <text class="line-label" x="650" y="389" fill="#9a5a00">ACR image to revision</text>
 
-  <line x1="350" y1="362" x2="350" y2="392" stroke="#555555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path class="data-line" d="M500 530V585H350V620"/>
+  <path class="data-line" d="M590 530V585H600V620"/>
+  <path class="data-line" d="M450 655H465V585H740V630H760"/>
+  <path class="data-line" d="M700 655H730V742H760"/>
+  <path class="dns-line" d="M775 205V276H715V320"/>
+  <text class="line-label" x="525" y="563" fill="#107c10">private data paths</text>
+  <text class="line-label" x="788" y="270" fill="#107c10">VNet links</text>
 
-  <!-- 5. Parse Common Alert Schema -->
-  <rect x="70" y="392" width="560" height="60" rx="10" fill="#dae8fc" stroke="#6c8ebf" stroke-width="1.5"/>
-  <text x="350" y="427" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2d3d">Parse Common Alert Schema</text>
+  <path class="rbac-line" d="M840 500V380"/>
+  <path class="rbac-line" d="M760 535H690"/>
+  <path class="rbac-line" d="M840 570V590"/>
+  <path class="rbac-line" d="M920 570H1004V742H1000"/>
+  <text class="line-label" x="847" y="442" fill="#6f42b5">AcrPull</text>
+  <text class="line-label" x="847" y="585" fill="#6f42b5">Secrets User</text>
+  <text class="line-label" x="916" y="681" fill="#6f42b5">Storage Table Data</text>
+  <text class="line-label" x="936" y="692" fill="#6f42b5">Contributor</text>
 
-  <line x1="350" y1="452" x2="350" y2="482" stroke="#555555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path class="telemetry-line" d="M470 530V742H330V760"/>
+  <path class="telemetry-line" d="M435 790H470"/>
+  <text class="line-label" x="350" y="752" fill="#5f6b7a">requests, dependencies, exceptions</text>
 
-  <!-- 6. Route by subscription/service/region -->
-  <rect x="70" y="482" width="560" height="60" rx="10" fill="#dae8fc" stroke="#6c8ebf" stroke-width="1.5"/>
-  <text x="350" y="517" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2d3d">Route by subscription / service / region</text>
+  <g>
+    <rect class="external-card event-card" x="20" y="124" width="130" height="86" rx="10"/>
+    <circle class="badge" cx="29" cy="132" r="11"/>
+    <text class="badge-text" x="29" y="132">1</text>
+    <use href="#icon-service-health" x="35" y="142" width="34" height="34"/>
+    <text class="node-title" x="78" y="151">Azure Service</text>
+    <text class="node-title" x="78" y="165">Health</text>
+    <text class="detail" x="35" y="194">platform event</text>
+  </g>
 
-  <line x1="350" y1="542" x2="350" y2="572" stroke="#555555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <g>
+    <rect class="event-card" x="210" y="132" width="190" height="73" rx="8"/>
+    <circle class="badge" cx="219" cy="140" r="11"/>
+    <text class="badge-text" x="219" y="140">2</text>
+    <use href="#icon-alerts" x="230" y="151" width="32" height="32"/>
+    <text class="node-title" x="271" y="158">Activity Log Alert</text>
+    <text class="detail" x="271" y="175">ServiceHealth category</text>
+    <text class="tiny" x="271" y="188">subscription / management group</text>
+    <text class="tiny" x="271" y="199">scope</text>
+  </g>
 
-  <!-- 7. Azure Table Storage -->
-  <rect x="70" y="572" width="560" height="76" rx="10" fill="#d5e8d4" stroke="#82b366" stroke-width="1.5"/>
-  <text x="350" y="601" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2d3d">Azure Table Storage</text>
-  <text x="350" y="622" text-anchor="middle" font-size="12" fill="#33475b">ETag / lease idempotency keyed by</text>
-  <text x="350" y="638" text-anchor="middle" font-size="12" fill="#33475b">subscription + tracking ID</text>
+  <g>
+    <rect class="delivery-card" x="425" y="132" width="260" height="73" rx="8"/>
+    <circle class="badge" cx="434" cy="140" r="11"/>
+    <text class="badge-text" x="434" y="140">3</text>
+    <use href="#icon-monitor" x="447" y="151" width="32" height="32"/>
+    <text class="node-title" x="488" y="156">Action Group</text>
+    <text class="detail" x="488" y="173">Secure Webhook + Entra authentication</text>
+    <text class="detail" x="488" y="188">Common Alert Schema</text>
+  </g>
 
-  <line x1="350" y1="648" x2="350" y2="678" stroke="#555555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <g>
+    <rect class="support-card" x="700" y="132" width="145" height="73" rx="8"/>
+    <use href="#icon-dns" x="713" y="151" width="30" height="30"/>
+    <text class="node-title" x="751" y="156">Private DNS zones (2)</text>
+    <text class="tiny" x="751" y="173">Key Vault + Table</text>
+    <text class="tiny" x="751" y="187">linked to the VNet</text>
+  </g>
 
-  <!-- 8. Slack -->
-  <rect x="70" y="678" width="560" height="76" rx="10" fill="#d5e8d4" stroke="#82b366" stroke-width="1.5"/>
-  <text x="350" y="707" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2d3d" font-family="Consolas, monospace">Slack chat.postMessage / chat.update</text>
-  <text x="350" y="728" text-anchor="middle" font-size="12" fill="#33475b">One root message per subscription, updated</text>
-  <text x="350" y="744" text-anchor="middle" font-size="12" fill="#33475b">through Active → Updated → Resolved</text>
+  <g>
+    <rect class="support-card" x="860" y="132" width="135" height="73" rx="8"/>
+    <use href="#icon-alerts" x="872" y="151" width="30" height="30"/>
+    <text class="node-title" x="910" y="156">Failure Anomalies</text>
+    <text class="tiny" x="910" y="173">auto-created supporting</text>
+    <text class="tiny" x="910" y="187">App Insights alert</text>
+  </g>
 
-  <!-- Legend -->
-  <rect x="70" y="784" width="14" height="14" rx="3" fill="#dae8fc" stroke="#6c8ebf" stroke-width="1"/>
-  <text x="92" y="795" font-size="12" fill="#33475b">Azure Monitor pipeline</text>
+  <rect class="vnet" x="205" y="286" width="540" height="448" rx="10"/>
+  <use href="#icon-vnet" x="221" y="299" width="24" height="24"/>
+  <text class="boundary-title" x="253" y="315">Virtual network</text>
 
-  <rect x="240" y="784" width="14" height="14" rx="3" fill="#fff2cc" stroke="#d6b656" stroke-width="1"/>
-  <text x="262" y="795" font-size="12" fill="#33475b">Action Group</text>
+  <rect class="subnet" x="225" y="320" width="500" height="230" rx="8"/>
+  <use href="#icon-subnet" x="238" y="331" width="21" height="21"/>
+  <text class="node-title" x="267" y="345">Infrastructure subnet</text>
 
-  <rect x="370" y="784" width="14" height="14" rx="3" fill="#e1d5e7" stroke="#9673a6" stroke-width="1"/>
-  <text x="392" y="795" font-size="12" fill="#33475b">Auth / identity check</text>
+  <rect class="environment" x="240" y="352" width="470" height="188" rx="8"/>
+  <use href="#icon-container-env" x="252" y="362" width="24" height="24"/>
+  <text class="node-title" x="284" y="377">Container Apps Environment</text>
+  <text class="tiny" x="284" y="390">VNet integrated compute boundary</text>
 
-  <rect x="540" y="784" width="14" height="14" rx="3" fill="#d5e8d4" stroke="#82b366" stroke-width="1"/>
-  <text x="562" y="795" font-size="12" fill="#33475b">Storage / Slack</text>
+  <g>
+    <rect class="security-card" x="260" y="395" width="125" height="90" rx="8"/>
+    <circle class="badge" cx="269" cy="403" r="11"/>
+    <text class="badge-text" x="269" y="403">4</text>
+    <path d="M309 423h27v22h-27zM315 423v-7a7 7 0 0 1 14 0v7" fill="none" stroke="#6f42b5" stroke-width="2"/>
+    <text class="node-title" x="322" y="459" text-anchor="middle">Public HTTPS ingress</text>
+    <text class="detail" x="322" y="473" text-anchor="middle">Easy Auth / Entra</text>
+  </g>
+
+  <g>
+    <rect class="event-card" x="405" y="395" width="285" height="135" rx="8"/>
+    <circle class="badge" cx="414" cy="403" r="11"/>
+    <text class="badge-text" x="414" y="403">5</text>
+    <use href="#icon-container-app" x="425" y="413" width="34" height="34"/>
+    <text class="node-title" x="468" y="424">Container App application</text>
+    <text class="detail" x="468" y="440">POST /api/service-health</text>
+    <rect class="chip" x="425" y="459" width="72" height="22" rx="5"/>
+    <text class="tiny" x="461" y="473" text-anchor="middle">auth</text>
+    <rect class="chip" x="504" y="459" width="72" height="22" rx="5"/>
+    <text class="tiny" x="540" y="473" text-anchor="middle">parser</text>
+    <rect class="chip" x="583" y="459" width="87" height="22" rx="5"/>
+    <text class="tiny" x="626" y="473" text-anchor="middle">router</text>
+    <rect class="chip" x="425" y="489" width="110" height="22" rx="5"/>
+    <text class="tiny" x="480" y="503" text-anchor="middle">idempotency</text>
+    <rect class="chip" x="542" y="489" width="128" height="22" rx="5"/>
+    <text class="tiny" x="606" y="503" text-anchor="middle">Slack client</text>
+  </g>
+
+  <rect class="subnet" x="225" y="570" width="500" height="150" rx="8"/>
+  <use href="#icon-subnet" x="238" y="581" width="21" height="21"/>
+  <text class="node-title" x="267" y="595">Private endpoint subnet</text>
+
+  <g>
+    <rect class="data-card" x="250" y="620" width="200" height="70" rx="8"/>
+    <use href="#icon-private-endpoint" x="264" y="638" width="30" height="30"/>
+    <text class="node-title" x="304" y="643">Key Vault private endpoint</text>
+    <text class="tiny" x="304" y="659">private IP + generated NIC</text>
+    <text class="tiny" x="304" y="674">privatelink.vaultcore.azure.net</text>
+  </g>
+
+  <g>
+    <rect class="data-card" x="500" y="620" width="200" height="70" rx="8"/>
+    <use href="#icon-private-endpoint" x="514" y="638" width="30" height="30"/>
+    <text class="node-title" x="554" y="643">Table private endpoint</text>
+    <text class="tiny" x="554" y="659">private IP + generated NIC</text>
+    <text class="tiny" x="554" y="674">privatelink.table.core.windows.net</text>
+  </g>
+
+  <g>
+    <rect class="delivery-card" x="760" y="298" width="240" height="80" rx="8"/>
+    <use href="#icon-acr" x="777" y="319" width="34" height="34"/>
+    <text class="node-title" x="821" y="324">Azure Container Registry</text>
+    <text class="detail" x="821" y="341">private image repository</text>
+    <text class="detail" x="821" y="356">admin disabled; Basic by default</text>
+  </g>
+
+  <g>
+    <rect class="security-card" x="760" y="500" width="240" height="70" rx="8"/>
+    <use href="#icon-managed-identity" x="777" y="519" width="32" height="32"/>
+    <text class="node-title" x="820" y="523">User-assigned managed identity</text>
+    <text class="detail" x="820" y="541">runtime authentication; no app secrets</text>
+    <text class="detail" x="820" y="556">three least-privilege Azure roles</text>
+  </g>
+
+  <g>
+    <rect class="data-card" x="760" y="590" width="240" height="80" rx="8"/>
+    <use href="#icon-key-vault" x="777" y="611" width="34" height="34"/>
+    <text class="node-title" x="821" y="616">Azure Key Vault</text>
+    <text class="detail" x="821" y="634">Slack bot token</text>
+    <text class="detail" x="821" y="650">public access disabled</text>
+  </g>
+
+  <g>
+    <rect class="data-card" x="760" y="700" width="240" height="85" rx="8"/>
+    <use href="#icon-storage" x="777" y="720" width="34" height="34"/>
+    <use href="#icon-table" x="807" y="746" width="20" height="20"/>
+    <text class="node-title" x="836" y="724">Storage account / Table</text>
+    <text class="detail" x="836" y="742">incident state, ETags, leases</text>
+    <text class="detail" x="836" y="758">deduplication + lifecycle</text>
+    <text class="detail" x="836" y="773">public access disabled</text>
+  </g>
+
+  <g>
+    <rect class="support-card" x="225" y="760" width="210" height="60" rx="8"/>
+    <use href="#icon-app-insights" x="239" y="775" width="30" height="30"/>
+    <text class="node-title" x="279" y="780">Application Insights</text>
+    <text class="tiny" x="279" y="797">OpenTelemetry application telemetry</text>
+    <text class="tiny" x="279" y="810">drives Failure Anomalies support alert</text>
+  </g>
+
+  <g>
+    <rect class="support-card" x="470" y="760" width="210" height="60" rx="8"/>
+    <use href="#icon-log-analytics" x="484" y="775" width="30" height="30"/>
+    <text class="node-title" x="524" y="780">Log Analytics workspace</text>
+    <text class="tiny" x="524" y="797">Container Apps platform and app logs</text>
+    <text class="tiny" x="524" y="810">query and retention backend</text>
+  </g>
+
+  <g>
+    <rect class="external-card delivery-card" x="1045" y="286" width="135" height="90" rx="10"/>
+    <rect x="1059" y="307" width="32" height="24" rx="3" fill="#25313c"/>
+    <path d="M1065 314l5 5-5 5M1074 325h10" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="1064" y="334" width="22" height="3" rx="1.5" fill="#5f6b7a"/>
+    <text class="node-title" x="1101" y="311">Developer</text>
+    <text class="detail" x="1101" y="327">azd + Docker build</text>
+    <text class="detail" x="1059" y="355">provision / deploy</text>
+  </g>
+
+  <g>
+    <rect class="external-card data-card" x="1045" y="397" width="135" height="92" rx="10"/>
+    <circle class="badge" cx="1054" cy="405" r="11"/>
+    <text class="badge-text" x="1054" y="405">6</text>
+    <text class="node-title" x="1112" y="426" text-anchor="middle">Slack API / channel</text>
+    <text class="detail" x="1112" y="445" text-anchor="middle">chat.postMessage</text>
+    <text class="detail" x="1112" y="460" text-anchor="middle">chat.update</text>
+    <text class="detail" x="1112" y="477" text-anchor="middle">Active to Resolved</text>
+  </g>
+
+  <g transform="translate(165 854)">
+    <rect class="card" width="870" height="48" rx="8"/>
+    <text class="node-title" x="16" y="18">Legend</text>
+    <line class="event-line" x1="72" y1="15" x2="112" y2="15"/>
+    <text class="tiny" x="120" y="18">event / request</text>
+    <line class="delivery-line" x1="225" y1="15" x2="265" y2="15"/>
+    <text class="tiny" x="273" y="18">build / image delivery</text>
+    <line class="data-line" x1="405" y1="15" x2="445" y2="15"/>
+    <text class="tiny" x="453" y="18">private network / data</text>
+    <line class="rbac-line" x1="605" y1="15" x2="645" y2="15"/>
+    <text class="tiny" x="653" y="18">RBAC / control</text>
+    <line class="telemetry-line" x1="744" y1="15" x2="784" y2="15"/>
+    <text class="tiny" x="792" y="18">telemetry</text>
+    <text class="tiny" x="16" y="37">Global boundaries are dashed; East US 2 and VNet boundaries are solid. Private endpoint NICs are intentionally summarized, not drawn as separate nodes.</text>
+  </g>
 </svg>
