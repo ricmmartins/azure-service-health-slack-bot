@@ -53,10 +53,12 @@ public ingress (health probes and the secure webhook) is unaffected.
 
 ## Prerequisites
 
-- Python 3.13 or Docker
+- Python 3.13 for local development
+- Current stable [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli),
+  [Azure Developer CLI (`azd`)](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd),
+  PowerShell 7+ (`pwsh`), and Docker with a Linux container engine
 - A Slack app with a bot token (`chat:write` scope) invited to every
   configured destination channel
-- Azure CLI and Azure Developer CLI (`azd`)
 - An Azure subscription where you can create the resources in `infra/`
 - `Application Administrator` (or equivalent Graph permission) while running
   the Secure Webhook setup script
@@ -120,16 +122,17 @@ example an unknown channel) return `4xx` and are not retried.
 ## Deploy with AZD
 
 No deployment is performed automatically by this repository. Configure an AZD
-environment before provisioning:
+environment before provisioning. The full, security-safe WSL procedure is in
+the [step-by-step deployment guide](#step-by-step-deployment-guide). In
+particular, do not paste the Slack token directly into a command:
 
-```sh
+```bash
 az login
 azd auth login
 azd env new
-azd env set SLACK_BOT_TOKEN "<xoxb-token>"
-azd env set SERVICE_HEALTH_ROUTES_JSON_B64 ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"default_channel_id":"C0123456789","rules":[]}')))
-azd provision
-azd deploy
+read -rsp "Slack bot token (input hidden): " SLACK_BOT_TOKEN; printf '\n'
+azd env set SLACK_BOT_TOKEN "$SLACK_BOT_TOKEN"
+unset SLACK_BOT_TOKEN
 ```
 
 > **Why base64?** `azd`'s parameter substitution does a raw text replace of
@@ -141,11 +144,13 @@ azd deploy
 
 The pre-provision hook runs `scripts/configure-secure-webhook.ps1`. It creates
 or reuses the protected API app registration, app role, API service
-principal, and AzNS app-role assignment, then writes the resulting IDs to the
-AZD environment. The script is idempotent (safe to re-run) and requires
-Microsoft Graph application administration permission. Azure CLI and AZD
-maintain separate authentication sessions, so both `az login` and
-`azd auth login` are required on a clean workstation.
+principal, AzNS ownership, and AzNS app-role assignment, then writes the
+resulting IDs to the AZD environment. Azure Monitor requires both ownership of
+the protected API app by the AzNS service principal and the
+`ActionGroupsSecureWebhook` role assignment. The script is idempotent (safe to
+re-run) and requires Microsoft Graph application administration permission.
+Azure CLI and AZD maintain separate authentication sessions, so both
+`az login` and `azd auth login` are required on a clean workstation.
 
 `infra/modules/service-health-alert.bicep` is deliberately isolated so the
 Activity Log Alert can be repeated for additional subscriptions while the
@@ -156,6 +161,10 @@ Secrets are copied from AZD environment parameters into Key Vault during
 provisioning and exposed to the Container App only as Key Vault secret
 references. Runtime access to Key Vault and Table Storage uses the
 user-assigned managed identity and RBAC — never shared keys.
+
+The registry defaults to the `Basic` SKU and intentionally has no untagged
+manifest retention policy. Azure Container Registry retention is a
+Premium-only feature; configuring it on `Basic` causes provisioning to fail.
 
 ### Multi-subscription / tenant-wide alerting (Management Group scope)
 
@@ -194,9 +203,10 @@ Requirements:
 
 ## Step-by-step deployment guide
 
-This is the complete, from-zero walkthrough: create the Slack app, provision
-Azure, wire up the Secure Webhook, and verify an end-to-end alert. Every
-command is safe to re-run.
+This is the complete, from-zero WSL walkthrough: create the Slack app, safely
+capture its token, provision Azure, wire up the Secure Webhook, and verify an
+end-to-end alert. Unless noted otherwise, run commands from an Ubuntu WSL
+terminal in the repository root.
 
 ### 0. Prerequisites
 
@@ -208,12 +218,37 @@ command is safe to re-run.
   Administrator`, or an admin who can grant consent once).
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli),
   [Azure Developer CLI (`azd`)](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd),
-  and PowerShell 7+ (`pwsh`) installed locally.
+  PowerShell 7+ (`pwsh`), Git, and Python 3 installed inside WSL.
+- Docker Desktop using the WSL 2 backend, Linux containers, and WSL integration
+  enabled for the distribution where you run this guide. Docker recommends
+  WSL 2.1.5 or later.
 - A Slack workspace where you can create/install apps. You don't need a new
   workspace for every test — reuse any workspace where you have permission to
   create apps (e.g. your team's), or create a free one for testing at
   <https://slack.com/get-started#/createnew> in about a minute (no credit
   card, no company approval needed).
+
+Use current stable tool releases. This deployment was revalidated with Azure
+CLI 2.84.0, Docker 29.6.2, and the WSL 2 backend. `azd` 1.24.1 completed the
+deployment, but 1.30.0 was current at the time of the audit and is preferred.
+Verify the local toolchain and Docker engine before continuing:
+
+```bash
+az version
+azd version
+pwsh --version
+docker context show
+docker info --format 'engine={{.ServerVersion}} os={{.OSType}}'
+docker run --rm hello-world
+```
+
+The Docker `os` must be `linux`. In Windows PowerShell, the Docker Desktop
+context is normally `desktop-linux`; inside an integrated WSL distribution it
+may appear as `default`. If the daemon is unavailable or reports Windows
+containers, start Docker Desktop, select **Use the WSL 2 based engine**, enable
+the distribution under **Settings → Resources → WSL Integration**, switch to
+Linux containers, and reopen WSL. Do not install a second Docker Engine inside
+the distribution when using Docker Desktop.
 
 ### 1. Create the Slack app and bot token
 
@@ -225,8 +260,9 @@ command is safe to re-run.
    bot to post to public channels without being explicitly invited).
 3. Click **Install to Workspace** at the top of the same page, review the
    permissions, and approve.
-4. Copy the **Bot User OAuth Token** (starts with `xoxb-`) from **OAuth &
-   Permissions** — you'll use this as `SLACK_BOT_TOKEN`.
+4. Leave the **Bot User OAuth Token** (starts with `xoxb-`) in the Slack UI
+   until step 4. Do not paste it into chat, source files, screenshots, or a
+   literal shell command.
 5. Invite the bot to every channel it needs to post in, e.g.
    `/invite @Azure Service Health` in each destination channel — the bot
    token alone does not grant channel membership.
@@ -242,33 +278,58 @@ git clone https://github.com/ricmmartins/azure-service-health-slack-bot.git
 cd azure-service-health-slack-bot
 az login
 azd auth login
+az account show --query '{tenant:tenantId,subscription:id,name:name}' -o table
+azd auth login --check-status
 ```
 
 `az` and `azd` keep separate credential caches, so both logins are required
-even if you're already signed in to one.
+even if you're already signed in to one. Both commands use interactive browser
+authentication by default. If Conditional Access blocks device-code flow, do
+not add `--use-device-code`; use the browser flow from a WSL session that can
+open the Windows browser. `azd auth login --use-device-code=false` explicitly
+forces browser authentication. A headless Cloud Shell or SSH session that can
+only offer device code will not bypass that tenant policy.
 
 ### 3. Create the routing configuration
 
 Copy the example and edit it for your subscriptions/services/regions/channels
-(Slack channel IDs, not names — right-click a channel → **View channel
-details** → copy the ID at the bottom):
+(Slack channel IDs, not names):
 
-```sh
+```bash
 cp config/service_health_routes.example.json config/service_health_routes.json
 ```
 
+To discover the ID in Slack, open the destination channel, select the channel
+name or the **three dots** menu, choose **View channel details**, and select
+**Copy channel ID** at the bottom. Public channel IDs normally start with `C`;
+private channel IDs can start with `G`. A copied channel URL also contains the
+ID, but do not configure `#channel-name`.
+
 `default_channel_id` is mandatory; it's where anything that doesn't match a
 rule is posted. See [Service Health routing](#service-health-routing) above
-for the matching rules.
+for the matching rules. Confirm that the bot is a member of every configured
+channel.
 
 ### 4. Initialize the AZD environment
 
-```sh
-azd env new                      # prompts for an environment name, subscription, and Azure region
-azd env set SLACK_BOT_TOKEN "xoxb-..."
-azd env set SERVICE_HEALTH_ROUTES_JSON_B64 ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Content config/service_health_routes.json -Raw))))   # PowerShell
-# bash/zsh equivalent:
-# azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$(base64 -w0 config/service_health_routes.json)"
+```bash
+# Prompts for an environment name, subscription, and Azure region.
+azd env new
+
+# Paste only at the hidden prompt. The token never appears on screen or in
+# shell history; the command history contains only the variable name.
+read -rsp "Slack bot token (input hidden): " SLACK_BOT_TOKEN; printf '\n'
+while [[ "$SLACK_BOT_TOKEN" != xoxb-* ]]; do
+  unset SLACK_BOT_TOKEN
+  echo "Expected an xoxb token; try again." >&2
+  read -rsp "Slack bot token (input hidden): " SLACK_BOT_TOKEN; printf '\n'
+done
+azd env set SLACK_BOT_TOKEN "$SLACK_BOT_TOKEN"
+unset SLACK_BOT_TOKEN
+
+ROUTES_B64="$(base64 -w0 config/service_health_routes.json)"
+azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64"
+unset ROUTES_B64
 ```
 
 > `SERVICE_HEALTH_ROUTES_JSON_B64` must be base64-encoded (see the note in
@@ -276,13 +337,25 @@ azd env set SERVICE_HEALTH_ROUTES_JSON_B64 ([Convert]::ToBase64String([Text.Enco
 > reaches the container as the plain-JSON `SERVICE_HEALTH_ROUTES_JSON`
 > environment variable — the application itself never sees base64.
 
+`azd env set` persists the token in the selected local AZD environment so it
+can be passed as a secure Bicep parameter into Key Vault. AZD environment
+`.env` files are ignored by this repository's `*.env` rule, but they still
+contain a credential: protect the workstation, never commit or print them, and
+do not use `azd env get-values` in logs because it prints every value. Rotate
+the Slack token immediately if it is ever exposed.
+
 `AZURE_ENV_NAME`, `AZURE_LOCATION`, and `AZURE_SUBSCRIPTION_ID` are captured
 by `azd env new`; every other required Bicep parameter is filled in
 automatically by the provisioning steps below.
 
 ### 5. Provision Azure infrastructure
 
-```sh
+Register the providers that were absent in the live test subscription, then
+provision:
+
+```bash
+az provider register --namespace Microsoft.App --wait
+az provider register --namespace Microsoft.ContainerService --wait
 azd provision
 ```
 
@@ -310,7 +383,15 @@ group, Container Apps environment, Container Registry, Key Vault (with the
 Slack bot token as a secret), Storage Account/Table, Application Insights,
 the Container App itself (Easy Auth wired to the app registration from the
 script), and the Activity Log Alert + Secure Action Group targeting the
-current subscription.
+current subscription. The Service Health Activity Log Alert and Action Group
+are both created in the `Global` location. Service Health notifications require
+a Global Action Group; a regional Action Group does not work for this alert
+type.
+
+The protected API exposes `api://<client-id>`, requests Entra v2 tokens, and
+configures Easy Auth to accept both valid audience forms: the client ID GUID
+that Entra v2 commonly emits and `api://<client-id>`. The application performs
+the same normalization before checking the audience claim.
 
 ### 6. Deploy the application image
 
@@ -324,67 +405,207 @@ and 6 (`azd provision && azd deploy`) if you prefer a single command.
 
 ### 7. Verify the deployment
 
-```sh
-curl https://<SERVICE_APP_URI>/healthz   # -> {"status":"healthy"}
-curl https://<SERVICE_APP_URI>/readyz    # -> {"status":"ready"}
+Capture only the nonsecret outputs needed by the checks:
+
+```bash
+APP_URI="$(azd env get-value SERVICE_APP_URI)"
+RESOURCE_GROUP="$(azd env get-value AZURE_RESOURCE_GROUP)"
+APP_NAME="$(azd env get-value SERVICE_APP_NAME)"
+ENV_NAME="$(azd env get-value AZURE_ENV_NAME)"
+ACTION_GROUP="ag-${ENV_NAME}-service-health"
+ACTIVITY_ALERT="ala-${ENV_NAME}-service-health"
 ```
 
-`SERVICE_APP_URI` is printed as an `azd provision`/`azd deploy` output (also
-retrievable with `azd env get-values`). Both probes are public; no token is
-needed.
+`SERVICE_APP_URI` already includes `https://`; do not prepend another scheme.
 
-To verify the full alert path without waiting for a real Azure incident,
-trigger the Activity Log Alert's action group manually from the Azure
-Portal (**Monitor → Alerts → Action groups → `ag-<env>-service-health` →
-Test action group**, category **Service Health**), or send Azure Monitor's
-[Common Alert Schema sample payload](https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-common-schema)
-through the portal's "Test action group" webhook tester, which signs the
-request the same way the real Action Group does. A directly unauthenticated
-`curl POST` to `/api/service-health` will correctly get rejected by Easy
-Auth — that's expected and confirms the endpoint is protected.
+#### 7.1 Health, readiness, and authentication boundary
+
+```bash
+test "$(curl -fsS "$APP_URI/healthz")" = '{"status":"healthy"}'
+test "$(curl -fsS "$APP_URI/readyz")" = '{"status":"ready"}'
+
+WEBHOOK_RESPONSE="$(mktemp)"
+HTTP_CODE="$(curl -sS -o "$WEBHOOK_RESPONSE" -w '%{http_code}' \
+  -X POST -H 'Content-Type: application/json' --data '{}' \
+  "$APP_URI/api/service-health")"
+test "$HTTP_CODE" = "401"
+python3 -m json.tool "$WEBHOOK_RESPONSE"
+rm -f "$WEBHOOK_RESPONSE"
+```
+
+Both probes are intentionally public. `/readyz` returning `200` also proves
+the production configuration can initialize with managed identity, Key Vault,
+and Table Storage. The unauthenticated webhook must return HTTP `401` with
+`authentication_required`; `200` would be a security regression.
+
+#### 7.2 Slack authentication and a visible test post
+
+This uses the stored token without displaying it or placing it in shell
+history. It prints only nonsecret Slack IDs and creates one visible test
+message in the configured fallback channel.
+
+```bash
+CHANNEL_ID="$(python3 -c \
+  'import json; print(json.load(open("config/service_health_routes.json"))["default_channel_id"])')"
+
+SLACK_BOT_TOKEN="$(azd env get-value SLACK_BOT_TOKEN)" \
+SLACK_CHANNEL_ID="$CHANNEL_ID" python3 - <<'PY'
+import json
+import os
+import urllib.request
+
+token = os.environ["SLACK_BOT_TOKEN"]
+channel = os.environ["SLACK_CHANNEL_ID"]
+
+def call(method, payload):
+    request = urllib.request.Request(
+        f"https://slack.com/api/{method}",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+        },
+    )
+    with urllib.request.urlopen(request) as response:
+        result = json.load(response)
+    if not result.get("ok"):
+        raise SystemExit(f"{method} failed: {result.get('error', 'unknown_error')}")
+    return result
+
+auth = call("auth.test", {})
+message = call("chat.postMessage", {
+    "channel": channel,
+    "text": "Azure Service Health deployment validation",
+})
+print(f"Slack auth OK: team={auth.get('team_id')} bot={auth.get('user_id')}")
+print(f"Slack post OK: channel={message.get('channel')} ts={message.get('ts')}")
+PY
+```
+
+Delete the test message in Slack if it is not needed.
+
+#### 7.3 Azure resources and Secure Webhook
+
+```bash
+test "$(az monitor action-group show \
+  --resource-group "$RESOURCE_GROUP" --name "$ACTION_GROUP" \
+  --query location -o tsv | tr '[:upper:]' '[:lower:]')" = "global"
+
+test "$(az monitor activity-log alert show \
+  --resource-group "$RESOURCE_GROUP" --name "$ACTIVITY_ALERT" \
+  --query location -o tsv | tr '[:upper:]' '[:lower:]')" = "global"
+
+az monitor action-group show \
+  --resource-group "$RESOURCE_GROUP" --name "$ACTION_GROUP" \
+  --query 'webhookReceivers[0].{aad:useAadAuth,objectId:objectId,identifierUri:identifierUri,commonSchema:useCommonAlertSchema}' \
+  -o yaml
+
+az monitor activity-log alert show \
+  --resource-group "$RESOURCE_GROUP" --name "$ACTIVITY_ALERT" \
+  --query '{enabled:enabled,scopes:scopes,actionGroups:actions.actionGroups}' \
+  -o yaml
+```
+
+The receiver must show `aad: true`, a nonempty protected API object ID, the
+`api://<client-id>` identifier URI, and Common Alert Schema enabled. The setup
+script has already made the official AzNS service principal an owner of that
+API app and assigned its `ActionGroupsSecureWebhook` application role.
+
+#### 7.4 Official Service Health Action Group test
+
+Use Azure Monitor's signed Service Health test, not a hand-crafted webhook
+payload:
+
+```bash
+az monitor action-group test-notifications create \
+  --resource-group "$RESOURCE_GROUP" \
+  --action-group "$ACTION_GROUP" \
+  --alert-type servicehealth
+
+az containerapp logs show \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --type console \
+  --tail 200
+```
+
+The equivalent portal path is **Monitor → Alerts → Action groups → select the
+action group → Test → Service Health**. A successful result must produce an
+HTTP `200` request in the Container App/Application Insights logs and a
+formatted Service Health message in Slack.
+
+Do not repeatedly run failing tests. Azure Monitor retries retryable webhook
+failures and, after the retry sequence is exhausted, suppresses all Action
+Group calls to that endpoint for 15 minutes. Fix the underlying issue, wait
+the full cooldown, and then run one official `servicehealth` test. During the
+cooldown, even correct configuration can appear broken.
 
 ### 8. Add more subscriptions (optional)
 
 The Container App and Secure Webhook app registration are central; only the
 Activity Log Alert + Action Group need to exist per subscription. Deploy
-`infra/modules/service-health-alert.bicep` directly at any additional
-subscription, reusing the same webhook URI and Secure Webhook identity:
+`infra/modules/service-health-alert.bicep` into a resource group in any
+additional subscription, reusing the same webhook URI and Secure Webhook
+identity:
 
-```sh
-az account set --subscription "<other-subscription-id>"
-az deployment sub create \
-  --location "<azure-region>" \
+```bash
+WEBHOOK_URI="$(azd env get-value SERVICE_APP_URI)/api/service-health"
+API_OBJECT_ID="$(azd env get-value SERVICE_HEALTH_API_OBJECT_ID)"
+API_IDENTIFIER_URI="$(azd env get-value SERVICE_HEALTH_API_IDENTIFIER_URI)"
+TENANT_ID="$(azd env get-value AZURE_TENANT_ID)"
+ENV_NAME="$(azd env get-value AZURE_ENV_NAME)"
+
+OTHER_SUBSCRIPTION_ID="<other-subscription-id>"
+OTHER_RESOURCE_GROUP="<resource-group-in-other-subscription>"
+az account set --subscription "$OTHER_SUBSCRIPTION_ID"
+az group create --name "$OTHER_RESOURCE_GROUP" --location "<azure-region>"
+az deployment group create \
+  --resource-group "$OTHER_RESOURCE_GROUP" \
   --template-file infra/modules/service-health-alert.bicep \
-  --parameters environmentName="<azd-env-name>" \
-               webhookUri="https://<SERVICE_APP_URI>/api/service-health" \
-               secureWebhookObjectId="<SERVICE_HEALTH_API_OBJECT_ID>" \
-               secureWebhookIdentifierUri="<SERVICE_HEALTH_API_IDENTIFIER_URI>" \
-               tenantId="<AZURE_TENANT_ID>" \
-               targetSubscriptionId="<other-subscription-id>" \
-               tags='{"azd-env-name":"<azd-env-name>"}'
+  --parameters environmentName="$ENV_NAME" \
+               webhookUri="$WEBHOOK_URI" \
+               secureWebhookObjectId="$API_OBJECT_ID" \
+               secureWebhookIdentifierUri="$API_IDENTIFIER_URI" \
+               tenantId="$TENANT_ID" \
+               targetSubscriptionId="$OTHER_SUBSCRIPTION_ID" \
+               tags="{\"azd-env-name\":\"$ENV_NAME\"}"
 ```
 
 Pull the `SERVICE_HEALTH_API_*` and `AZURE_TENANT_ID` values from
-`azd env get-values` in the environment used for the original deployment.
+individual `azd env get-value <name>` calls in the environment used for the
+original deployment. Avoid `azd env get-values` because it also prints the
+Slack token.
 
 ### 9. Update routing or redeploy later
 
-Editing `config/service_health_routes.json` requires re-running steps 4 and
-6 (`azd env set SERVICE_HEALTH_ROUTES_JSON_B64 ...` then `azd deploy`) so the
-new JSON reaches the Container App's environment variable — no image rebuild
-is required, but restarting the revision picks up the new routing.
+Editing `config/service_health_routes.json` is an infrastructure configuration
+change, not an image change. Re-encode it and run provisioning so Bicep creates
+a revision with the new environment value; `azd deploy` alone does not update
+Container App environment variables:
+
+```bash
+ROUTES_B64="$(base64 -w0 config/service_health_routes.json)"
+azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64"
+unset ROUTES_B64
+azd provision
+```
 
 ### 10. Tear down
 
-```sh
+Capture the protected API client ID before deleting the AZD resources:
+
+```bash
+API_CLIENT_ID="$(azd env get-value SERVICE_HEALTH_API_CLIENT_ID)"
 azd down --purge
+az ad app delete --id "$API_CLIENT_ID"
+unset API_CLIENT_ID
 ```
 
 `--purge` also removes the soft-deleted Key Vault so the name can be reused.
-This does not remove the Entra app registration created by
-`configure-secure-webhook.ps1` or the app role assignment on the AzNS
-service principal — remove those manually from **Entra ID → App
-registrations** if you're fully decommissioning the integration.
+`azd down` does not remove the Entra app registration created by
+`configure-secure-webhook.ps1`; the explicit `az ad app delete` does. Never
+delete Microsoft's official AzNS AAD Webhook service principal. If you are
+keeping the deployment, do not run these cleanup commands.
 
 ## Operations
 
@@ -409,6 +630,42 @@ AppDependencies
 Alert on sustained webhook `503`s, Slack or Table dependency failures, and no
 successful webhook requests when incidents are expected. For a permanent
 Slack error, verify the configured channel IDs and bot channel membership.
+
+### Troubleshooting
+
+| Symptom | Check and correction |
+|---|---|
+| `az` or `azd` device-code login is blocked | Conditional Access can reject device code. Run the normal interactive browser flows (`az login`, `azd auth login --use-device-code=false`) from browser-capable WSL. Do not attempt to bypass the policy from a headless shell. |
+| Docker is unavailable from WSL | Run `docker context show` and `docker info`. Enable Docker Desktop's WSL 2 engine, Linux containers, and integration for the current distribution; then reopen WSL. |
+| Provisioning fails on ACR retention | `Basic` is the default SKU and must not have an untagged manifest retention policy. Use the current `infra/modules/registry.bicep`; retention is Premium-only. |
+| Secure Webhook creation/test reports authorization failure | Re-run `azd provision` after confirming the Azure CLI account has Application Administrator permissions. The AzNS service principal must own the protected API app and hold its `ActionGroupsSecureWebhook` role. |
+| Official test returns `401` or `403` | Inspect Container App logs. Easy Auth and the app accept the Entra v2 client-ID GUID audience and `api://<client-id>`; verify both remain in `allowedAudiences` and that the AzNS caller/role checks were not removed. |
+| Official test reports success but Slack has no message | Run the Slack validation in step 7.2. Confirm the token is a bot `xoxb` token, the ID is a channel ID rather than a name, the bot is invited, and `chat:write` is granted. |
+| Corrected webhook still receives nothing | Failed webhook retries suppress Action Group calls to the endpoint for 15 minutes. Wait for the cooldown before one new `servicehealth` test. |
+| `/readyz` returns `503` | Stream console and system logs with `az containerapp logs show`. Verify the managed identity role assignments, Key Vault/Table private endpoints, private DNS links, and that the current revision references the latest Key Vault secret. |
+
+### Rollback
+
+For an application regression, reactivate the previous Container App revision
+or deploy a known-good Git commit:
+
+```bash
+az containerapp revision list \
+  --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
+  --query '[].{name:name,active:properties.active,created:properties.createdTime}' \
+  -o table
+
+az containerapp revision activate \
+  --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
+  --revision "<known-good-revision>"
+```
+
+For a routing or Slack-token rollback, restore the previous routing file or
+securely capture the replacement token with the hidden `read` procedure in
+step 4, update the AZD value, and run `azd provision`. Provisioning creates a
+new Key Vault secret version and updates the Container App reference; do not
+put a token in Git or a literal command. Use `azd down --purge` only for full
+decommissioning, not routine rollback.
 
 There is an unavoidable MVP crash window after a successful first
 `chat.postMessage` and before `messageTs` is persisted. Exactly-once creation
