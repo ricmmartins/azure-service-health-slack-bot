@@ -155,6 +155,41 @@ provisioning and exposed to the Container App only as Key Vault secret
 references. Runtime access to Key Vault and Table Storage uses the
 user-assigned managed identity and RBAC — never shared keys.
 
+### Multi-subscription / tenant-wide alerting (Management Group scope)
+
+No prior Log Analytics or Azure Monitor Logs setup is required for any of
+this — Service Health events flow through the platform **Activity Log**,
+which is enabled by default on every Azure subscription at no cost. This
+means the bot works out of the box for any Azure customer, even one with a
+brand-new subscription and no monitoring configured.
+
+By default the Activity Log Alert is scoped to the single subscription
+where you provision (`targetSubscriptionId`). If a customer manages many
+subscriptions under one or more **management groups**, you can scope the
+alert to a management group instead, so one deployment captures Service
+Health events for every subscription under it:
+
+```sh
+azd env set AZURE_MANAGEMENT_GROUP_ID "<management-group-id>"
+azd provision
+```
+
+This overrides the `managementGroupId` parameter in
+`infra/modules/service-health-alert.bicep`, changing the alert's `scopes`
+from `/subscriptions/<subscriptionId>` to
+`/providers/Microsoft.Management/managementGroups/<management-group-id>`.
+Requirements:
+
+- The principal running `azd provision`/`az deployment` needs **Monitoring
+  Contributor** (or **Contributor**) on the management group, in addition
+  to the usual subscription-level roles for the rest of the stack.
+- The Container App, Key Vault, Storage, and networking resources are still
+  deployed once, into the target subscription — only the alert's scope
+  changes, so no extra Container Apps deployments are needed per
+  subscription.
+- Leave `AZURE_MANAGEMENT_GROUP_ID` unset (the default) to keep the
+  existing single-subscription behavior.
+
 ## Step-by-step deployment guide
 
 This is the complete, from-zero walkthrough: create the Slack app, provision

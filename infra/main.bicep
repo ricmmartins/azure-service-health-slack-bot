@@ -20,6 +20,15 @@ param tenantId string = tenant().tenantId
 ])
 param acrSkuName string = 'Basic'
 
+@description('''
+Optional Management Group ID. When set, the Service Health Activity Log
+Alert is scoped to this management group instead of just this deployment's
+subscription, so a single deployment captures Service Health events across
+every subscription under the group. Requires Monitoring Contributor (or
+Contributor) on the management group for whoever runs provisioning.
+''')
+param managementGroupId string = ''
+
 var resourceToken = toLower(uniqueString(subscription().id, environmentName))
 var resourceGroupName = 'rg-${environmentName}'
 var serviceHealthRoutesJson = base64ToString(serviceHealthRoutesJsonB64)
@@ -127,6 +136,7 @@ module serviceHealthAlert 'modules/service-health-alert.bicep' = {
     secureWebhookIdentifierUri: secureWebhookIdentifierUri
     tenantId: tenantId
     targetSubscriptionId: subscription().subscriptionId
+    managementGroupId: managementGroupId
     tags: tags
   }
 }
