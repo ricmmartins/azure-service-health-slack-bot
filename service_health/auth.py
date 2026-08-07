@@ -67,7 +67,10 @@ def authorize_easy_auth(headers, expected_client_app_id, expected_role,
         value.casefold()
         for value in claims.get("aud", [])
     }
-    if expected_audience and expected_audience.casefold() not in audiences:
+    expected_audiences = {expected_audience.casefold()}
+    if expected_audience.casefold().startswith("api://"):
+        expected_audiences.add(expected_audience[6:].casefold())
+    if expected_audience and audiences.isdisjoint(expected_audiences):
         raise InvalidWebhookIdentity(
             "Webhook token audience is not authorized")
 

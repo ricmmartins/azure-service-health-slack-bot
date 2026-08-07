@@ -190,11 +190,33 @@ def test_easy_auth_requires_app_audience_and_role():
         audience,
     )
 
+    v2_headers = {
+        "X-MS-CLIENT-PRINCIPAL-IDP": "aad",
+        "X-MS-CLIENT-PRINCIPAL": encode_test_principal([
+            ("azp", "461e8683-5575-4561-ac7f-899cc907d62a"),
+            ("aud", "service-health"),
+            ("roles", "ActionGroupsSecureWebhook"),
+        ]),
+    }
+    authorize_easy_auth(
+        v2_headers,
+        "461e8683-5575-4561-ac7f-899cc907d62a",
+        "ActionGroupsSecureWebhook",
+        audience,
+    )
+
     with pytest.raises(MissingWebhookIdentity):
         authorize_easy_auth({}, "client", "role", audience)
     with pytest.raises(InvalidWebhookIdentity):
         authorize_easy_auth(
             headers, "wrong-client", "ActionGroupsSecureWebhook", audience)
+    with pytest.raises(InvalidWebhookIdentity):
+        authorize_easy_auth(
+            headers,
+            "461e8683-5575-4561-ac7f-899cc907d62a",
+            "ActionGroupsSecureWebhook",
+            "api://wrong-audience",
+        )
 
 
 def test_slack_rendering_includes_accessible_fallback_and_incident_details():
