@@ -41,7 +41,39 @@ keeps the deployment compliant with tenants/policies that require
 `publicNetworkAccess: Disabled` on these resource types. The Container App's
 public ingress (health probes and the secure webhook) is unaffected.
 
-![Service Health to Slack processing pipeline: Azure Monitor Service Health event triggers an Activity Log Alert, which fires a Secure Action Group that calls POST /api/service-health. The app validates Easy Auth and the ActionGroupsSecureWebhook app role, parses the Common Alert Schema, routes by subscription/service/region, records ETag/lease idempotency in Azure Table Storage, and posts or updates a Slack message through its lifecycle.](img/architecture-flow.svg)
+![Operator architecture map showing the numbered Azure Service Health event path through Global Activity Log Alert and Secure Action Group resources into an Easy Auth protected Container App in East US 2 and onward to Slack, with separate delivery, private network, managed identity RBAC, data, and observability paths.](img/architecture-flow.svg)
+
+*Operator map: numbered blue arrows are the business event path; orange is
+container delivery, green is private network/data access, dashed purple is
+RBAC/control, and dotted gray is telemetry. Azure service symbols use the
+official [Microsoft Azure Architecture Icons](https://learn.microsoft.com/azure/architecture/icons/)
+V24 under Microsoft's published icon terms.*
+
+### Why these resources exist
+
+The Azure portal shows both workload resources and Azure-generated supporting
+resources. This table explains how each visible resource relates to the
+operator map instead of treating the resource group as a flat inventory.
+
+| Resource type | Location | Purpose and relationship |
+|---|---|---|
+| Azure Container Registry (ACR) | East US 2 | Receives the Docker image built by `azd`, then supplies that image to each Container App revision. The managed identity receives only `AcrPull`; registry admin access remains disabled. |
+| Action Group | Global | Converts the matched alert into an Entra-authenticated Secure Webhook request using Common Alert Schema. Its receiver targets the Container App's public HTTPS endpoint. |
+| Activity Log Alert | Global | Matches `ServiceHealth` events at subscription or management-group scope and invokes the Action Group. Service Health alerts require Global location. |
+| Application Insights | East US 2 | Collects OpenTelemetry requests, dependencies, exceptions, and custom metrics from the application. It is workspace-based and feeds the supporting Failure Anomalies alert. |
+| Container App | East US 2 | Hosts public health probes and the Easy Auth protected webhook. The application performs authorization, parsing, routing, Table-backed idempotency, and Slack posting/updating. |
+| Container Apps Environment | East US 2 | Provides the VNet-integrated compute boundary and sends platform logs to Log Analytics. The application runs as a revision inside this environment. |
+| Failure Anomalies | Global (Azure-generated) | Supporting Application Insights smart-detection alert created automatically by Azure. It monitors failure-rate anomalies but is not part of the Service Health-to-Slack business flow. |
+| User-assigned Managed Identity | East US 2 | Authenticates the running revision to ACR, Key Vault, and Table Storage without application credentials. Its roles are exactly `AcrPull`, `Key Vault Secrets User`, and `Storage Table Data Contributor`. |
+| Key Vault | East US 2 | Stores the Slack `xoxb-` token. Public network access is disabled; the Container App resolves and reaches it through the Key Vault Private DNS zone and private endpoint. |
+| Log Analytics workspace | East US 2 | Stores Container Apps platform/application logs and backs workspace-based Application Insights for KQL queries and retention. |
+| Key Vault Private Endpoint | East US 2 | Gives Key Vault a private IP in the private-endpoint subnet and is the Container App's private data path to the Slack token. |
+| Table Storage Private Endpoint | East US 2 | Gives the Storage Table service a private IP in the private-endpoint subnet and carries incident-state, lease, and deduplication traffic. |
+| Network interfaces (2, Azure-generated) | East US 2 | Azure creates one NIC implementation detail for each private endpoint. They appear in the portal resource list but are intentionally summarized inside the two private-endpoint nodes rather than cluttering the main flow. |
+| Key Vault Private DNS zone | Global | `privatelink.vaultcore.azure.net`; linked to the VNet so the public Key Vault hostname resolves to the Key Vault private endpoint. |
+| Table Storage Private DNS zone | Global | `privatelink.table.core.windows.net`; linked to the VNet so the Table endpoint resolves to the Storage private endpoint. |
+| Storage account and Table | East US 2 | Persists incident lifecycle state, Slack message timestamps, ETags, and leases for deduplication. HTTPS/TLS 1.2 is enforced, shared-key access is disabled, and data flows through the private endpoint. |
+| Virtual network | East US 2 | Contains the delegated Container Apps infrastructure subnet and the private-endpoint subnet, keeping Key Vault and Table egress private while leaving the authenticated webhook ingress public. |
 
 ## Routes
 
