@@ -68,6 +68,18 @@ under Microsoft's [published icon terms](https://learn.microsoft.com/azure/archi
 The embedded product artwork is unmodified (not cropped, flipped, rotated,
 distorted, or recolored), and each icon has its Azure product name nearby.*
 
+### Example Slack incident message
+
+The first valid notification creates one root message. Later Active, Updated,
+and Resolved notifications update that same message, preserving the incident
+conversation in its Slack thread.
+
+![Resolved Azure Service Health incident in Slack showing severity, incident type, subscription, impacted service, latest communication, tracking ID, update time, and source link.](img/slack-service-health-resolved.png)
+
+*Static resolved-incident example using test identifiers. A still image keeps
+the fields readable at README width while the lifecycle behavior is described
+in [Idempotency and lifecycle](#idempotency-and-lifecycle).*
+
 ### Why these resources exist
 
 The Azure portal shows both workload resources and Azure-generated supporting
