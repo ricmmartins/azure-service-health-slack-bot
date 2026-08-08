@@ -130,7 +130,7 @@
   <path class="event-line" d="M490 220H520"/>
   <path class="event-line" d="M645 270V322H265V615H360"/>
   <path class="event-line" d="M540 615H570"/>
-  <path class="event-line" d="M845 615H910V380H1220V700H1250"/>
+  <path class="event-line" d="M845 615H902V375H1205V700H1250"/>
 
   <path class="delivery-line" d="M1250 447H1170"/>
   <path class="delivery-line" d="M950 447H915V520H805V570"/>
@@ -141,7 +141,7 @@
   <path class="data-line" d="M460 850V885H920V735H950"/>
   <path class="data-line" d="M745 850V875H935V845H950"/>
 
-  <path class="rbac-line" d="M950 580H845"/>
+  <path class="rbac-line" d="M950 663H845"/>
 
   <path class="telemetry-line" d="M600 680V689H295V910H435V925"/>
   <path class="telemetry-line" d="M560 955H610"/>
@@ -151,8 +151,8 @@
     <text class="line-label" x="505" y="322" fill="#0078d4">signed HTTPS webhook + Entra token</text>
   </g>
   <g>
-    <rect class="label-bg" x="972" y="367" width="166" height="22" rx="11"/>
-    <text class="line-label" x="1055" y="378" fill="#0078d4">Slack API request</text>
+    <rect class="label-bg" x="985" y="363" width="170" height="24" rx="12"/>
+    <text class="line-label" x="1070" y="375" fill="#0078d4">Slack API request</text>
   </g>
   <g>
     <rect class="label-bg" x="805" y="509" width="110" height="22" rx="11"/>
@@ -167,8 +167,9 @@
     <text class="line-label" x="605" y="714" fill="#107c10">private data paths</text>
   </g>
   <g>
-    <rect class="label-bg" x="850" y="568" width="94" height="24" rx="12"/>
-    <text class="line-label" x="897" y="580" fill="#6f42b5">runtime identity</text>
+    <rect class="label-bg" x="880" y="624" width="45" height="27" rx="13.5"/>
+    <text class="line-label" x="902.5" y="632.5" fill="#6f42b5">runtime</text>
+    <text class="line-label" x="902.5" y="642.5" fill="#6f42b5">identity</text>
   </g>
   <g>
     <rect class="label-bg" x="355" y="678" width="190" height="22" rx="11"/>
