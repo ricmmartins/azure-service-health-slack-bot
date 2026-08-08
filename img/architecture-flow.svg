@@ -130,14 +130,14 @@
   <path class="event-line" d="M490 220H520"/>
   <path class="event-line" d="M645 270V322H265V615H360"/>
   <path class="event-line" d="M540 615H570"/>
-  <path class="event-line" d="M845 615H902V375H1205V700H1250"/>
+  <path class="event-line" d="M845 615H900V375H1205V700H1250"/>
 
   <path class="delivery-line" d="M1250 447H1170"/>
   <path class="delivery-line" d="M950 447H915V520H805V570"/>
 
   <path class="dns-line" d="M885 270V400"/>
-  <path class="data-line" d="M650 680V715H460V785"/>
-  <path class="data-line" d="M770 680V705H745V785"/>
+  <path class="data-line" d="M575 680V785"/>
+  <path class="data-line" d="M745 680V785"/>
   <path class="data-line" d="M460 850V885H920V735H950"/>
   <path class="data-line" d="M745 850V875H935V845H950"/>
 
@@ -159,12 +159,12 @@
     <text class="line-label" x="860" y="520" fill="#9a5a00">image delivery</text>
   </g>
   <g>
-    <rect class="label-bg" x="810" y="307" width="150" height="22" rx="11"/>
-    <text class="line-label" x="885" y="318" fill="#107c10">VNet DNS links</text>
+    <rect class="label-bg" x="810" y="311.5" width="150" height="22" rx="11"/>
+    <text class="line-label" x="885" y="322.5" fill="#107c10">VNet DNS links</text>
   </g>
   <g>
-    <rect class="label-bg" x="515" y="703" width="180" height="22" rx="11"/>
-    <text class="line-label" x="605" y="714" fill="#107c10">private data paths</text>
+    <rect class="label-bg" x="595" y="703" width="125" height="22" rx="11"/>
+    <text class="line-label" x="657.5" y="714" fill="#107c10">private data paths</text>
   </g>
   <g>
     <rect class="label-bg" x="880" y="624" width="45" height="27" rx="13.5"/>
