@@ -12,6 +12,7 @@ events, and no Azure support-ticket workflow. It only initializes a Slack
 
 ## Contents
 
+- [Start here](#start-here)
 - [Architecture](#architecture)
 - [Routes](#routes)
 - [Prerequisites](#prerequisites)
@@ -19,10 +20,25 @@ events, and no Azure support-ticket workflow. It only initializes a Slack
 - [Service Health routing](#service-health-routing)
 - [Idempotency and lifecycle](#idempotency-and-lifecycle)
 - [Security](#security)
+- [Production decisions and trade-offs](#production-decisions-and-trade-offs)
 - [Deploy with AZD](#deploy-with-azd)
 - [Step-by-step deployment guide](#step-by-step-deployment-guide)
 - [Operations](#operations)
 - [Tests](#tests)
+
+## Start here
+
+This repository is a reference implementation for teams that want Azure Service
+Health incidents in Slack without treating Slack as the source of truth. Choose
+the path that matches what you need to evaluate:
+
+| Goal | Start with |
+|---|---|
+| Understand the event path and trust boundaries | [Architecture](#architecture), [Security](#security), and [Production decisions and trade-offs](#production-decisions-and-trade-offs) |
+| Run the parser and application locally | [Local development](#local-development) and [Service Health routing](#service-health-routing) |
+| Deploy the first subscription safely | [Step-by-step deployment guide](#step-by-step-deployment-guide) |
+| Expand beyond one subscription | [Multi-subscription / tenant-wide alerting](#multi-subscription--tenant-wide-alerting-management-group-scope) |
+| Monitor or troubleshoot the integration | [Operations](#operations) and [Troubleshooting](#troubleshooting) |
 
 ## Architecture
 
@@ -168,6 +184,21 @@ example an unknown channel) return `4xx` and are not retried.
   `/api/service-health` enforces the app-role check.
 - **No secret logging**: request/response bodies and Slack/Azure credentials
   are never logged.
+
+## Production decisions and trade-offs
+
+The deployment favors predictable incident delivery and policy-compliant data
+access over the smallest possible resource footprint. Review these choices
+before using the pattern in production:
+
+| Decision | Current choice | Operational implication |
+|---|---|---|
+| Container readiness | The Container App runs with `minReplicas: 1` and scales to at most three replicas. | One ready replica avoids adding a cold start to incident delivery, but creates baseline compute cost. Test Azure Monitor retry behavior before considering scale-to-zero. |
+| Webhook boundary | Public Container Apps ingress protected by Easy Auth plus AzNS caller, app-role, and audience checks. | Azure Monitor can reach the endpoint without exposing Key Vault or Storage. An unauthenticated webhook returning `200` is a security regression. |
+| Secret and state access | Key Vault and Table Storage use private endpoints, private DNS, and disabled public network access. | The data path stays private, with added private endpoint cost and DNS ownership. |
+| Source of truth | Azure Service Health remains authoritative; Slack is the coordination surface. | The bot updates messages but does not acknowledge incidents, page responders, create tickets, or replace an incident management platform. |
+| Entra provisioning | The preprovision hook configures the API app, AzNS ownership, and `ActionGroupsSecureWebhook` role. | Initial setup requires Application Administrator or equivalent permission. Treat that as a governed deployment prerequisite, not an application runtime role. |
+| Retry contract | Duplicate and stale deliveries return `200`; transient Slack or Storage failures return `503`; invalid payloads and permanent Slack errors return `4xx`. | Azure Monitor retries only failures that may recover, while duplicate notifications do not create duplicate Slack posts. |
 
 ## Deploy with AZD
 
