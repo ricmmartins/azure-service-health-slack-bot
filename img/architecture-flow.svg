@@ -57,6 +57,7 @@
     .support-card { fill: #f5f5f5; stroke: #7a8793; stroke-width: 1.25; }
     .external-card { fill: #ffffff; stroke: #5f6b7a; stroke-width: 1.5; }
     .chip { fill: #ffffff; stroke: #6c8ebf; stroke-width: 1; }
+    .role-badge { fill: #f8f4fb; stroke: #9673a6; stroke-width: 0.85; }
     .title { font-size: 19px; font-weight: 700; fill: #14395b; }
     .boundary-title { font-size: 15px; font-weight: 700; fill: #14395b; }
     .node-title { font-size: 13px; font-weight: 700; }
@@ -78,15 +79,18 @@
     .telemetry-line { stroke: #5f6b7a; stroke-width: 1.8; stroke-dasharray: 3 5; marker-end: url(#arrow-telemetry); }
     .label-bg { fill: #ffffff; stroke: #d4d9de; stroke-width: 0.75; }
     .line-label { font-size: 9px; font-weight: 600; dominant-baseline: middle; text-anchor: middle; }
+    .role-text { font-size: 9px; font-weight: 600; fill: #5b3b8f; dominant-baseline: middle; text-anchor: middle; }
     @media (prefers-color-scheme: dark) {
       .canvas { fill: #0d1117; }
       .resource-group { fill: #111c26; }
       .global-zone, .support-card { fill: #1b2128; }
       .region-zone, .vnet, .environment { fill: #12202c; }
       .subnet, .card, .external-card, .chip { fill: #161b22; }
+      .role-badge { fill: #21182c; }
       text, .node-title { fill: #e6edf3; }
       .title, .boundary-title { fill: #c9e7ff; }
       .detail, .tiny { fill: #b8c2cc; }
+      .role-text { fill: #d9c5ef; }
       .label-bg { fill: #161b22; stroke: #4d5966; }
     }
   </style>
@@ -124,12 +128,12 @@
 
   <path class="event-line" d="M190 220H280"/>
   <path class="event-line" d="M490 220H520"/>
-  <path class="event-line" d="M645 270V320H265V615H360"/>
+  <path class="event-line" d="M645 270V322H265V615H360"/>
   <path class="event-line" d="M540 615H570"/>
   <path class="event-line" d="M845 615H910V380H1220V700H1250"/>
 
   <path class="delivery-line" d="M1250 447H1170"/>
-  <path class="delivery-line" d="M950 447H915V510H805V570"/>
+  <path class="delivery-line" d="M950 447H915V520H805V570"/>
 
   <path class="dns-line" d="M885 270V400"/>
   <path class="data-line" d="M650 680V715H460V785"/>
@@ -137,25 +141,22 @@
   <path class="data-line" d="M460 850V885H920V735H950"/>
   <path class="data-line" d="M745 850V875H935V845H950"/>
 
-  <path class="rbac-line" d="M950 585H910V645H845"/>
-  <path class="rbac-line" d="M1055 540V490"/>
-  <path class="rbac-line" d="M1020 630V690"/>
-  <path class="rbac-line" d="M1100 630V655H1178V845H1160"/>
+  <path class="rbac-line" d="M950 580H845"/>
 
-  <path class="telemetry-line" d="M820 680V710H890V915H435V925"/>
+  <path class="telemetry-line" d="M600 680V689H295V910H435V925"/>
   <path class="telemetry-line" d="M560 955H610"/>
 
   <g>
-    <rect class="label-bg" x="435" y="307" width="210" height="22" rx="11"/>
-    <text class="line-label" x="540" y="318" fill="#0078d4">signed HTTPS + Entra token</text>
+    <rect class="label-bg" x="390" y="310" width="230" height="24" rx="12"/>
+    <text class="line-label" x="505" y="322" fill="#0078d4">signed HTTPS webhook + Entra token</text>
   </g>
   <g>
     <rect class="label-bg" x="972" y="367" width="166" height="22" rx="11"/>
     <text class="line-label" x="1055" y="378" fill="#0078d4">Slack API request</text>
   </g>
   <g>
-    <rect class="label-bg" x="815" y="497" width="96" height="22" rx="11"/>
-    <text class="line-label" x="863" y="508" fill="#9a5a00">image pull</text>
+    <rect class="label-bg" x="805" y="509" width="110" height="22" rx="11"/>
+    <text class="line-label" x="860" y="520" fill="#9a5a00">image delivery</text>
   </g>
   <g>
     <rect class="label-bg" x="810" y="307" width="150" height="22" rx="11"/>
@@ -166,24 +167,12 @@
     <text class="line-label" x="605" y="714" fill="#107c10">private data paths</text>
   </g>
   <g>
-    <rect class="label-bg" x="856" y="632" width="104" height="22" rx="11"/>
-    <text class="line-label" x="908" y="643" fill="#6f42b5">assigned identity</text>
+    <rect class="label-bg" x="850" y="568" width="94" height="24" rx="12"/>
+    <text class="line-label" x="897" y="580" fill="#6f42b5">runtime identity</text>
   </g>
   <g>
-    <rect class="label-bg" x="1008" y="503" width="94" height="22" rx="11"/>
-    <text class="line-label" x="1055" y="514" fill="#6f42b5">AcrPull</text>
-  </g>
-  <g>
-    <rect class="label-bg" x="938" y="642" width="164" height="22" rx="11"/>
-    <text class="line-label" x="1020" y="653" fill="#6f42b5">Key Vault Secrets User</text>
-  </g>
-  <g>
-    <rect class="label-bg" x="988" y="666" width="180" height="22" rx="11"/>
-    <text class="line-label" x="1078" y="678" fill="#6f42b5">Storage Table Data Contributor</text>
-  </g>
-  <g>
-    <rect class="label-bg" x="560" y="903" width="250" height="22" rx="11"/>
-    <text class="line-label" x="685" y="914" fill="#5f6b7a">requests, dependencies, exceptions</text>
+    <rect class="label-bg" x="355" y="678" width="190" height="22" rx="11"/>
+    <text class="line-label" x="450" y="689" fill="#5f6b7a">OpenTelemetry export</text>
   </g>
 
   <g>
@@ -193,7 +182,7 @@
     <use href="#icon-service-health" x="40" y="194" width="38" height="38"/>
     <text class="node-title" x="90" y="205">Azure Service</text>
     <text class="node-title" x="90" y="222">Health</text>
-    <text class="detail" x="40" y="251">platform event</text>
+    <text class="detail" x="40" y="251">Platform event</text>
   </g>
 
   <g>
@@ -203,8 +192,8 @@
     <use href="#icon-alerts" x="300" y="195" width="36" height="36"/>
     <text class="node-title" x="347" y="202">Activity Log Alert</text>
     <text class="detail" x="347" y="220">ServiceHealth category</text>
-    <text class="tiny" x="347" y="237">subscription / management group</text>
-    <text class="tiny" x="347" y="252">scope</text>
+    <text class="tiny" x="347" y="237">Subscription / management group</text>
+    <text class="tiny" x="347" y="252">Alert scope</text>
   </g>
 
   <g>
@@ -220,10 +209,9 @@
   <g>
     <rect class="support-card" x="790" y="170" width="190" height="100" rx="9"/>
     <use href="#icon-dns" x="807" y="195" width="36" height="36"/>
-    <text class="node-title compact-title" x="854" y="199">Private DNS zones</text>
-    <text class="node-title compact-title" x="854" y="215">(2)</text>
-    <text class="tiny" x="854" y="235">Key Vault + Table</text>
-    <text class="tiny" x="854" y="251">linked to the VNet</text>
+    <text class="node-title compact-title" x="850" y="207">Private DNS zones (2)</text>
+    <text class="tiny" x="850" y="232">Key Vault and Table</text>
+    <text class="tiny" x="850" y="250">Linked to the VNet</text>
   </g>
 
   <g>
@@ -231,8 +219,8 @@
     <use href="#icon-alerts" x="1025" y="195" width="34" height="34"/>
     <text class="node-title compact-title" x="1068" y="198">Failure</text>
     <text class="node-title compact-title" x="1068" y="214">Anomalies</text>
-    <text class="tiny" x="1068" y="235">auto-created supporting</text>
-    <text class="tiny" x="1068" y="251">App Insights alert</text>
+    <text class="tiny" x="1068" y="235">Azure-created alert for</text>
+    <text class="tiny" x="1068" y="251">Application Insights</text>
   </g>
 
   <g>
@@ -252,13 +240,13 @@
     <text class="node-title" x="640" y="596">Container App application</text>
     <text class="detail" x="640" y="613">POST /api/service-health</text>
     <rect class="chip" x="590" y="624" width="72" height="20" rx="5"/>
-    <text class="tiny" x="626" y="637" text-anchor="middle">auth</text>
+    <text class="tiny" x="626" y="637" text-anchor="middle">Auth</text>
     <rect class="chip" x="669" y="624" width="72" height="20" rx="5"/>
-    <text class="tiny" x="705" y="637" text-anchor="middle">parser</text>
+    <text class="tiny" x="705" y="637" text-anchor="middle">Parser</text>
     <rect class="chip" x="748" y="624" width="82" height="20" rx="5"/>
-    <text class="tiny" x="789" y="637" text-anchor="middle">router</text>
+    <text class="tiny" x="789" y="637" text-anchor="middle">Router</text>
     <rect class="chip" x="590" y="651" width="112" height="20" rx="5"/>
-    <text class="tiny" x="646" y="664" text-anchor="middle">idempotency</text>
+    <text class="tiny" x="646" y="664" text-anchor="middle">Idempotency</text>
     <rect class="chip" x="710" y="651" width="120" height="20" rx="5"/>
     <text class="tiny" x="770" y="664" text-anchor="middle">Slack client</text>
   </g>
@@ -267,7 +255,7 @@
     <rect class="data-card" x="335" y="785" width="250" height="65" rx="9"/>
     <use href="#icon-private-endpoint" x="350" y="801" width="32" height="32"/>
     <text class="node-title" x="394" y="808">Key Vault private endpoint</text>
-    <text class="tiny" x="394" y="825">private IP + generated NIC</text>
+    <text class="tiny" x="394" y="825">Private IP + generated NIC</text>
     <text class="tiny" x="394" y="840">privatelink.vaultcore.azure.net</text>
   </g>
 
@@ -275,7 +263,7 @@
     <rect class="data-card" x="620" y="785" width="250" height="65" rx="9"/>
     <use href="#icon-private-endpoint" x="635" y="801" width="32" height="32"/>
     <text class="node-title" x="679" y="808">Table private endpoint</text>
-    <text class="tiny" x="679" y="825">private IP + generated NIC</text>
+    <text class="tiny" x="679" y="825">Private IP + generated NIC</text>
     <text class="tiny" x="679" y="840">privatelink.table.core.windows.net</text>
   </g>
 
@@ -283,17 +271,23 @@
     <rect class="delivery-card" x="950" y="400" width="220" height="90" rx="9"/>
     <use href="#icon-acr" x="968" y="423" width="38" height="38"/>
     <text class="node-title compact-title" x="1018" y="427">Azure Container Registry</text>
-    <text class="detail" x="1018" y="446">private image repository</text>
-    <text class="detail" x="1018" y="464">admin disabled; Basic by default</text>
+    <text class="detail" x="1018" y="446">Revision image source</text>
+    <text class="detail" x="1018" y="464">Admin disabled; Basic by default</text>
   </g>
 
   <g>
-    <rect class="security-card" x="950" y="540" width="210" height="90" rx="9"/>
-    <use href="#icon-managed-identity" x="968" y="565" width="36" height="36"/>
-    <text class="node-title" x="1016" y="567">User-assigned</text>
-    <text class="node-title" x="1016" y="584">managed identity</text>
-    <text class="detail" x="1016" y="603">runtime auth; no app secrets</text>
-    <text class="detail" x="1016" y="619">three least-privilege roles</text>
+    <rect class="security-card" x="950" y="520" width="210" height="160" rx="9"/>
+    <use href="#icon-managed-identity" x="968" y="540" width="36" height="36"/>
+    <text class="node-title" x="1016" y="542">User-assigned</text>
+    <text class="node-title" x="1016" y="559">managed identity</text>
+    <text class="detail" x="1016" y="578">Credential-free runtime auth</text>
+    <text class="detail" x="962" y="603">Control plane - no data flow</text>
+    <rect class="role-badge" x="962" y="612" width="186" height="17" rx="8.5"/>
+    <text class="role-text" x="1055" y="620.5">ACR: AcrPull</text>
+    <rect class="role-badge" x="962" y="634" width="186" height="17" rx="8.5"/>
+    <text class="role-text" x="1055" y="642.5">Key Vault: Key Vault Secrets User</text>
+    <rect class="role-badge" x="962" y="656" width="186" height="17" rx="8.5"/>
+    <text class="role-text" x="1055" y="664.5">Table: Storage Table Data Contributor</text>
   </g>
 
   <g>
@@ -301,7 +295,7 @@
     <use href="#icon-key-vault" x="968" y="711" width="38" height="38"/>
     <text class="node-title" x="1018" y="716">Azure Key Vault</text>
     <text class="detail" x="1018" y="736">Slack bot token</text>
-    <text class="detail" x="1018" y="753">public access disabled</text>
+    <text class="detail" x="1018" y="753">Public access disabled</text>
   </g>
 
   <g>
@@ -310,9 +304,9 @@
     <use href="#icon-table" x="1000" y="850" width="22" height="22"/>
     <text class="node-title compact-title" x="1032" y="820">Storage account</text>
     <text class="node-title compact-title" x="1032" y="836">/ Table</text>
-    <text class="detail" x="1032" y="854">incident state, ETags, leases</text>
-    <text class="detail" x="1032" y="871">deduplication + lifecycle</text>
-    <text class="detail" x="1032" y="888">public access disabled</text>
+    <text class="detail" x="1032" y="854">Incident state, ETags, leases</text>
+    <text class="detail" x="1032" y="871">Deduplication + lifecycle</text>
+    <text class="detail" x="1032" y="888">Public access disabled</text>
   </g>
 
   <g>
@@ -320,7 +314,7 @@
     <use href="#icon-app-insights" x="327" y="941" width="32" height="32"/>
     <text class="node-title" x="371" y="945">Application Insights</text>
     <text class="tiny" x="371" y="963">OpenTelemetry application telemetry</text>
-    <text class="tiny" x="371" y="978">drives Failure Anomalies alert</text>
+    <text class="tiny" x="371" y="978">Drives Failure Anomalies alert</text>
   </g>
 
   <g>
@@ -328,7 +322,7 @@
     <use href="#icon-log-analytics" x="627" y="941" width="32" height="32"/>
     <text class="node-title" x="671" y="945">Log Analytics workspace</text>
     <text class="tiny" x="671" y="963">Container Apps platform and app logs</text>
-    <text class="tiny" x="671" y="978">query and retention backend</text>
+    <text class="tiny" x="671" y="978">Query and retention backend</text>
   </g>
 
   <g>
@@ -337,8 +331,8 @@
     <path d="M1275 431l6 5-6 6M1285 443h12" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
     <rect x="1273" y="454" width="26" height="3" rx="1.5" fill="#5f6b7a"/>
     <text class="node-title" x="1317" y="427">Developer</text>
-    <text class="detail" x="1317" y="445">azd + Docker build</text>
-    <text class="detail" x="1268" y="477">provision / deploy</text>
+    <text class="detail" x="1317" y="445">Build: azd + Docker</text>
+    <text class="detail" x="1268" y="477">Provision / deploy</text>
   </g>
 
   <g>
@@ -361,7 +355,7 @@
     <line class="data-line" x1="487" y1="18" x2="531" y2="18"/>
     <text class="tiny" x="544" y="21">private network / data</text>
     <line class="rbac-line" x1="720" y1="18" x2="764" y2="18"/>
-    <text class="tiny" x="777" y="21">RBAC / control</text>
+    <text class="tiny" x="777" y="21">RBAC authorization</text>
     <line class="telemetry-line" x1="872" y1="18" x2="916" y2="18"/>
     <text class="tiny" x="929" y="21">telemetry</text>
     <text class="tiny" x="18" y="45">Global boundaries are dashed; East US 2 and VNet boundaries are solid. Private endpoint NICs are intentionally summarized, not drawn as separate nodes.</text>
