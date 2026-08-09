@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 configure_telemetry()
 
 slack_bot_token = os.environ["SLACK_BOT_TOKEN"]
-slack_client = WebClient(slack_bot_token)
+slack_client = WebClient(slack_bot_token, timeout=10)
 
 web_app = Flask(__name__)
 _service_health_runtime = None
