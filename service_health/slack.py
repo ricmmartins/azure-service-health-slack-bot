@@ -1,4 +1,6 @@
 import logging
+from http.client import RemoteDisconnected
+from urllib.error import URLError
 
 from slack_sdk.errors import SlackApiError, SlackRequestError
 
@@ -24,6 +26,14 @@ _TRANSIENT_SLACK_ERRORS = {
     "request_timeout",
     "service_unavailable",
 }
+
+_TRANSIENT_TRANSPORT_ERRORS = (
+    SlackRequestError,
+    TimeoutError,
+    URLError,
+    ConnectionResetError,
+    RemoteDisconnected,
+)
 
 
 def _escape_mrkdwn(value):
@@ -66,8 +76,8 @@ class SlackIncidentNotifier:
                 unfurl_links=False,
                 unfurl_media=False,
             )
-            return response["ts"]
-        except (SlackApiError, SlackRequestError) as exc:
+            return self._required_ts(response, "create")
+        except (SlackApiError, *_TRANSIENT_TRANSPORT_ERRORS) as exc:
             self._raise_classified(exc)
 
     def update(self, event, channel_id, message_ts, lifecycle_status):
@@ -80,12 +90,36 @@ class SlackIncidentNotifier:
                 blocks=blocks,
             )
             return message_ts
-        except (SlackApiError, SlackRequestError) as exc:
+        except (SlackApiError, *_TRANSIENT_TRANSPORT_ERRORS) as exc:
+            self._raise_classified(exc)
+
+    def reply(self, event, channel_id, message_ts, lifecycle_status):
+        text, blocks = render_incident_update(event, lifecycle_status)
+        try:
+            response = self.client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=message_ts,
+                reply_broadcast=True,
+                text=text,
+                blocks=blocks,
+                unfurl_links=False,
+                unfurl_media=False,
+            )
+            return self._required_ts(response, "thread reply")
+        except (SlackApiError, *_TRANSIENT_TRANSPORT_ERRORS) as exc:
             self._raise_classified(exc)
 
     @staticmethod
+    def _required_ts(response, operation):
+        message_ts = response.get("ts")
+        if not message_ts:
+            raise PermanentSlackError(
+                f"Slack {operation} response did not include a message timestamp")
+        return message_ts
+
+    @staticmethod
     def _raise_classified(exc):
-        if isinstance(exc, SlackRequestError):
+        if isinstance(exc, _TRANSIENT_TRANSPORT_ERRORS):
             raise TransientSlackError(
                 "Slack request failed before receiving a response") from exc
 
@@ -170,6 +204,47 @@ def render_incident_message(event: ServiceHealthEvent, lifecycle_status):
             "text": {
                 "type": "mrkdwn",
                 "text": f"*Latest communication*\n{communication}",
+            },
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"Tracking ID: `{_escape_mrkdwn(event.tracking_id)}` · "
+                        f"Updated "
+                        f"{event.submission_time.strftime('%Y-%m-%d %H:%M UTC')} · "
+                        f"<{portal_url}|Open Azure Service Health>"
+                    ),
+                }
+            ],
+        },
+    ]
+    return fallback, blocks
+
+
+def render_incident_update(event: ServiceHealthEvent, lifecycle_status):
+    icon = _status_icon(lifecycle_status)
+    portal_url = _service_health_url(event)
+    title = _truncate(
+        f"{icon} *{lifecycle_status.value}:* "
+        f"{_escape_mrkdwn(event.title)}",
+        150,
+    )
+    communication = _escape_mrkdwn(event.communication)
+    update_text = _truncate(f"{title}\n\n{communication}", 3000)
+    fallback = _truncate(
+        f"{icon} Azure Service Health {lifecycle_status.value}: "
+        f"{event.title} — {event.communication}",
+        4000,
+    )
+    blocks = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": update_text,
             },
         },
         {

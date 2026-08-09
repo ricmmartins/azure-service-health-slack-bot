@@ -44,6 +44,7 @@ def test_service_health_route_rejects_non_json_content_type():
 
 def test_slack_client_is_initialized_from_environment_token():
     assert app.slack_client.token == "xoxb-test-token"
+    assert app.slack_client.timeout == 10
 
 
 def test_service_health_runtime_is_created_lazily_and_cached():
