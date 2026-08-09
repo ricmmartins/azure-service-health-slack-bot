@@ -4,8 +4,8 @@ A standalone, production-oriented Flask service that receives Azure Service
 Health alerts through Azure Monitor's Common Alert Schema and posts them to
 Slack. Service Health alerts create one root message per subscription and
 tracking ID. Later lifecycle changes update that canonical message and add a
-short broadcast reply to its thread, preserving both the current state and a
-visible timeline from Active through Resolved.
+short broadcast reply to its thread. The root shows the current state, while
+the replies preserve each subsequent Updated or Resolved transition.
 
 This repository intentionally has **no** Slack Bolt app, no inbound Slack
 events, and no Azure support-ticket workflow. It only initializes a Slack
