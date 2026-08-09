@@ -35,6 +35,7 @@ class ProcessingOutcome:
     result: ProcessingResult
     channel_id: str
     message_ts: str = ""
+    thread_reply_ts: str = ""
 
 
 class ServiceHealthProcessor:
@@ -57,6 +58,7 @@ class ServiceHealthProcessor:
                 ProcessingResult.DUPLICATE,
                 work_item.channel_id,
                 work_item.message_ts,
+                work_item.thread_reply_ts,
             )
         if work_item.decision == StoreDecision.STALE:
             service_health_metrics.record(event, ProcessingResult.STALE)
@@ -64,25 +66,58 @@ class ServiceHealthProcessor:
                 ProcessingResult.STALE,
                 work_item.channel_id,
                 work_item.message_ts,
+                work_item.thread_reply_ts,
             )
         if work_item.decision == StoreDecision.BUSY:
             raise TransientProcessingError(
                 "Another replica is processing this incident")
 
+        try:
+            work_item = self.store.renew(work_item)
+        except (TransientStoreError, StoreConsistencyError) as exc:
+            raise TransientProcessingError(
+                "Unable to renew incident processing lease") from exc
+
         lifecycle_status = event.lifecycle_status
         if (
-            work_item.decision == StoreDecision.UPDATE
+            work_item.decision in {
+                StoreDecision.UPDATE,
+                StoreDecision.REPLY,
+            }
             and lifecycle_status == LifecycleStatus.ACTIVE
         ):
             lifecycle_status = LifecycleStatus.UPDATED
 
         try:
+            thread_reply_ts = ""
             if work_item.decision == StoreDecision.CREATE:
                 message_ts = self.notifier.create(
                     event, work_item.channel_id, lifecycle_status)
                 result = ProcessingResult.CREATED
             else:
-                message_ts = self.notifier.update(
+                message_ts = work_item.message_ts
+                if work_item.decision == StoreDecision.UPDATE:
+                    message_ts = self.notifier.update(
+                        event,
+                        work_item.channel_id,
+                        work_item.message_ts,
+                        lifecycle_status,
+                    )
+                    try:
+                        work_item = self.store.checkpoint_root(
+                            work_item,
+                            message_ts,
+                            lifecycle_status,
+                        )
+                    except (
+                        TransientStoreError,
+                        StoreConsistencyError,
+                    ) as exc:
+                        raise TransientProcessingError(
+                            "Root message was updated but its state "
+                            "could not be checkpointed"
+                        ) from exc
+                thread_reply_ts = self.notifier.reply(
                     event,
                     work_item.channel_id,
                     work_item.message_ts,
@@ -99,7 +134,12 @@ class ServiceHealthProcessor:
                 "Slack rejected the incident message") from exc
 
         try:
-            self.store.finalize(work_item, message_ts, lifecycle_status)
+            self.store.finalize(
+                work_item,
+                message_ts,
+                lifecycle_status,
+                thread_reply_ts,
+            )
         except (TransientStoreError, StoreConsistencyError) as exc:
             raise TransientProcessingError(
                 "Message was sent but incident state could not be finalized"
@@ -111,10 +151,17 @@ class ServiceHealthProcessor:
                 "service_health_result": result.value,
                 "tracking_id": event.tracking_id,
                 "channel_id": work_item.channel_id,
+                "message_ts": message_ts,
+                "thread_reply_ts": thread_reply_ts,
             },
         )
         service_health_metrics.record(event, result)
-        return ProcessingOutcome(result, work_item.channel_id, message_ts)
+        return ProcessingOutcome(
+            result,
+            work_item.channel_id,
+            message_ts,
+            thread_reply_ts,
+        )
 
     def _mark_failed(self, work_item, error_code):
         try:

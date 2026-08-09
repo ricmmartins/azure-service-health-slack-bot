@@ -3,8 +3,9 @@
 A standalone, production-oriented Flask service that receives Azure Service
 Health alerts through Azure Monitor's Common Alert Schema and posts them to
 Slack. Service Health alerts create one root message per subscription and
-tracking ID, then update that same message through Active, Updated, and
-Resolved states so human replies remain in its thread.
+tracking ID. Later lifecycle changes update that canonical message and add a
+short broadcast reply to its thread, preserving both the current state and a
+visible timeline from Active through Resolved.
 
 This repository intentionally has **no** Slack Bolt app, no inbound Slack
 events, and no Azure support-ticket workflow. It only initializes a Slack
@@ -70,15 +71,15 @@ distorted, or recolored), and each icon has its Azure product name nearby.*
 
 ### Example Slack incident message
 
-The first valid notification creates one root message. Later Active, Updated,
-and Resolved notifications update that same message, preserving the incident
-conversation in its Slack thread.
+The first valid notification creates one root message. Each accepted lifecycle
+change updates that canonical message and adds a short broadcast reply to its
+thread. Identical retries and stale notifications do not call Slack.
 
 ![Resolved Azure Service Health incident in Slack showing severity, incident type, subscription, impacted service, latest communication, tracking ID, update time, and source link.](img/slack-service-health-resolved.png)
 
-*Static resolved-incident example using test identifiers. A still image keeps
-the fields readable at README width while the lifecycle behavior is described
-in [Idempotency and lifecycle](#idempotency-and-lifecycle).*
+*Static canonical message using test identifiers. The root always shows the
+latest state; its thread retains the broadcast update timeline described in
+[Idempotency and lifecycle](#idempotency-and-lifecycle).*
 
 ### Why these resources exist
 
@@ -92,7 +93,7 @@ operator map instead of treating the resource group as a flat inventory.
 | Action Group | Global | Converts the matched alert into an Entra-authenticated Secure Webhook request using Common Alert Schema. Its receiver targets the Container App's public HTTPS endpoint. |
 | Activity Log Alert | Global | Matches `ServiceHealth` events at subscription or management-group scope and invokes the Action Group. Service Health alerts require Global location. |
 | Application Insights | East US 2 | Collects OpenTelemetry requests, dependencies, exceptions, and custom metrics from the application. It is workspace-based and feeds the supporting Failure Anomalies alert. |
-| Container App | East US 2 | Hosts public health probes and the Easy Auth protected webhook. The application performs authorization, parsing, routing, Table-backed idempotency, and Slack posting/updating. |
+| Container App | East US 2 | Hosts public health probes and the Easy Auth protected webhook. The application performs authorization, parsing, routing, Table-backed idempotency, canonical Slack updates, and broadcast thread replies. |
 | Container Apps Environment | East US 2 | Provides the VNet-integrated compute boundary and sends platform logs to Log Analytics. The application runs as a revision inside this environment. |
 | Failure Anomalies | Global (Azure-generated) | Supporting Application Insights smart-detection alert created automatically by Azure. It monitors failure-rate anomalies but is not part of the Service Health-to-Slack business flow. |
 | User-assigned Managed Identity | East US 2 | Authenticates the running revision to ACR, Key Vault, and Table Storage without application credentials. Its roles are exactly `AcrPull`, `Key Vault Secrets User`, and `Storage Table Data Contributor`. |
@@ -103,7 +104,7 @@ operator map instead of treating the resource group as a flat inventory.
 | Network interfaces (2, Azure-generated) | East US 2 | Azure creates one NIC implementation detail for each private endpoint. They appear in the portal resource list but are intentionally summarized inside the two private-endpoint nodes rather than cluttering the main flow. |
 | Key Vault Private DNS zone | Global | `privatelink.vaultcore.azure.net`; linked to the VNet so the public Key Vault hostname resolves to the Key Vault private endpoint. |
 | Table Storage Private DNS zone | Global | `privatelink.table.core.windows.net`; linked to the VNet so the Table endpoint resolves to the Storage private endpoint. |
-| Storage account and Table | East US 2 | Persists incident lifecycle state, Slack message timestamps, ETags, and leases for deduplication. HTTPS/TLS 1.2 is enforced, shared-key access is disabled, and data flows through the private endpoint. |
+| Storage account and Table | East US 2 | Persists incident lifecycle state, root and latest thread-reply timestamps, ETags, and leases for deduplication. HTTPS/TLS 1.2 is enforced, shared-key access is disabled, and data flows through the private endpoint. |
 | Virtual network | East US 2 | Contains the delegated Container Apps infrastructure subnet and the private-endpoint subnet, keeping Key Vault and Table egress private while leaving the authenticated webhook ingress public. |
 
 ## Routes
@@ -173,6 +174,24 @@ without calling Slack. Transient Slack or Storage failures return `503` so
 Azure Monitor can retry; invalid payloads and permanent Slack errors (for
 example an unknown channel) return `4xx` and are not retried.
 
+The first accepted event calls `chat.postMessage` to create the root. Every
+newer accepted event calls `chat.update` so that root remains the canonical
+current state, then calls `chat.postMessage` with the root's `thread_ts` and
+`reply_broadcast: true`. The concise reply makes the change visible in the
+channel and records a chronological thread timeline. This requires only the
+existing `chat:write` scope; the bot still receives no Slack events.
+
+Each lease has a unique owner token, and the processor verifies that ownership
+whenever it must read back an ETag. Before each Slack write, it conditionally
+renews the Table lease.
+After `chat.update` succeeds, it checkpoints the new root fingerprint and
+submission watermark before attempting the thread reply, then renews the lease
+for that second call. If the reply fails transiently, the same delivery resumes
+at the reply-only step instead of updating the root again; an older delivery is
+still rejected against the checkpointed watermark. Slack requests use a
+10-second timeout so one request plus the SDK's bounded connection retry stays
+inside the renewed 30-second lease.
+
 ## Security
 
 - **Easy Auth (Entra ID)**: validates the caller's Microsoft Entra token.
@@ -208,9 +227,9 @@ before using the pattern in production:
 | Container readiness | The Container App runs with `minReplicas: 1` and scales to at most three replicas. | One ready replica avoids adding a cold start to incident delivery, but creates baseline compute cost. Test Azure Monitor retry behavior before considering scale-to-zero. |
 | Webhook boundary | Public Container Apps ingress protected by Easy Auth plus AzNS caller, app-role, and audience checks. | Azure Monitor can reach the endpoint without exposing Key Vault or Storage. An unauthenticated webhook returning `200` is a security regression. |
 | Secret and state access | Key Vault and Table Storage use private endpoints, private DNS, and disabled public network access. | The data path stays private, with added private endpoint cost and DNS ownership. |
-| Source of truth | Azure Service Health remains authoritative; Slack is the coordination surface. | The bot updates messages but does not acknowledge incidents, page responders, create tickets, or replace an incident management platform. |
+| Source of truth | Azure Service Health remains authoritative; Slack is the coordination surface. | The bot keeps one canonical message and a broadcast thread timeline, but does not acknowledge incidents, page responders, create tickets, or replace an incident management platform. |
 | Entra provisioning | The preprovision hook configures the API app, AzNS ownership, and `ActionGroupsSecureWebhook` role. | Initial setup requires Application Administrator or equivalent permission. Treat that as a governed deployment prerequisite, not an application runtime role. |
-| Retry contract | Duplicate and stale deliveries return `200`; transient Slack or Storage failures return `503`; invalid payloads and permanent Slack errors return `4xx`. | Azure Monitor retries only failures that may recover, while duplicate notifications do not create duplicate Slack posts. |
+| Retry contract | Duplicate and stale deliveries return `200`; transient Slack or Storage failures return `503`; invalid payloads and permanent Slack errors return `4xx`. | Azure Monitor retries only failures that may recover, while duplicate notifications do not update the root or create thread replies. |
 
 ## Deploy with AZD
 
@@ -368,10 +387,11 @@ the distribution when using Docker Desktop.
    `/invite @Azure Service Health` in each destination channel — the bot
    token alone does not grant channel membership.
 
-This app only ever calls `chat.postMessage`/`chat.update`; it never receives
-events, so **no Signing Secret, Event Subscriptions, slash commands, or app
-manifest are required.** Its Slack messages include both blocks and a top-level
-`text` value, which Slack uses as the notification and screen-reader
+This app only ever calls `chat.postMessage` (root and broadcast thread replies)
+and `chat.update` (canonical root); it never receives events, so **no Signing
+Secret, Event Subscriptions, slash commands, or app manifest are required.**
+Its Slack messages include both blocks and a top-level `text` value, which
+Slack uses as the notification and screen-reader
 [accessibility fallback](https://docs.slack.dev/reference/methods/chat.postMessage/#accessibility-considerations).
 
 ### 2. Clone the repo and sign in
@@ -868,7 +888,9 @@ AppRequests
 
 AppTraces
 | where Message has "Service Health"
-| project TimeGenerated, SeverityLevel, Message, Properties
+| project TimeGenerated, SeverityLevel, Message,
+    rootMessageTs = Properties.message_ts,
+    threadReplyTs = Properties.thread_reply_ts
 
 AppDependencies
 | where Target has_any ("slack.com", "table.core.windows.net")
@@ -915,11 +937,14 @@ new Key Vault secret version and updates the Container App reference; do not
 put a token in Git or a literal command. Use `azd down --purge` only for full
 decommissioning, not routine rollback.
 
-There is an unavoidable MVP crash window after a successful first
-`chat.postMessage` and before `messageTs` is persisted. Exactly-once creation
-would require a transactional queue, which is intentionally out of scope.
-Reconcile by finding the message using its tracking ID, updating the Table
-entity, and then replaying the alert.
+There is an unavoidable distributed crash window after a successful Slack
+write and before its timestamp is finalized in Table Storage. For the initial
+`chat.postMessage`, that can leave an untracked root; for a broadcast thread
+reply, a replay can create a duplicate timeline entry. Exactly-once delivery
+across Slack and Azure would require a transactional outbox plus downstream
+idempotency that Slack's message API does not provide. Reconcile using the
+tracking ID and the structured `message_ts` / `thread_reply_ts` telemetry,
+correct the Table entity if needed, and then replay the alert.
 
 ## Tests
 

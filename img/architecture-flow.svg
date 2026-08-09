@@ -341,8 +341,8 @@
     <circle class="badge" cx="1260" cy="660" r="12"/>
     <text class="badge-text" x="1260" y="660">6</text>
     <text class="node-title" x="1335" y="682" text-anchor="middle">Slack API / channel</text>
-    <text class="detail" x="1335" y="704" text-anchor="middle">chat.postMessage</text>
-    <text class="detail" x="1335" y="721" text-anchor="middle">chat.update</text>
+    <text class="detail" x="1335" y="704" text-anchor="middle">Canonical root</text>
+    <text class="detail" x="1335" y="721" text-anchor="middle">Broadcast thread timeline</text>
     <text class="detail" x="1335" y="739" text-anchor="middle">Active to Resolved</text>
   </g>
 
