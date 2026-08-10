@@ -268,6 +268,9 @@ the protected API app by the AzNS service principal and the
 re-run) and requires Microsoft Graph application administration permission.
 Azure CLI and AZD maintain separate authentication sessions, so both
 `az login` and `azd auth login` are required on a clean workstation.
+The OS-specific `sh`/`pwsh` command hosts follow the official
+[AZD hook contract](https://learn.microsoft.com/azure/developer/azure-developer-cli/azd-extensibility);
+the hook business logic is Python on every platform.
 
 The legacy `scripts/configure-secure-webhook.ps1` entry point remains
 temporarily available as a thin compatibility wrapper. It delegates all Entra
@@ -561,6 +564,15 @@ before touching any Azure resource. The script:
    `SERVICE_HEALTH_API_OBJECT_ID`, and `SERVICE_HEALTH_API_IDENTIFIER_URI`
    into the AZD environment for the Bicep deployment to consume.
 
+These operations follow Azure Monitor's official
+[Secure Webhook configuration](https://learn.microsoft.com/azure/azure-monitor/alerts/action-groups#configure-authentication-for-secure-webhook):
+the protected API accepts v2 tokens, exposes an application-only app role, and
+assigns that role to the fixed AzNS AAD Webhook application. This daemon flow
+does not use an interactive redirect URI. The Python hook owns only the Entra
+application/service-principal contract; `infra/modules/container-app.bicep`
+remains the source of truth for Container Apps Easy Auth issuer, audiences,
+allowed AzNS application, HTTPS, and anonymous route handling.
+
 `azd provision` then deploys `infra/main.bicep`, which creates the resource
 group, Container Apps environment, Container Registry, Key Vault (with the
 Slack bot token as a secret), Storage Account/Table, Application Insights,
@@ -851,10 +863,14 @@ az containerapp logs show \
 ```
 
 The equivalent portal path is **Monitor → Alerts → Action groups → select the
-action group → Test → Service Health**. A successful result must produce an
-operation state of `Complete`, an HTTP `200` `POST /api/service-health` from
-`IcMBroadcaster/1.0` in the Container App access log, and a formatted Service
-Health message in Slack.
+action group → Test → Service Health**. The
+[test-notification REST examples](https://learn.microsoft.com/rest/api/monitor/action-groups/create-notifications-at-action-group-resource-level)
+use `Completed` for the operation and receiver, while the isolated Azure
+validation for this project returned `Complete` and `Succeeded`. The day-2
+manager accepts only those documented or observed exact success values and
+fails closed for any other state. A successful result must also produce an HTTP
+`200` `POST /api/service-health` from `IcMBroadcaster/1.0` in the Container App
+access log and a formatted Service Health message in Slack.
 
 Do not repeatedly run failing tests. Azure Monitor retries retryable webhook
 failures up to five times. HTTP `408`, `429`, `503`, and `504`, plus transport
@@ -1006,6 +1022,11 @@ also cover delegated and service-principal Secure Webhook setup, Graph request
 portability, idempotent app/role/owner/assignment creation, ambiguity failures,
 and AZD error redaction. Pester retains parser and delegation coverage for the
 temporary compatibility wrappers only.
+The cross-platform subprocess suite also launches the documented entry points
+and compatibility wrappers with real OS process resolution and fake `az`/`azd`
+executables. It verifies quoting and paths with spaces, JSON output, help,
+invalid exit codes, temporary request files, idempotent reruns, and the exact
+Windows/POSIX AZD hook command on Ubuntu, macOS, and Windows.
 
 ## Community and support
 

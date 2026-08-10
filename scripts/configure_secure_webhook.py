@@ -318,7 +318,12 @@ class SecureWebhookConfigurator:
             self.graph.request(
                 "PATCH",
                 f"{GRAPH_ROOT}/applications/{application_object_id}",
-                {"api": {"requestedAccessTokenVersion": 2}},
+                {
+                    "api": {
+                        **api,
+                        "requestedAccessTokenVersion": 2,
+                    }
+                },
             )
 
         identifier_uri = f"api://{application_id}"

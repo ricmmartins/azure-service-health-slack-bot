@@ -182,6 +182,46 @@ def test_azure_cli_invokes_resolved_windows_command_path(monkeypatch):
     assert commands[0][0] == r"C:\Program Files\Azure CLI\az.cmd"
 
 
+def test_azure_cli_bypasses_batch_launcher_when_bundled_python_exists(
+    monkeypatch,
+    tmp_path,
+):
+    launcher = tmp_path / "wbin" / "az.cmd"
+    launcher.parent.mkdir()
+    launcher.write_text("@echo off", encoding="utf-8")
+    bundled_python = tmp_path / "python.exe"
+    bundled_python.write_bytes(b"")
+    monkeypatch.setattr(
+        scope_cli.shutil,
+        "which",
+        lambda _name: str(launcher),
+    )
+    cli = AzureCli()
+    commands = []
+    cli.runner = lambda command, **_kwargs: (
+        commands.append(command)
+        or subprocess.CompletedProcess(command, 0, "{}", "")
+    )
+
+    cli.invoke(
+        "rest",
+        "--method",
+        "get",
+        "--url",
+        "https://example.invalid/items?api-version=1&$skiptoken=next",
+    )
+
+    assert commands[0][:3] == [
+        str(bundled_python),
+        "-IBm",
+        "azure.cli",
+    ]
+    assert (
+        "https://example.invalid/items?api-version=1&$skiptoken=next"
+        in commands[0]
+    )
+
+
 def test_azure_cli_never_retries_mutations():
     calls = []
 
@@ -364,6 +404,51 @@ def test_official_webhook_test_requires_exact_complete_secure_receiver_result():
 
     with pytest.raises(ScopeManagerError, match="exactly one result"):
         manager(FakeAzure(incomplete)).official_webhook_test(item)
+
+
+def test_official_webhook_test_accepts_documented_completed_result():
+    item = scope_member()
+
+    def successful(_args):
+        return {
+            "state": "Completed",
+            "actionDetails": [
+                {
+                    "Name": "slack-service-health",
+                    "MechanismType": "SecureWebhook",
+                    "Status": "Completed",
+                }
+            ],
+        }
+
+    assert manager(FakeAzure(successful)).official_webhook_test(item) == "Complete"
+
+
+@pytest.mark.parametrize(
+    ("state", "status"),
+    [
+        ("Succeeded", "Succeeded"),
+        ("Complete", "Complete"),
+        ("completed", "Completed"),
+    ],
+)
+def test_official_webhook_test_rejects_unrecognized_result_values(state, status):
+    item = scope_member()
+
+    def result(_args):
+        return {
+            "state": state,
+            "actionDetails": [
+                {
+                    "Name": "slack-service-health",
+                    "MechanismType": "SecureWebhook",
+                    "Status": status,
+                }
+            ],
+        }
+
+    with pytest.raises(ScopeManagerError):
+        manager(FakeAzure(result)).official_webhook_test(item)
 
 
 def test_deployment_validation_accepts_arm_id_casing_differences():
@@ -899,3 +984,42 @@ def test_interactive_confirmation_prompt_uses_stderr(monkeypatch, capsys):
     assert result == 0
     assert json.loads(captured.out) == {"confirmed": True}
     assert captured.err == "Delete managed resources? [y/N] "
+
+
+def test_interactive_confirmation_eof_fails_closed(monkeypatch, capsys):
+    class InteractiveInput(io.StringIO):
+        def isatty(self):
+            return True
+
+    class FakeManager:
+        def __init__(self, _azure, **kwargs):
+            self.confirm = kwargs["confirm_destructive"]
+
+        def execute(self, *_args, **_kwargs):
+            return {"confirmed": self.confirm("Delete managed resources?")}
+
+    monkeypatch.setattr(manage_alert_scopes, "AzureCli", lambda: object())
+    monkeypatch.setattr(manage_alert_scopes, "ScopeManager", FakeManager)
+    monkeypatch.setattr(
+        manage_alert_scopes.sys,
+        "stdin",
+        InteractiveInput(""),
+    )
+
+    result = manage_alert_scopes.main(
+        [
+            "remove-subscription",
+            "--subscription-id",
+            TARGET_SUBSCRIPTION,
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert captured.out == ""
+    assert (
+        captured.err
+        == "Delete managed resources? [y/N] ERROR: Destructive operations require "
+        "interactive confirmation or --force for pre-approved noninteractive automation.\n"
+    )
