@@ -419,10 +419,10 @@ following authoritative proof was recorded on 2026-08-10.
 
 ## Python operational CLI portability acceptance (2026-08-10)
 
-This section records the follow-up acceptance work for PR #28. It does not
-replace the earlier isolated infrastructure proof. The current change makes
-Python the canonical operational implementation and validates its process
-contract without modifying Slack or the protected deployment.
+This section records the follow-up acceptance work after PR #28, including the
+hardening and evidence carried by PR #29. It does not replace the earlier
+isolated infrastructure proof. Python remains the canonical operational
+implementation, and neither Slack nor the protected deployment was modified.
 
 ### Official Microsoft contract verification
 
@@ -486,9 +486,9 @@ operational business logic.
 
 | Boundary | Command or exercised contract | Result |
 |---|---|---|
-| Full Python suite | `python -m pytest -q` | **120 passed** |
+| Full Python suite | `python -m pytest -q` | **121 passed** |
 | Python lint | `python -m flake8 .` | **0 findings** |
-| Canonical CLI suite exactly as documented in CONTRIBUTING | `python -m pytest -q test/test_manage_alert_scopes.py test/test_configure_secure_webhook.py test/test_cli_subprocess.py` | **72 passed** |
+| Canonical CLI suite exactly as documented in CONTRIBUTING | `python -m pytest -q test/test_manage_alert_scopes.py test/test_configure_secure_webhook.py test/test_cli_subprocess.py` | **73 passed** |
 | Wrapper suite exactly as documented in CONTRIBUTING | `pwsh -NoProfile -Command "Invoke-Pester test/ManageAlertScopes.Tests.ps1, test/ConfigureSecureWebhook.Tests.ps1 -CI"` | **4 passed** |
 | CLI entry points | `python scripts/manage_alert_scopes.py --help`; `python scripts/configure_secure_webhook.py --help` | Both exit 0 with usage on stdout. |
 | Cross-platform subprocess contract | Real child processes with stateful fake `az`/`azd` executables | Help, documented command forms, quoted display names, paths with spaces, JSON output, invalid input/exit codes, temporary body-file cleanup, idempotent rerun, wrappers, and current-OS AZD hook command passed. |
@@ -508,35 +508,103 @@ mutation. The subprocess suite additionally exercises every documented
 operation parser and JSON form without representing those fakes as live Azure
 validation.
 
-### Current isolated Azure/Entra E2E attempt
+### Isolated Azure/Entra operational E2E proof
 
-Read-only preflight succeeded:
+The user explicitly authorized the destructive run on 2026-08-10. The unique
+prefix was `pye2e-20260810-211320-53f3`. The approved boundary was tenant
+`cc8ad65c-a10c-42a1-9fdc-65d99db48492` and only these subscriptions:
 
-- authenticated tenant: `cc8ad65c-a10c-42a1-9fdc-65d99db48492`;
-- accessible subscriptions: Management
-  `09f7fca2-63df-4326-b31c-aec3bcbb23db`, Connectivity
-  `d61e43e0-4793-4b0e-ac08-002e8c18763f`, and Identity
-  `5f48510d-3bdc-43e0-babf-bb7860b6f76b`;
-- the caller has Owner at all three subscription boundaries;
-- all three subscriptions are direct children of the tenant root;
-- the protected tenant `16b3c013-d300-468d-ac64-7eda0820b6d3` and protected
-  subscription `00052886-0d2d-493f-8b47-8ca68a0402ad` are absent from the
-  Azure CLI account cache; and
-- no Slack API or protected deployment operation was performed.
+- Management `09f7fca2-63df-4326-b31c-aec3bcbb23db`;
+- Connectivity `d61e43e0-4793-4b0e-ac08-002e8c18763f`; and
+- Identity `5f48510d-3bdc-43e0-babf-bb7860b6f76b`.
 
-The proposed unique disposable prefix was
-`shb-portability-e2e-20260810`. Retained snapshots
-`portability-e2e-before.json` and `portability-e2e-after.json` in the session
-artifact directory both prove zero matching resource groups, Action Groups,
-Activity Log Alerts, Entra applications, service principals, and local AZD
-environments across the three approved subscriptions. The snapshots are
-identical apart from timestamps and record that the protected tenant is absent.
+An initial preflight observed a different active tenant and failed closed before
+mutation. After selecting the approved Management subscription, the run
+reproved the exact tenant, subscription IDs, caller object ID
+`dc341336-dacd-4bf2-a731-524344dd29d9`, Owner access, provider registration, and
+direct-tenant-root topology. `before.json` records zero matching resource
+groups, Action Groups, Activity Log Alerts, Entra applications, service
+principals, role assignments, Management Groups, and AZD environments. The
+protected tenant `16b3c013-d300-468d-ac64-7eda0820b6d3`, protected subscription
+`00052886-0d2d-493f-8b47-8ca68a0402ad`, and protected resource group
+`rg-service-health-test` were not accessed. No Slack API or Slack endpoint was
+used.
 
-Credentials and Owner permissions were available, but the required explicit
-confirmation for creating/deleting resources and confirming subscription and
-location could not be obtained in the unattended session: the confirmation
-request returned that the user was unavailable. Therefore no disposable Azure
-or Entra object was created or deleted, no configure create/rerun/cleanup
-lifecycle was claimed, and no add/list/migrate/remove lifecycle was claimed.
-This confirmation gate is the sole current live E2E blocker; process fakes and
-the earlier infrastructure E2E are not presented as substitutes.
+#### Secure Webhook create and idempotent rerun
+
+The canonical Python setup CLI created the disposable registration and then ran
+again with the identical inputs. Both runs exited 0. The second inventory was
+identical for all security-sensitive IDs and settings:
+
+| Object | Stable value |
+|---|---|
+| Application client ID | `67912937-9e68-43db-a7e7-66ed431924d0` |
+| Application object ID | `edd08233-20f1-49f7-aaa2-1eace429e85b` |
+| Identifier URI | `api://67912937-9e68-43db-a7e7-66ed431924d0` |
+| API service principal | `70c5272e-b0f9-4f5d-abb0-53ce268cff25` |
+| Secure Webhook app role | `420deba6-7fae-4b4e-8770-4ce59a084423` |
+| AzNS assignment | `4dsIL_WU_EuxBoWrV97-HgNuRiZWGuNGo5zRerguZW0` |
+| Owners | exact caller and AzNS service-principal IDs |
+| Token/API contract | v2 token, application-only `ActionGroupsSecureWebhook` role |
+| AZD values | exact tenant, client ID, object ID, and identifier URI |
+
+A disposable Container App receiver in the central prefixed resource group was
+used instead of Slack. `POST /api/service-health` returned HTTP 200 before the
+real Easy Auth contract was applied. The central Action Group and baseline
+Service Health alert then used that receiver.
+
+#### Alert scope add, list, migrate, and remove
+
+The canonical Python scope CLI exercised the complete live lifecycle:
+
+1. Initial `list --json` returned zero manager-owned scopes.
+2. Adding the immutable central subscription failed closed with exit 1 because
+   the baseline alert already covered it; zero manager resources were created.
+3. Connectivity and Identity were added individually. Both returned `Added`,
+   Azure Monitor test status `Complete`, and enabled alerts/Action Groups.
+4. Re-adding Connectivity returned `AlreadyPresent`, `TestStatus: NotRun`, and
+   the same alert and Action Group IDs.
+5. A temporary Management Group contained only Connectivity and Identity.
+   Migration preview returned exactly those two overlaps and created zero
+   member resource groups.
+6. Forced migration created and signed-tested both fan-out members, enabled the
+   replacements, and removed the two individual paths. `list --json` returned
+   one enabled logical Management Group scope covering exactly two descendants
+   with no overlap.
+7. Signed-tested individual coverage was restored before Management Group
+   removal. Removal deleted both fan-out members, and the final list contained
+   exactly the two enabled individual scopes with zero Management Group alert
+   resources.
+
+The live destructive confirmation path exposed one defect: a TTY-like stdin
+that returned EOF produced an uncaught traceback. The CLI now converts
+`EOFError` to the existing explicit fail-closed error. A regression test pins
+the exit-1/no-traceback behavior. The live retry returned exit 1 with that
+message and left both Management Group members unchanged; the separately
+pre-approved `--force` removal then completed.
+
+#### Cleanup and zero-residual proof
+
+`pre-cleanup-inventory.json` captured five exact prefixed resource groups, three
+Action Groups, three Activity Log Alerts, the temporary Management Group and
+its Owner assignment, the application, API service principal, AzNS app-role
+assignment, and local AZD environment. Cleanup verified ownership tags and
+exact object identities before deleting only those objects.
+
+`after.json`, captured at `2026-08-10T22:57:19Z`, proves:
+
+- zero prefixed resource groups across all three subscriptions;
+- zero prefixed Action Groups and Activity Log Alerts;
+- zero resources carrying `azd-env-name=pye2e-20260810-211320-53f3`;
+- zero matching Entra applications, API service principals, and AzNS
+  app-role assignments;
+- zero assignments at the deleted temporary Management Group scope;
+- zero matching Management Groups and local AZD environments;
+- the official AzNS service principal remains intact; and
+- Connectivity and Identity are active direct children of tenant root
+  `cc8ad65c-a10c-42a1-9fdc-65d99db48492`.
+
+The before and after inventories both contain zero disposable objects. No
+unavoidable residual remains. Microsoft Learn MCP verification remains the
+separate tool-availability blocker documented above; the official Learn web
+fallback is not represented as MCP validation.

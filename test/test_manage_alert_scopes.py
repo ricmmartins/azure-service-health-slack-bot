@@ -984,3 +984,42 @@ def test_interactive_confirmation_prompt_uses_stderr(monkeypatch, capsys):
     assert result == 0
     assert json.loads(captured.out) == {"confirmed": True}
     assert captured.err == "Delete managed resources? [y/N] "
+
+
+def test_interactive_confirmation_eof_fails_closed(monkeypatch, capsys):
+    class InteractiveInput(io.StringIO):
+        def isatty(self):
+            return True
+
+    class FakeManager:
+        def __init__(self, _azure, **kwargs):
+            self.confirm = kwargs["confirm_destructive"]
+
+        def execute(self, *_args, **_kwargs):
+            return {"confirmed": self.confirm("Delete managed resources?")}
+
+    monkeypatch.setattr(manage_alert_scopes, "AzureCli", lambda: object())
+    monkeypatch.setattr(manage_alert_scopes, "ScopeManager", FakeManager)
+    monkeypatch.setattr(
+        manage_alert_scopes.sys,
+        "stdin",
+        InteractiveInput(""),
+    )
+
+    result = manage_alert_scopes.main(
+        [
+            "remove-subscription",
+            "--subscription-id",
+            TARGET_SUBSCRIPTION,
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert captured.out == ""
+    assert (
+        captured.err
+        == "Delete managed resources? [y/N] ERROR: Destructive operations require "
+        "interactive confirmation or --force for pre-approved noninteractive automation.\n"
+    )
