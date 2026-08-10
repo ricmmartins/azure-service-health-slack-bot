@@ -1,3 +1,4 @@
+import io
 import json
 import subprocess
 from copy import deepcopy
@@ -5,6 +6,7 @@ from copy import deepcopy
 import pytest
 
 import scripts.manage_alert_scopes as scope_cli
+import scripts.manage_alert_scopes as manage_alert_scopes
 from scripts.manage_alert_scopes import (
     AzureCli,
     MANAGER_TAG,
@@ -862,3 +864,38 @@ def test_management_group_state_does_not_mutate_inputs():
     before = deepcopy(first)
     manager().new_management_group_state(GROUP_ID, [first])
     assert first == before
+
+
+def test_interactive_confirmation_prompt_uses_stderr(monkeypatch, capsys):
+    class InteractiveInput(io.StringIO):
+        def isatty(self):
+            return True
+
+    class FakeManager:
+        def __init__(self, _azure, **kwargs):
+            self.confirm = kwargs["confirm_destructive"]
+
+        def execute(self, *_args, **_kwargs):
+            return {"confirmed": self.confirm("Delete managed resources?")}
+
+    monkeypatch.setattr(manage_alert_scopes, "AzureCli", lambda: object())
+    monkeypatch.setattr(manage_alert_scopes, "ScopeManager", FakeManager)
+    monkeypatch.setattr(
+        manage_alert_scopes.sys,
+        "stdin",
+        InteractiveInput("yes\n"),
+    )
+
+    result = manage_alert_scopes.main(
+        [
+            "remove-subscription",
+            "--subscription-id",
+            TARGET_SUBSCRIPTION,
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert result == 0
+    assert json.loads(captured.out) == {"confirmed": True}
+    assert captured.err == "Delete managed resources? [y/N] "

@@ -2332,7 +2332,8 @@ def main(argv: list[str] | None = None) -> int:
                 "Destructive operations require interactive confirmation or --force for "
                 "pre-approved noninteractive automation."
             )
-        response = input(f"{question} [y/N] ").strip().lower()
+        print(f"{question} [y/N] ", end="", file=sys.stderr, flush=True)
+        response = input().strip().lower()
         return response in ("y", "yes")
 
     try:

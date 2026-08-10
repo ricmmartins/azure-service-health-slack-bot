@@ -129,11 +129,13 @@ itself escaped JSON containing `ServiceName` and `RegionName`, as documented in
 
 ## Prerequisites
 
-- Python 3.13 for local development
+- Python 3.13 for local development and the cross-platform operational CLIs
 - Current stable [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli),
   [Azure Developer CLI (`azd`)](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd),
-  PowerShell 7+ (`pwsh`) for the AZD setup hook, and Docker with a Linux
-  container engine
+  and Docker with a Linux container engine
+- PowerShell 7+ (`pwsh`) only when running the AZD hook on Windows or testing
+  the temporary compatibility wrappers; all operational business logic runs in
+  Python
 - A Slack app with an [`xoxb-` bot token](https://docs.slack.dev/authentication/tokens/#bot)
   limited to the granular [`chat:write` scope](https://docs.slack.dev/reference/scopes/chat.write)
   and invited to every configured destination channel
@@ -257,7 +259,7 @@ unset SLACK_BOT_TOKEN
 > (`base64ToString(...)`) before writing it to the container's
 > `SERVICE_HEALTH_ROUTES_JSON` environment variable.
 
-The pre-provision hook runs `scripts/configure-secure-webhook.ps1`. It creates
+The pre-provision hook runs `scripts/configure_secure_webhook.py`. It creates
 or reuses the protected API app registration, app role, API service
 principal, AzNS ownership, and AzNS app-role assignment, then writes the
 resulting IDs to the AZD environment. Azure Monitor requires both ownership of
@@ -266,6 +268,10 @@ the protected API app by the AzNS service principal and the
 re-run) and requires Microsoft Graph application administration permission.
 Azure CLI and AZD maintain separate authentication sessions, so both
 `az login` and `azd auth login` are required on a clean workstation.
+
+The legacy `scripts/configure-secure-webhook.ps1` entry point remains
+temporarily available as a thin compatibility wrapper. It delegates all Entra
+and AZD operations to the Python CLI and contains no setup business logic.
 
 `infra/modules/service-health-alert.bicep` is deliberately isolated so
 `scripts/manage_alert_scopes.py` can create only the Activity Log Alerts and
@@ -380,7 +386,7 @@ terminal in the repository root.
   Administrator`, or an admin who can grant consent once).
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli),
   [Azure Developer CLI (`azd`)](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd),
-  PowerShell 7+ (`pwsh`), Git, and Python 3 installed inside WSL.
+  Git, and Python 3 installed inside WSL.
 - Docker Desktop using the WSL 2 backend, Linux containers, and WSL integration
   enabled for the distribution where you run this guide. Docker recommends
   WSL 2.1.5 or later.
@@ -404,7 +410,7 @@ Verify the local toolchain and Docker engine before continuing:
 ```bash
 az version
 azd version
-pwsh --version
+python3 --version
 docker context show
 docker info --format 'engine={{.ServerVersion}} os={{.OSType}}'
 docker run --rm hello-world
@@ -536,7 +542,7 @@ az provider register --namespace Microsoft.ContainerService --wait
 azd provision
 ```
 
-This runs `scripts/configure-secure-webhook.ps1` as a `preprovision` hook
+This runs `scripts/configure_secure_webhook.py` as a `preprovision` hook
 before touching any Azure resource. The script:
 
 1. Creates (or reuses) an Entra app registration that represents the
@@ -900,7 +906,7 @@ unset API_CLIENT_ID
 
 `--purge` also removes the soft-deleted Key Vault so the name can be reused.
 `azd down` does not remove the Entra app registration created by
-`configure-secure-webhook.ps1`; the explicit `az ad app delete` does. Never
+`configure_secure_webhook.py`; the explicit `az ad app delete` does. Never
 delete Microsoft's official AzNS AAD Webhook service principal. If you are
 keeping the deployment, do not run these cleanup commands.
 
@@ -985,7 +991,7 @@ correct the Table entity if needed, and then replay the alert.
 pip install -r requirements-test.txt
 pytest
 flake8 .
-pwsh -NoProfile -Command "Invoke-Pester test/ManageAlertScopes.Tests.ps1 -CI"
+pwsh -NoProfile -Command "Invoke-Pester test/ManageAlertScopes.Tests.ps1, test/ConfigureSecureWebhook.Tests.ps1 -CI"
 ```
 
 Tests cover the Common Alert Schema parser, routing rules, Easy Auth/app-role
@@ -995,8 +1001,11 @@ bootstrap/credential selection. Python tests fake every Azure CLI and REST
 boundary and cover day-2 add/list/remove/migrate behavior, idempotency,
 cross-tenant rejection, overlap prevention, bounded read retries, permission
 and test failures, confirmation, `--what-if`, coverage-gap prevention,
-destructive rollback, and the absence of central redeployment commands.
-Pester retains parser and delegation coverage for the compatibility wrapper.
+destructive rollback, and the absence of central redeployment commands. They
+also cover delegated and service-principal Secure Webhook setup, Graph request
+portability, idempotent app/role/owner/assignment creation, ambiguity failures,
+and AZD error redaction. Pester retains parser and delegation coverage for the
+temporary compatibility wrappers only.
 
 ## Community and support
 
