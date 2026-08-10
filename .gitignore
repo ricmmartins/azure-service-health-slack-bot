@@ -37,3 +37,4 @@ debug.py
 
 # Local Service Health routing overrides (see README deployment guide)
 config/service_health_routes.json
+testResults.xml
