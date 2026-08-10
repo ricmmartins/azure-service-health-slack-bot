@@ -5,25 +5,18 @@ param secureWebhookIdentifierUri string
 param tenantId string
 param targetSubscriptionId string
 
-@description('''
-Optional Management Group ID. When set, the Activity Log Alert is scoped to
-this management group instead of a single subscription, so Service Health
-events from every subscription under it are captured by one deployment.
-Deploying this way requires the principal running `azd provision`/`az
-deployment` to hold at least Monitoring Contributor (or Contributor) on the
-management group, in addition to the usual subscription-level permissions
-for the rest of the stack.
-''')
-param managementGroupId string = ''
-
 param tags object
 
-var alertScopes = empty(managementGroupId)
-  ? ['/subscriptions/${targetSubscriptionId}']
-  : ['/providers/Microsoft.Management/managementGroups/${managementGroupId}']
+@description('Optional suffix for day-2 scope resources. Empty preserves the original azd resource names.')
+param resourceSuffix string = ''
+
+@description('Whether the Activity Log Alert is enabled when deployed.')
+param alertEnabled bool = true
+
+var nameSuffix = empty(resourceSuffix) ? '' : '-${resourceSuffix}'
 
 resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
-  name: 'ag-${environmentName}-service-health'
+  name: 'ag-${environmentName}-service-health${nameSuffix}'
   location: 'Global'
   tags: tags
   properties: {
@@ -44,12 +37,14 @@ resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
 }
 
 resource activityLogAlert 'Microsoft.Insights/activityLogAlerts@2020-10-01' = {
-  name: 'ala-${environmentName}-service-health'
+  name: 'ala-${environmentName}-service-health${nameSuffix}'
   location: 'Global'
   tags: tags
   properties: {
-    enabled: true
-    scopes: alertScopes
+    enabled: alertEnabled
+    scopes: [
+      '/subscriptions/${targetSubscriptionId}'
+    ]
     condition: {
       allOf: [
         {
@@ -70,3 +65,5 @@ resource activityLogAlert 'Microsoft.Insights/activityLogAlerts@2020-10-01' = {
 
 output actionGroupId string = actionGroup.id
 output activityLogAlertId string = activityLogAlert.id
+output actionGroupName string = actionGroup.name
+output activityLogAlertName string = activityLogAlert.name

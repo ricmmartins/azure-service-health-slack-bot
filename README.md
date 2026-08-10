@@ -24,6 +24,7 @@ events, and no Azure support-ticket workflow. It only initializes a Slack
 - [Production decisions and trade-offs](#production-decisions-and-trade-offs)
 - [Deploy with AZD](#deploy-with-azd)
 - [Step-by-step deployment guide](#step-by-step-deployment-guide)
+- [Day-2 alert scope management](#day-2-alert-scope-management)
 - [Operations](#operations)
 - [Tests](#tests)
 
@@ -38,7 +39,7 @@ the path that matches what you need to evaluate:
 | Understand the event path and trust boundaries | [Architecture](#architecture), [Security](#security), and [Production decisions and trade-offs](#production-decisions-and-trade-offs) |
 | Run the parser and application locally | [Local development](#local-development) and [Service Health routing](#service-health-routing) |
 | Deploy the first subscription safely | [Step-by-step deployment guide](#step-by-step-deployment-guide) |
-| Expand beyond one subscription | [Multi-subscription / tenant-wide alerting](#multi-subscription--tenant-wide-alerting-management-group-scope) |
+| Expand beyond one subscription | [Day-2 alert scope management](#day-2-alert-scope-management) |
 | Monitor or troubleshoot the integration | [Operations](#operations) and [Troubleshooting](#troubleshooting) |
 
 ## Architecture
@@ -264,10 +265,12 @@ re-run) and requires Microsoft Graph application administration permission.
 Azure CLI and AZD maintain separate authentication sessions, so both
 `az login` and `azd auth login` are required on a clean workstation.
 
-`infra/modules/service-health-alert.bicep` is deliberately isolated so the
-Activity Log Alert can be repeated for additional subscriptions while the
-Container App remains central. Deploy that module at the target subscription
-with the central webhook and Secure Webhook app values.
+`infra/modules/service-health-alert.bicep` is deliberately isolated so
+`scripts/manage-alert-scopes.ps1` can create only the Activity Log Alerts and
+Action Groups needed by additional subscriptions or a logical Management
+Group scope. The
+Container App, image, networking, Storage, Key Vault, ACR, and Application
+Insights remain central and are not part of day-2 scope operations.
 
 Secrets are copied from AZD environment parameters into Key Vault during
 provisioning and exposed to the Container App only as Key Vault secret
@@ -279,7 +282,7 @@ manifest retention policy. Azure Container Registry retention is a
 [preview, Premium-only feature](https://learn.microsoft.com/azure/container-registry/container-registry-retention-policy);
 configuring it on `Basic` causes provisioning to fail.
 
-### Multi-subscription / tenant-wide alerting (Management Group scope)
+## Day-2 alert scope management
 
 No prior Log Analytics or Azure Monitor Logs setup is required for any of
 this — Service Health events flow through the platform **Activity Log**,
@@ -287,32 +290,70 @@ which is enabled by default on every Azure subscription at no cost. This
 means the bot works out of the box for any Azure customer, even one with a
 brand-new subscription and no monitoring configured.
 
-By default the Activity Log Alert is scoped to the single subscription
-where you provision (`targetSubscriptionId`). If a customer manages many
-subscriptions under one or more **management groups**, you can scope the
-alert to a management group instead, so one deployment captures Service
-Health events for every subscription under it:
+Run the initial `azd up` once per Microsoft Entra tenant. It creates the central
+runtime and an alert for the deployment subscription. After that, use the
+PowerShell 7+ day-2 command; do **not** rerun `azd up` just to add or remove
+coverage:
 
-```sh
-azd env set AZURE_MANAGEMENT_GROUP_ID "<management-group-id>"
-azd provision
+```powershell
+./scripts/manage-alert-scopes.ps1 list
+./scripts/manage-alert-scopes.ps1 add-subscription `
+  -SubscriptionId "00000000-0000-0000-0000-000000000000"
+./scripts/manage-alert-scopes.ps1 add-management-group `
+  -ManagementGroupId "platform"
+./scripts/manage-alert-scopes.ps1 migrate-to-management-group `
+  -ManagementGroupId "platform" -WhatIf
+./scripts/manage-alert-scopes.ps1 migrate-to-management-group `
+  -ManagementGroupId "platform"
 ```
 
-This overrides the `managementGroupId` parameter in
-`infra/modules/service-health-alert.bicep`, changing the alert's `scopes`
-from `/subscriptions/<subscriptionId>` to
-`/providers/Microsoft.Management/managementGroups/<management-group-id>`.
-Requirements:
+Use `-EnvironmentName <azd-environment-name>` when the signed-in tenant has
+more than one deployment. `list` reports the tenant, effective coverage,
+enabled state, Activity Log Alert and Action Group resource IDs, and any
+individual subscription alert overlapped by a Management Group alert.
 
-- The principal running `azd provision`/`az deployment` needs **Monitoring
-  Contributor** (or **Contributor**) on the management group, in addition
-  to the usual subscription-level roles for the rest of the stack.
-- The Container App, Key Vault, Storage, and networking resources are still
-  deployed once, into the target subscription — only the alert's scope
-  changes, so no extra Container Apps deployments are needed per
-  subscription.
-- Leave `AZURE_MANAGEMENT_GROUP_ID` unset (the default) to keep the
-  existing single-subscription behavior.
+The command discovers the central resource group, environment, tenant,
+Container App webhook, and Secure Webhook client/object/identifier values from
+Azure resources and tags. It does not use an AZD environment, local cached
+secrets, or the original deployment machine, and it never reads or prints the
+Slack token. The initial AZD-owned baseline alert and its anchor Action Group
+remain immutable: day-2 discovery requires
+`service-health-managed-by=manage-alert-scopes`, excludes the baseline resources,
+and rejects any new scope that would overlap their coverage.
+
+| Command | Behavior |
+|---|---|
+| `list` | Read-only inventory and overlap/effective coverage analysis. |
+| `add-subscription -SubscriptionId <id>` | Creates a dedicated peripheral resource group containing only the scope's Action Group and initially disabled Activity Log Alert, runs Azure Monitor's official signed `servicehealth` test, then enables the alert. Repeating the command is safe. |
+| `add-management-group -ManagementGroupId <id>` | Enumerates the Management Group's accessible descendants and adds one subscription-scoped alert path per descendant, managed as one logical scope. It proceeds only when no enabled individual or Management Group scope overlaps it. |
+| `remove-subscription -SubscriptionId <id>` | Removes an individual alert only when an enabled Management Group alert is proven to cover the subscription. |
+| `remove-management-group -ManagementGroupId <id>` | Removes all member alert paths for a logical Management Group scope only when every accessible descendant subscription has proven replacement coverage. |
+| `migrate-to-management-group -ManagementGroupId <id>` | Creates and tests every descendant subscription path while disabled, asks for explicit confirmation, then hands off each overlapping subscription without leaving two active paths. It rechecks the replacement alert and Action Group before deleting the disabled original and restores the original if the replacement becomes inactive. |
+
+Add operations support `-WhatIf`. Remove and migration operations support
+`-WhatIf`, require an explicit confirmation, and accept `-Force` only for
+non-interactive automation where that approval has already happened. The
+manager fails closed if tenant membership, Management Group descendants,
+existing coverage, permissions, or Secure Webhook test success cannot be
+proven. It rejects cross-tenant subscriptions and Management Groups.
+Manager-tagged Action Groups left behind by an interrupted delete remain
+discoverable in `list` as cleanup-required state; a later repair or confirmed
+remove can reconcile them without relying on local files or the original
+workstation.
+
+The operator needs **Contributor** on every target descendant subscription
+where a dedicated alert resource group is created, plus read access to the
+target Management Group and all managed subscriptions so membership and
+overlap detection are complete. Permission checks run before mutation and
+report the missing Azure operations.
+
+Azure Activity Log Alerts cannot natively target one selected Management Group:
+`tenantScope` represents the whole tenant and cannot be combined with
+subscription scopes. The manager therefore implements a Management Group as a
+logical scope that fans out to one alert per descendant subscription. The
+legacy `managementGroupId` initial-deployment parameter is retained only for
+configuration compatibility and must be empty; configure Management Group
+coverage with the day-2 command after the central deployment.
 
 ## Step-by-step deployment guide
 
@@ -808,41 +849,21 @@ Groups suppress all calls to that endpoint for 15 minutes. Fix the underlying
 issue, wait the full cooldown, and then run one official `servicehealth` test.
 During the cooldown, even correct configuration can appear broken.
 
-### 8. Add more subscriptions (optional)
+### 8. Add more subscriptions or a Management Group (optional)
 
-The Container App and Secure Webhook app registration are central; only the
-Activity Log Alert + Action Group need to exist per subscription. Deploy
-`infra/modules/service-health-alert.bicep` into a resource group in any
-additional subscription, reusing the same webhook URI and Secure Webhook
-identity:
+The Container App and Secure Webhook app registration are central. Use the
+day-2 manager to discover them from Azure and add coverage without reading AZD
+values or reprovisioning the runtime:
 
-```bash
-WEBHOOK_URI="$(azd env get-value SERVICE_APP_URI)/api/service-health"
-API_OBJECT_ID="$(azd env get-value SERVICE_HEALTH_API_OBJECT_ID)"
-API_IDENTIFIER_URI="$(azd env get-value SERVICE_HEALTH_API_IDENTIFIER_URI)"
-TENANT_ID="$(azd env get-value AZURE_TENANT_ID)"
-ENV_NAME="$(azd env get-value AZURE_ENV_NAME)"
-
-OTHER_SUBSCRIPTION_ID="<other-subscription-id>"
-OTHER_RESOURCE_GROUP="<resource-group-in-other-subscription>"
-az account set --subscription "$OTHER_SUBSCRIPTION_ID"
-az group create --name "$OTHER_RESOURCE_GROUP" --location "<azure-region>"
-az deployment group create \
-  --resource-group "$OTHER_RESOURCE_GROUP" \
-  --template-file infra/modules/service-health-alert.bicep \
-  --parameters environmentName="$ENV_NAME" \
-               webhookUri="$WEBHOOK_URI" \
-               secureWebhookObjectId="$API_OBJECT_ID" \
-               secureWebhookIdentifierUri="$API_IDENTIFIER_URI" \
-               tenantId="$TENANT_ID" \
-               targetSubscriptionId="$OTHER_SUBSCRIPTION_ID" \
-               tags="{\"azd-env-name\":\"$ENV_NAME\"}"
+```powershell
+./scripts/manage-alert-scopes.ps1 list
+./scripts/manage-alert-scopes.ps1 add-subscription `
+  -SubscriptionId "<other-subscription-id>"
 ```
 
-Pull the `SERVICE_HEALTH_API_*` and `AZURE_TENANT_ID` values from
-individual `azd env get-value <name>` calls in the environment used for the
-original deployment. Avoid `azd env get-values` because it also prints the
-Slack token.
+The command automatically runs the official signed Secure Webhook test before
+enabling a new alert. Confirm the resulting test status and Slack message
+before treating the added scope as operational.
 
 ### 9. Update routing or redeploy later
 
@@ -913,6 +934,10 @@ Slack error, verify the configured channel IDs and bot channel membership.
 | Official test reports success but Slack has no message | Run the Slack validation in step 7.2. Confirm the token is a bot `xoxb` token, the ID is a channel ID rather than a name, the bot is invited, and `chat:write` is granted. |
 | Corrected webhook still receives nothing | Failed webhook retries suppress Action Group calls to the endpoint for 15 minutes. Wait for the cooldown before one new `servicehealth` test. |
 | `/readyz` returns `503` | Stream console and system logs with `az containerapp logs show`. Verify the managed identity role assignments, Key Vault/Table private endpoints, private DNS links, and that the current revision references the latest Key Vault secret. |
+| Day-2 discovery finds no deployment or more than one | Confirm Reader access to the central subscription and the `workload=azure-service-health-slack-bot` / `azd-env-name` tags. Pass `-EnvironmentName` when multiple environments exist. |
+| Day-2 discovery warns it is skipping a subscription | Stale or inaccessible cached subscriptions returned by `az account list` (for example an `AuthorizationFailed` or `SubscriptionNotFound` from another tenant) are skipped only during central discovery's initial resource-group listing so an explicitly requested, accessible environment is still found. Selected tenant/scope, permission, webhook, and destructive operations remain fail closed. Run `az account clear` then `az login` to prune stale subscriptions. |
+| Day-2 add/remove reports missing permissions | Grant Contributor on each target subscription and read access to the Management Group hierarchy. The command does not elevate its own permissions. |
+| Day-2 add leaves an alert disabled | The official signed Secure Webhook test did not complete. Correct the webhook/auth issue, observe the 15-minute retry cooldown if applicable, and repeat the idempotent add command. |
 
 ### Rollback
 
@@ -952,12 +977,17 @@ correct the Table entity if needed, and then replay the alert.
 pip install -r requirements-test.txt
 pytest
 flake8 .
+pwsh -NoProfile -Command "Invoke-Pester test/ManageAlertScopes.Tests.ps1 -CI"
 ```
 
 Tests cover the Common Alert Schema parser, routing rules, Easy Auth/app-role
 authorization, Table Storage idempotency, the processing state machine, Slack
 message rendering and error classification, the Flask endpoints, and runtime
-bootstrap/credential selection.
+bootstrap/credential selection. Pester tests mock every Azure CLI call and
+cover day-2 add/list/remove/migrate behavior, idempotency, cross-tenant
+rejection, overlap prevention, permission and test failures, confirmation,
+`-WhatIf`, coverage-gap prevention, and the absence of central redeployment
+commands.
 
 ## License
 

@@ -46,6 +46,89 @@ function Invoke-GraphRest {
     return $raw | ConvertFrom-Json
 }
 
+# The deployment caller must be added as an owner of the secure-webhook
+# application. Graph /me only works for delegated (interactive user) tokens; when
+# azd provision runs under a service principal or federated CI identity it uses
+# app-only Graph auth, and /me fails with
+# "/me request is only valid with delegated authentication flow". This helper
+# inspects the already-loaded 'az account show' object to pick the correct
+# resolution path and returns the caller's directory object id:
+#   * user            -> Graph /me (delegated token carries the user identity)
+#   * servicePrincipal -> resolve the SP directory object by its client/app id
+# It requires exactly one match for the service-principal path and fails loudly
+# on zero or ambiguous results rather than silently skipping ownership.
+function Resolve-CallerOwnerObjectId {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)] $Account,
+        [Parameter(Mandatory = $true)][scriptblock] $GraphInvoker
+    )
+
+    $userType = $null
+    if ($Account.PSObject.Properties['user'] -and $Account.user) {
+        $userType = $Account.user.type
+    }
+
+    # Azure CLI has emitted this as "user"/"servicePrincipal" historically but the
+    # exact casing is not contractually guaranteed, so normalize deliberately
+    # instead of comparing against a single literal.
+    $normalizedType = if ($null -ne $userType) {
+        ([string]$userType).Trim().ToLowerInvariant()
+    }
+    else {
+        ""
+    }
+
+    switch ($normalizedType) {
+        "serviceprincipal" {
+            $clientId = $null
+            if ($Account.PSObject.Properties['user'] -and $Account.user) {
+                $clientId = $Account.user.name
+            }
+            if ([string]::IsNullOrWhiteSpace($clientId)) {
+                throw "Cannot resolve deployment caller: 'az account show' reported a service principal but account.user.name (client id) is empty."
+            }
+
+            $escapedClientId = ([string]$clientId).Replace("'", "''")
+            $principals = & $GraphInvoker -Method GET `
+                -Uri "https://graph.microsoft.com/v1.0/servicePrincipals?`$filter=appId eq '$escapedClientId'&`$select=id"
+
+            $ids = @()
+            if ($principals -and $principals.PSObject.Properties['value'] -and $principals.value) {
+                $ids = @(
+                    $principals.value |
+                        ForEach-Object { $_.id } |
+                        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                        Select-Object -Unique
+                )
+            }
+
+            if ($ids.Count -eq 0) {
+                throw "Cannot add deployment caller as application owner: no service principal found in the directory for client id '$clientId'."
+            }
+            if ($ids.Count -gt 1) {
+                throw "Cannot add deployment caller as application owner: ambiguous service principal resolution for client id '$clientId' ($($ids.Count) matches)."
+            }
+            return $ids[0]
+        }
+        "user" {
+            $me = & $GraphInvoker -Method GET `
+                -Uri "https://graph.microsoft.com/v1.0/me?`$select=id"
+            if (-not $me -or [string]::IsNullOrWhiteSpace($me.id)) {
+                throw "Cannot resolve deployment caller: Microsoft Graph /me returned no object id for the signed-in user."
+            }
+            return $me.id
+        }
+        default {
+            throw "Cannot resolve deployment caller: unsupported Azure CLI account user type '$userType'. Expected 'user' or 'servicePrincipal'."
+        }
+    }
+}
+
+if ($MyInvocation.InvocationName -eq ".") {
+    return
+}
+
 if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
     throw "Azure CLI is required. Install it and run 'az login'."
 }
@@ -134,6 +217,20 @@ if (-not $aznsPrincipal) {
 
 $owners = Invoke-GraphRest -Method GET `
     -Uri "https://graph.microsoft.com/v1.0/applications/$($application.id)/owners?`$select=id"
+$callerObjectId = Resolve-CallerOwnerObjectId -Account $account -GraphInvoker {
+    param([string] $Method, [string] $Uri)
+    Invoke-GraphRest -Method $Method -Uri $Uri
+}
+$callerOwner = $owners.value | Where-Object { $_.id -eq $callerObjectId }
+if (-not $callerOwner) {
+    $body = @{
+        '@odata.id' = "https://graph.microsoft.com/v1.0/directoryObjects/$callerObjectId"
+    }
+    Invoke-GraphRest -Method POST `
+        -Uri "https://graph.microsoft.com/v1.0/applications/$($application.id)/owners/`$ref" `
+        -BodyObject $body | Out-Null
+}
+
 $aznsOwner = $owners.value | Where-Object { $_.id -eq $aznsPrincipal.id }
 if (-not $aznsOwner) {
     $body = @{

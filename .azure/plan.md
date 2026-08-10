@@ -51,8 +51,9 @@ was already self-contained and had zero dependency on the excluded code.
   own public ingress is unaffected — only egress to KV/Storage is routed
   privately.
 - **Alerting source**: Activity Log Alert + Secure Action Group
-  (`infra/modules/service-health-alert.bicep`), isolated so it can be
-  redeployed per additional subscription
+  (`infra/modules/service-health-alert.bicep`), isolated behind
+  `scripts/manage-alert-scopes.ps1` so subscriptions and Management Groups can
+  be managed after deployment without reprovisioning the central runtime
 
 ## Scope exclusions
 
@@ -68,6 +69,8 @@ service_health/                 Parser, routing, auth, storage, Slack, runtime, 
 infra/main.bicep                Subscription-scope orchestration
 infra/modules/                  registry, security, storage, container-app, observability, service-health-alert
 scripts/configure-secure-webhook.ps1   Idempotent Entra app registration/role setup
+scripts/manage-alert-scopes.ps1        Tenant-bound day-2 subscription/MG alert manager
+infra/day2/                            Reusable peripheral alert deployment entry point
 config/service_health_routes.example.json
 test/                           Parser/routing/auth/storage/processor/Slack/app/bootstrap tests
 .github/workflows/ci.yml        pytest+flake8, bicep build/lint, docker build
@@ -264,3 +267,142 @@ The exercise reconciled these production details:
 The canonical reproducible commands, troubleshooting, cooldown warning,
 cleanup, and rollback procedure now live in the README rather than a duplicate
 runbook.
+
+## Isolated live day-2 E2E validation plan
+
+**Status: Validated.** Pre-deployment checks and the isolated Bicep what-if
+passed on 2026-08-09. Live execution is authorized only inside the boundary
+below; cleanup still requires separate confirmation.
+
+### Approved isolation boundary
+
+| Item | Approved value |
+|---|---|
+| Test tenant | `cc8ad65c-a10c-42a1-9fdc-65d99db48492` |
+| Central subscription | Management — `09f7fca2-63df-4326-b31c-aec3bcbb23db` |
+| Region | East US 2 |
+| Child test Management Group membership | Connectivity — `d61e43e0-4793-4b0e-ac08-002e8c18763f`; Identity — `5f48510d-3bdc-43e0-babf-bb7860b6f76b` |
+| Required exclusion | The central Management subscription remains outside the child test Management Group. |
+
+**Hard guard:** the healthy `rg-service-health-test` environment in the
+separate tenant whose ID starts with `16b3` is out of scope. Validation must
+fail closed if discovery, the selected Azure context, any resource ID, or any
+planned operation points to that tenant, resource group, or its resources.
+
+### Temporary footprint and secret handling
+
+The isolated run may later create a new child Management Group and move only
+the two approved test subscriptions into it. The Management subscription may
+host a separate AZD environment with its own resource group, VNet/subnets,
+Private Endpoints and DNS links, managed identity and role assignments,
+Container Registry, Key Vault, Storage account/table, Log Analytics,
+Application Insights, Container Apps environment/app, Entra protected API,
+baseline Action Group/Activity Log Alert, and day-2 peripheral alert resource
+groups. None of these resources may reuse the active environment.
+
+Expected temporary cost comes mainly from the always-ready Container App
+(`minReplicas: 1`), Container Registry, two Private Endpoints, Log Analytics /
+Application Insights ingestion, and minimal Storage transactions. Management
+Groups, Activity Log Alerts, and low-volume Action Groups have no expected
+material direct charge. Record actual resource names and timestamps before
+creation so cost and cleanup can be audited.
+
+Slack bot token and channel configuration must be entered or reused only from
+local hidden prompts / protected AZD environment storage. Never echo, print,
+log, paste into command arguments, commit, or include credentials in validation
+evidence. Unset transient shell variables immediately after use.
+
+### Validation order and gates
+
+1. Read-only preflight: prove the signed-in tenant, all three subscription
+   tenant IDs, current Management Group ancestry, provider registration, and
+   required RBAC. Stop if any value differs from the approved boundary.
+2. Review Bicep build/lint output and an Azure deployment what-if for the new
+   isolated environment. Redact secret values and stop on deletion/replacement
+   of any pre-existing resource. A cloud what-if is deferred until the isolated
+   environment parameters and locally held Slack values are available.
+3. After the current plan-only hold is lifted, create the child test Management
+   Group, place only Connectivity and Identity beneath it, and re-prove that
+   Management remains outside.
+4. Deploy one new central environment into Management, configure its signed
+   Secure Webhook, and validate `/healthz`, `/readyz`, unauthenticated webhook
+   rejection, baseline alert ownership, and Slack delivery.
+5. Run day-2 `list`; prove the AZD-owned baseline alert and anchor Action Group
+   are not returned as manager-owned scopes.
+6. Add Connectivity and Identity individually. Require successful official
+   signed Secure Webhook tests, repeat both adds to prove idempotency, and verify
+   `list` reports exactly the two enabled day-2 scopes without baseline overlap.
+7. Run `migrate-to-management-group -WhatIf`; require a create/validate/enable-
+   before-delete plan and no central-runtime operation. Then, only with explicit
+   destructive confirmation, run the migration and prove every descendant
+   subscription replacement is tested before its individual alert is disabled
+   and removed.
+8. Run `list` again; prove effective coverage for both child subscriptions, no
+   duplicate delivery, no individually managed overlap, and an unchanged
+   central baseline/runtime.
+9. Capture resource IDs, timestamps, signed-test states, command exit codes, and
+   sanitized outputs. Do not capture payloads or credentials.
+10. Cleanup is a separate destructive phase requiring new confirmation. Before
+    deleting or moving anything, inventory the isolated resources, verify no
+    active-environment IDs are present, restore subscription ancestry safely,
+    and confirm no required coverage gap will be introduced.
+
+### Pre-deployment validation proof
+
+| Check | Result |
+|---|---|
+| PowerShell parser | **Passed** for `scripts/manage-alert-scopes.ps1` and `test/ManageAlertScopes.Tests.ps1` |
+| Pester 5.7.1 mocked day-2 suite | **53 passed**, 0 failed, 0 skipped |
+| Python tests and lint | **48 passed**; flake8 clean |
+| Main and day-2 Bicep build/lint | **Passed**; existing `core.windows.net` environment-URL warning in `network.bicep` plus CLI upgrade notice only |
+| Docker image build | **Passed** as `azure-service-health-slack-bot:day2-final`; container user is `app` |
+| Azure identity and boundary | **Passed**: Azure CLI tenant and all three subscriptions match `cc8ad65c-a10c-42a1-9fdc-65d99db48492`; Management remains outside the isolated child MG |
+| Slack preflight | **Passed**: token format, `auth.test`, and a direct `chat.postMessage` to the configured channel; token never printed and clipboard cleared |
+| Secure Webhook identity | **Passed**: isolated Entra application, service principal, AzNS ownership, and app-role assignment configured idempotently |
+| Cloud deployment what-if | **Passed** via `az deployment sub what-if`: 25 creates in `rg-shb-day2-e2e-9fdc`, 0 deletes, 0 existing-resource modifications; two expected unresolved new role-assignment IDs |
+| Azure policy visibility | **Passed**: no policy assignments visible at the isolated subscription scope and no policy denial in what-if |
+| AZD package | **Passed** for the isolated environment |
+| Live resource validation | **Passed** for the approved isolated boundary; details below. Cleanup remains separately gated. |
+
+### Live day-2 E2E proof
+
+The approved isolated run completed on 2026-08-09. It did not query, deploy,
+update, or delete the healthy `rg-service-health-test` environment in the
+separate `16b3...` tenant.
+
+| Check | Observed result |
+|---|---|
+| Child topology | Created `mg-shb-day2-e2e-9fdc`; Connectivity and Identity are descendants; Management remains outside. |
+| Central runtime | Provisioned only in `rg-shb-day2-e2e-9fdc`; ACR image build and Container App revision succeeded. |
+| Runtime endpoints | `GET /healthz` and `GET /readyz` returned HTTP 200; unauthenticated `POST /api/service-health` returned HTTP 401. |
+| Slack boundary | `auth.test` and direct `chat.postMessage` succeeded without printing the token. |
+| Baseline protection | Central alert `ala-shb-day2-e2e-9fdc-service-health` remained enabled, subscription-scoped to Management, and has no day-2 manager tag. `list` did not return it. |
+| Individual adds | Connectivity and Identity each created one disabled peripheral path, passed the official signed test, enabled successfully, and returned `AlreadyPresent` on repeat. |
+| Signed test contract | Azure returned overall state `Complete` and receiver status `Succeeded`; both are now required exactly. |
+| MG preview | `migrate-to-management-group -WhatIf` planned the logical MG plus both overlapping subscriptions and made no mutation. |
+| MG migration | Created and tested one subscription-scoped member path in Connectivity and one in Identity, enabled both, then removed the two individual paths. |
+| Final inventory | `list` reports one enabled logical `managementGroup` scope, two covered descendants, two alert IDs, no delivery overlap, and the cleanup-required orphan Action Group retained by the failed pre-fan-out attempt. |
+| Central immutability | Baseline remained enabled and scoped to Management after migration; day-2 resources exist only in descendant peripheral resource groups. |
+
+Live validation found and corrected three Azure-contract issues:
+
+1. The Action Group API requires the deployment caller, as well as AzNS, to
+   own the protected API application. The setup script now adds both owners
+   idempotently.
+2. The official test uses `Complete` for the operation and `Succeeded` for the
+   Secure Webhook receiver, not `Completed`.
+3. Activity Log Alerts cannot natively target one selected Management Group.
+   `tenantScope` represents the whole tenant and cannot be combined with
+   non-empty scopes. Logical Management Group coverage now enumerates
+   descendants and manages one subscription-scoped member path per descendant.
+
+### Retained temporary resources and cleanup gate
+
+Cleanup is not authorized. The isolated central resource group, protected API,
+child Management Group, descendant alert resource groups, and subscription
+ancestry remain in place. The failed pre-fan-out attempt also left
+`rg-shb-day2-e2e-9fdc-alerts-mg-f90d88a59ce8` in Management with an Action
+Group but no Activity Log Alert. Before any cleanup, obtain separate
+confirmation, inventory all IDs again, restore Connectivity and Identity
+ancestry, and verify that deleting alerts cannot affect the protected baseline
+or create a required coverage gap.

@@ -21,17 +21,19 @@ param tenantId string = tenant().tenantId
 param acrSkuName string = 'Basic'
 
 @description('''
-Optional Management Group ID. When set, the Service Health Activity Log
-Alert is scoped to this management group instead of just this deployment's
-subscription, so a single deployment captures Service Health events across
-every subscription under the group. Requires Monitoring Contributor (or
-Contributor) on the management group for whoever runs provisioning.
+Deprecated. Management Group coverage is configured after the central
+deployment with scripts/manage-alert-scopes.ps1.
 ''')
+@allowed([
+  ''
+])
 param managementGroupId string = ''
-
 var resourceToken = toLower(uniqueString(subscription().id, environmentName))
 var resourceGroupName = 'rg-${environmentName}'
 var serviceHealthRoutesJson = base64ToString(serviceHealthRoutesJsonB64)
+var centralAlertSubscriptionId = empty(managementGroupId)
+  ? subscription().subscriptionId
+  : ''
 var tags = {
   'azd-env-name': environmentName
   workload: 'azure-service-health-slack-bot'
@@ -135,8 +137,7 @@ module serviceHealthAlert 'modules/service-health-alert.bicep' = {
     secureWebhookObjectId: secureWebhookObjectId
     secureWebhookIdentifierUri: secureWebhookIdentifierUri
     tenantId: tenantId
-    targetSubscriptionId: subscription().subscriptionId
-    managementGroupId: managementGroupId
+    targetSubscriptionId: centralAlertSubscriptionId
     tags: tags
   }
 }
