@@ -52,7 +52,7 @@ was already self-contained and had zero dependency on the excluded code.
   privately.
 - **Alerting source**: Activity Log Alert + Secure Action Group
   (`infra/modules/service-health-alert.bicep`), isolated behind
-  `scripts/manage-alert-scopes.ps1` so subscriptions and Management Groups can
+  `scripts/manage_alert_scopes.py` so subscriptions and Management Groups can
   be managed after deployment without reprovisioning the central runtime
 
 ## Scope exclusions
@@ -68,8 +68,10 @@ app.py                          Minimal Flask entrypoint (3 routes only)
 service_health/                 Parser, routing, auth, storage, Slack, runtime, telemetry
 infra/main.bicep                Subscription-scope orchestration
 infra/modules/                  registry, security, storage, container-app, observability, service-health-alert
-scripts/configure-secure-webhook.ps1   Idempotent Entra app registration/role setup
-scripts/manage-alert-scopes.ps1        Tenant-bound day-2 subscription/MG alert manager
+scripts/configure_secure_webhook.py    Idempotent Entra app registration/role setup
+scripts/configure-secure-webhook.ps1   Temporary compatibility wrapper for the Python CLI
+scripts/manage_alert_scopes.py         Tenant-bound day-2 subscription/MG alert manager
+scripts/manage-alert-scopes.ps1        Temporary compatibility wrapper for the Python CLI
 infra/day2/                            Reusable peripheral alert deployment entry point
 config/service_health_routes.example.json
 test/                           Parser/routing/auth/storage/processor/Slack/app/bootstrap tests

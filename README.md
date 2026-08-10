@@ -129,10 +129,13 @@ itself escaped JSON containing `ServiceName` and `RegionName`, as documented in
 
 ## Prerequisites
 
-- Python 3.13 for local development
+- Python 3.13 for local development and the cross-platform operational CLIs
 - Current stable [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli),
   [Azure Developer CLI (`azd`)](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd),
-  PowerShell 7+ (`pwsh`), and Docker with a Linux container engine
+  and Docker with a Linux container engine
+- PowerShell 7+ (`pwsh`) only when running the AZD hook on Windows or testing
+  the temporary compatibility wrappers; all operational business logic runs in
+  Python
 - A Slack app with an [`xoxb-` bot token](https://docs.slack.dev/authentication/tokens/#bot)
   limited to the granular [`chat:write` scope](https://docs.slack.dev/reference/scopes/chat.write)
   and invited to every configured destination channel
@@ -256,7 +259,7 @@ unset SLACK_BOT_TOKEN
 > (`base64ToString(...)`) before writing it to the container's
 > `SERVICE_HEALTH_ROUTES_JSON` environment variable.
 
-The pre-provision hook runs `scripts/configure-secure-webhook.ps1`. It creates
+The pre-provision hook runs `scripts/configure_secure_webhook.py`. It creates
 or reuses the protected API app registration, app role, API service
 principal, AzNS ownership, and AzNS app-role assignment, then writes the
 resulting IDs to the AZD environment. Azure Monitor requires both ownership of
@@ -266,8 +269,12 @@ re-run) and requires Microsoft Graph application administration permission.
 Azure CLI and AZD maintain separate authentication sessions, so both
 `az login` and `azd auth login` are required on a clean workstation.
 
+The legacy `scripts/configure-secure-webhook.ps1` entry point remains
+temporarily available as a thin compatibility wrapper. It delegates all Entra
+and AZD operations to the Python CLI and contains no setup business logic.
+
 `infra/modules/service-health-alert.bicep` is deliberately isolated so
-`scripts/manage-alert-scopes.ps1` can create only the Activity Log Alerts and
+`scripts/manage_alert_scopes.py` can create only the Activity Log Alerts and
 Action Groups needed by additional subscriptions or a logical Management
 Group scope. The
 Container App, image, networking, Storage, Key Vault, ACR, and Application
@@ -293,22 +300,22 @@ brand-new subscription and no monitoring configured.
 
 Run the initial `azd up` once per Microsoft Entra tenant. It creates the central
 runtime and an alert for the deployment subscription. After that, use the
-PowerShell 7+ day-2 command; do **not** rerun `azd up` just to add or remove
-coverage:
+cross-platform Python day-2 command; do **not** rerun `azd up` just to add or
+remove coverage:
 
-```powershell
-./scripts/manage-alert-scopes.ps1 list
-./scripts/manage-alert-scopes.ps1 add-subscription `
-  -SubscriptionId "00000000-0000-0000-0000-000000000000"
-./scripts/manage-alert-scopes.ps1 add-management-group `
-  -ManagementGroupId "platform"
-./scripts/manage-alert-scopes.ps1 migrate-to-management-group `
-  -ManagementGroupId "platform" -WhatIf
-./scripts/manage-alert-scopes.ps1 migrate-to-management-group `
-  -ManagementGroupId "platform"
+```sh
+python scripts/manage_alert_scopes.py list
+python scripts/manage_alert_scopes.py add-subscription \
+  --subscription-id "00000000-0000-0000-0000-000000000000"
+python scripts/manage_alert_scopes.py add-management-group \
+  --management-group-id "platform"
+python scripts/manage_alert_scopes.py migrate-to-management-group \
+  --management-group-id "platform" --what-if
+python scripts/manage_alert_scopes.py migrate-to-management-group \
+  --management-group-id "platform"
 ```
 
-Use `-EnvironmentName <azd-environment-name>` when the signed-in tenant has
+Use `--environment-name <azd-environment-name>` when the signed-in tenant has
 more than one deployment. `list` reports the tenant, effective coverage,
 enabled state, Activity Log Alert and Action Group resource IDs, and any
 individual subscription alert overlapped by a Management Group alert.
@@ -325,18 +332,24 @@ and rejects any new scope that would overlap their coverage.
 | Command | Behavior |
 |---|---|
 | `list` | Read-only inventory and overlap/effective coverage analysis. |
-| `add-subscription -SubscriptionId <id>` | Creates a dedicated peripheral resource group containing only the scope's Action Group and initially disabled Activity Log Alert, runs Azure Monitor's official signed `servicehealth` test, then enables the alert. Repeating the command is safe. |
-| `add-management-group -ManagementGroupId <id>` | Enumerates the Management Group's accessible descendants and adds one subscription-scoped alert path per descendant, managed as one logical scope. It proceeds only when no enabled individual or Management Group scope overlaps it. |
-| `remove-subscription -SubscriptionId <id>` | Removes an individual alert only when an enabled Management Group alert is proven to cover the subscription. |
-| `remove-management-group -ManagementGroupId <id>` | Removes all member alert paths for a logical Management Group scope only when every accessible descendant subscription has proven replacement coverage. |
-| `migrate-to-management-group -ManagementGroupId <id>` | Creates and tests every descendant subscription path while disabled, asks for explicit confirmation, then hands off each overlapping subscription without leaving two active paths. It rechecks the replacement alert and Action Group before deleting the disabled original and restores the original if the replacement becomes inactive. |
+| `add-subscription --subscription-id <id>` | Creates a dedicated peripheral resource group containing only the scope's Action Group and initially disabled Activity Log Alert, runs Azure Monitor's official signed `servicehealth` test, then enables the alert. Repeating the command is safe. |
+| `add-management-group --management-group-id <id>` | Enumerates the Management Group's accessible descendants and adds one subscription-scoped alert path per descendant, managed as one logical scope. It proceeds only when no enabled individual or Management Group scope overlaps it. |
+| `remove-subscription --subscription-id <id>` | Removes an individual alert only when an enabled Management Group alert is proven to cover the subscription. |
+| `remove-management-group --management-group-id <id>` | Removes all member alert paths for a logical Management Group scope only when every accessible descendant subscription has proven replacement coverage. |
+| `migrate-to-management-group --management-group-id <id>` | Creates and tests every descendant subscription path while disabled, asks for explicit confirmation, then hands off each overlapping subscription without leaving two active paths. It rechecks the replacement alert and Action Group before deleting the disabled original and restores the original if the replacement becomes inactive. |
 
-Add operations support `-WhatIf`. Remove and migration operations support
-`-WhatIf`, require an explicit confirmation, and accept `-Force` only for
+Add operations support `--what-if`. Remove and migration operations support
+`--what-if`, require an explicit confirmation, and accept `--force` only for
 non-interactive automation where that approval has already happened. The
 manager fails closed if tenant membership, Management Group descendants,
 existing coverage, permissions, or Secure Webhook test success cannot be
-proven. It rejects cross-tenant subscriptions and Management Groups.
+proven. It rejects cross-tenant subscriptions and Management Groups. Use
+`--json` for machine-readable output.
+
+The legacy `scripts/manage-alert-scopes.ps1` entry point remains temporarily
+available as a thin compatibility wrapper. It delegates every operation to the
+Python CLI and contains no Azure business logic.
+
 Manager-tagged Action Groups left behind by an interrupted delete remain
 discoverable in `list` as cleanup-required state; a later repair or confirmed
 remove can reconcile them without relying on local files or the original
@@ -373,7 +386,7 @@ terminal in the repository root.
   Administrator`, or an admin who can grant consent once).
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli),
   [Azure Developer CLI (`azd`)](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd),
-  PowerShell 7+ (`pwsh`), Git, and Python 3 installed inside WSL.
+  Git, and Python 3 installed inside WSL.
 - Docker Desktop using the WSL 2 backend, Linux containers, and WSL integration
   enabled for the distribution where you run this guide. Docker recommends
   WSL 2.1.5 or later.
@@ -397,7 +410,7 @@ Verify the local toolchain and Docker engine before continuing:
 ```bash
 az version
 azd version
-pwsh --version
+python3 --version
 docker context show
 docker info --format 'engine={{.ServerVersion}} os={{.OSType}}'
 docker run --rm hello-world
@@ -529,7 +542,7 @@ az provider register --namespace Microsoft.ContainerService --wait
 azd provision
 ```
 
-This runs `scripts/configure-secure-webhook.ps1` as a `preprovision` hook
+This runs `scripts/configure_secure_webhook.py` as a `preprovision` hook
 before touching any Azure resource. The script:
 
 1. Creates (or reuses) an Entra app registration that represents the
@@ -856,10 +869,10 @@ The Container App and Secure Webhook app registration are central. Use the
 day-2 manager to discover them from Azure and add coverage without reading AZD
 values or reprovisioning the runtime:
 
-```powershell
-./scripts/manage-alert-scopes.ps1 list
-./scripts/manage-alert-scopes.ps1 add-subscription `
-  -SubscriptionId "<other-subscription-id>"
+```sh
+python scripts/manage_alert_scopes.py list
+python scripts/manage_alert_scopes.py add-subscription \
+  --subscription-id "<other-subscription-id>"
 ```
 
 The command automatically runs the official signed Secure Webhook test before
@@ -893,7 +906,7 @@ unset API_CLIENT_ID
 
 `--purge` also removes the soft-deleted Key Vault so the name can be reused.
 `azd down` does not remove the Entra app registration created by
-`configure-secure-webhook.ps1`; the explicit `az ad app delete` does. Never
+`configure_secure_webhook.py`; the explicit `az ad app delete` does. Never
 delete Microsoft's official AzNS AAD Webhook service principal. If you are
 keeping the deployment, do not run these cleanup commands.
 
@@ -935,7 +948,7 @@ Slack error, verify the configured channel IDs and bot channel membership.
 | Official test reports success but Slack has no message | Run the Slack validation in step 7.2. Confirm the token is a bot `xoxb` token, the ID is a channel ID rather than a name, the bot is invited, and `chat:write` is granted. |
 | Corrected webhook still receives nothing | Failed webhook retries suppress Action Group calls to the endpoint for 15 minutes. Wait for the cooldown before one new `servicehealth` test. |
 | `/readyz` returns `503` | Stream console and system logs with `az containerapp logs show`. Verify the managed identity role assignments, Key Vault/Table private endpoints, private DNS links, and that the current revision references the latest Key Vault secret. |
-| Day-2 discovery finds no deployment or more than one | Confirm Reader access to the central subscription and the `workload=azure-service-health-slack-bot` / `azd-env-name` tags. Pass `-EnvironmentName` when multiple environments exist. |
+| Day-2 discovery finds no deployment or more than one | Confirm Reader access to the central subscription and the `workload=azure-service-health-slack-bot` / `azd-env-name` tags. Pass `--environment-name` when multiple environments exist. |
 | Day-2 discovery warns it is skipping a subscription | Stale or inaccessible cached subscriptions returned by `az account list` (for example an `AuthorizationFailed` or `SubscriptionNotFound` from another tenant) are skipped only during central discovery's initial resource-group listing so an explicitly requested, accessible environment is still found. Selected tenant/scope, permission, webhook, and destructive operations remain fail closed. Run `az account clear` then `az login` to prune stale subscriptions. |
 | Day-2 add/remove reports missing permissions | Grant Contributor on each target subscription and read access to the Management Group hierarchy. The command does not elevate its own permissions. |
 | Day-2 add leaves an alert disabled | The official signed Secure Webhook test did not complete. Correct the webhook/auth issue, observe the 15-minute retry cooldown if applicable, and repeat the idempotent add command. |
@@ -978,17 +991,21 @@ correct the Table entity if needed, and then replay the alert.
 pip install -r requirements-test.txt
 pytest
 flake8 .
-pwsh -NoProfile -Command "Invoke-Pester test/ManageAlertScopes.Tests.ps1 -CI"
+pwsh -NoProfile -Command "Invoke-Pester test/ManageAlertScopes.Tests.ps1, test/ConfigureSecureWebhook.Tests.ps1 -CI"
 ```
 
 Tests cover the Common Alert Schema parser, routing rules, Easy Auth/app-role
 authorization, Table Storage idempotency, the processing state machine, Slack
 message rendering and error classification, the Flask endpoints, and runtime
-bootstrap/credential selection. Pester tests mock every Azure CLI call and
-cover day-2 add/list/remove/migrate behavior, idempotency, cross-tenant
-rejection, overlap prevention, permission and test failures, confirmation,
-`-WhatIf`, coverage-gap prevention, and the absence of central redeployment
-commands.
+bootstrap/credential selection. Python tests fake every Azure CLI and REST
+boundary and cover day-2 add/list/remove/migrate behavior, idempotency,
+cross-tenant rejection, overlap prevention, bounded read retries, permission
+and test failures, confirmation, `--what-if`, coverage-gap prevention,
+destructive rollback, and the absence of central redeployment commands. They
+also cover delegated and service-principal Secure Webhook setup, Graph request
+portability, idempotent app/role/owner/assignment creation, ambiguity failures,
+and AZD error redaction. Pester retains parser and delegation coverage for the
+temporary compatibility wrappers only.
 
 ## Community and support
 

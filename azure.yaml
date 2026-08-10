@@ -13,7 +13,7 @@ hooks:
   preprovision:
     windows:
       shell: pwsh
-      run: ./scripts/configure-secure-webhook.ps1
+      run: python ./scripts/configure_secure_webhook.py
     posix:
-      shell: pwsh
-      run: ./scripts/configure-secure-webhook.ps1
+      shell: sh
+      run: python3 ./scripts/configure_secure_webhook.py

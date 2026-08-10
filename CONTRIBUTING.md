@@ -4,9 +4,13 @@ Thank you for improving this community reference implementation.
 
 ## Local setup
 
-Use Python 3.13, PowerShell 7+, the Azure CLI with Bicep, and Docker with a
-Linux container engine. Create and activate a virtual environment, then install
-the application and test dependencies:
+Use Python 3.13, the Azure CLI with Bicep, and Docker with a Linux container
+engine. Python is the canonical cross-platform interface for Secure Webhook
+setup and day-2 scope management. PowerShell 7+ is optional unless you are
+running the AZD hook on Windows or testing the temporary compatibility
+wrappers; it hosts the command but contains no operational business logic.
+Create and activate a virtual environment, then install the application and
+test dependencies:
 
 ```sh
 python -m venv .venv
@@ -25,6 +29,7 @@ Run the checks used by CI before opening a pull request.
 ```sh
 python -m pytest -q
 python -m flake8 .
+python -m pytest -q test/test_manage_alert_scopes.py test/test_configure_secure_webhook.py
 pwsh -NoProfile -Command "Invoke-Pester test/ManageAlertScopes.Tests.ps1, test/ConfigureSecureWebhook.Tests.ps1 -CI"
 az bicep build --file infra/main.bicep --stdout
 az bicep lint --file infra/main.bicep

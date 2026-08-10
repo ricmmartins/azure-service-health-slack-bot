@@ -22,7 +22,7 @@ param acrSkuName string = 'Basic'
 
 @description('''
 Deprecated. Management Group coverage is configured after the central
-deployment with scripts/manage-alert-scopes.ps1.
+deployment with scripts/manage_alert_scopes.py.
 ''')
 @allowed([
   ''
