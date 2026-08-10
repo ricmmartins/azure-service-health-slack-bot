@@ -182,6 +182,46 @@ def test_azure_cli_invokes_resolved_windows_command_path(monkeypatch):
     assert commands[0][0] == r"C:\Program Files\Azure CLI\az.cmd"
 
 
+def test_azure_cli_bypasses_batch_launcher_when_bundled_python_exists(
+    monkeypatch,
+    tmp_path,
+):
+    launcher = tmp_path / "wbin" / "az.cmd"
+    launcher.parent.mkdir()
+    launcher.write_text("@echo off", encoding="utf-8")
+    bundled_python = tmp_path / "python.exe"
+    bundled_python.write_bytes(b"")
+    monkeypatch.setattr(
+        scope_cli.shutil,
+        "which",
+        lambda _name: str(launcher),
+    )
+    cli = AzureCli()
+    commands = []
+    cli.runner = lambda command, **_kwargs: (
+        commands.append(command)
+        or subprocess.CompletedProcess(command, 0, "{}", "")
+    )
+
+    cli.invoke(
+        "rest",
+        "--method",
+        "get",
+        "--url",
+        "https://example.invalid/items?api-version=1&$skiptoken=next",
+    )
+
+    assert commands[0][:3] == [
+        str(bundled_python),
+        "-IBm",
+        "azure.cli",
+    ]
+    assert (
+        "https://example.invalid/items?api-version=1&$skiptoken=next"
+        in commands[0]
+    )
+
+
 def test_azure_cli_never_retries_mutations():
     calls = []
 
@@ -364,6 +404,51 @@ def test_official_webhook_test_requires_exact_complete_secure_receiver_result():
 
     with pytest.raises(ScopeManagerError, match="exactly one result"):
         manager(FakeAzure(incomplete)).official_webhook_test(item)
+
+
+def test_official_webhook_test_accepts_documented_completed_result():
+    item = scope_member()
+
+    def successful(_args):
+        return {
+            "state": "Completed",
+            "actionDetails": [
+                {
+                    "Name": "slack-service-health",
+                    "MechanismType": "SecureWebhook",
+                    "Status": "Completed",
+                }
+            ],
+        }
+
+    assert manager(FakeAzure(successful)).official_webhook_test(item) == "Complete"
+
+
+@pytest.mark.parametrize(
+    ("state", "status"),
+    [
+        ("Succeeded", "Succeeded"),
+        ("Complete", "Complete"),
+        ("completed", "Completed"),
+    ],
+)
+def test_official_webhook_test_rejects_unrecognized_result_values(state, status):
+    item = scope_member()
+
+    def result(_args):
+        return {
+            "state": state,
+            "actionDetails": [
+                {
+                    "Name": "slack-service-health",
+                    "MechanismType": "SecureWebhook",
+                    "Status": status,
+                }
+            ],
+        }
+
+    with pytest.raises(ScopeManagerError):
+        manager(FakeAzure(result)).official_webhook_test(item)
 
 
 def test_deployment_validation_accepts_arm_id_casing_differences():

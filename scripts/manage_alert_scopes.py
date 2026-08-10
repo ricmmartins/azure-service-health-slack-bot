@@ -56,6 +56,20 @@ class AzureCli:
         self.executable = (
             shutil.which("az") if runner is subprocess.run else "az"
         )
+        self.command_prefix = self._command_prefix(self.executable)
+
+    @staticmethod
+    def _command_prefix(executable: str | None) -> list[str]:
+        if executable is None:
+            return []
+        path = Path(executable)
+        if path.suffix.casefold() in {".cmd", ".bat"}:
+            bundled_python = path.parent.parent / "python.exe"
+            if bundled_python.is_file():
+                # Bypass cmd.exe so ARM/Graph URLs containing &, %, or quotes
+                # remain one exact argv value on Windows Azure CLI MSI installs.
+                return [str(bundled_python), "-IBm", "azure.cli"]
+        return [executable]
 
     @staticmethod
     def _is_read(arguments: list[str]) -> bool:
@@ -84,7 +98,7 @@ class AzureCli:
         args = list(arguments)
         attempts = self.max_read_attempts if self._is_read(args) else 1
         command = [
-            self.executable,
+            *self.command_prefix,
             *args,
             "--only-show-errors",
             "--output",
@@ -780,7 +794,7 @@ class ScopeManager:
             "--method",
             "get",
             "--url",
-            f"https://management.azure.com/providers/Microsoft.Management/managementGroups/{encoded}?api-version=2021-04-01",
+            f"https://management.azure.com/providers/Microsoft.Management/managementGroups/{encoded}?api-version=2020-05-01",
             "--subscription",
             self.central["SubscriptionId"],
         )
@@ -1035,7 +1049,7 @@ class ScopeManager:
                 "usecommonalertschema",
             )
             state = str(azure_property(result, "state") or "")
-            if state != "Complete":
+            if state not in {"Complete", "Completed"}:
                 raise ScopeManagerError(
                     "Official signed Secure Webhook test did not complete successfully for "
                     f"subscription '{item['MemberSubscriptionId']}' (state: '{state}'). "
@@ -1053,7 +1067,7 @@ class ScopeManager:
                     "for 'slack-service-health'. The new alert remains disabled."
                 )
             status = str(member(details[0], "Status", ""))
-            if status != "Succeeded":
+            if status not in {"Succeeded", "Completed"}:
                 raise ScopeManagerError(
                     "Official signed Secure Webhook receiver test failed for subscription "
                     f"'{item['MemberSubscriptionId']}' (status: '{status}'; "

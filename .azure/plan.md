@@ -416,3 +416,127 @@ following authoritative proof was recorded on 2026-08-10.
 | AZD local environment | Local AZD test environment for `shb-day2-e2e-9fdc` absent. |
 | DPAPI token artifact | DPAPI-encrypted token artifact for the E2E run absent. |
 | Production endpoint health | `ca-service-health-test.gentleforest-19f9d19f.eastus2.azurecontainerapps.io` returns `GET /healthz` HTTP 200, `GET /readyz` HTTP 200, unauthenticated `POST /api/service-health` HTTP 401; production environment unaffected. |
+
+## Python operational CLI portability acceptance (2026-08-10)
+
+This section records the follow-up acceptance work for PR #28. It does not
+replace the earlier isolated infrastructure proof. The current change makes
+Python the canonical operational implementation and validates its process
+contract without modifying Slack or the protected deployment.
+
+### Official Microsoft contract verification
+
+The Microsoft Learn MCP was not present in this session's available tool
+registry. MCP-specific verification is therefore an explicit tooling blocker.
+The fallback review below used only current official Microsoft Learn content;
+no third-party documentation was used.
+
+| Official Microsoft Learn source | Behavior validated against the implementation |
+|---|---|
+| [AZD hooks](https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/azd-extensibility) and [azure.yaml schema](https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/azd-schema) | `preprovision` supports OS-specific `windows`/`posix` blocks and explicit `pwsh`/`sh` hosts. The project-root hook commands invoke the same Python implementation on every OS. |
+| [AZD command reference](https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/reference) | `azd auth login`, `auth status`, `env new`, `env set`, `env get-value`, `env list`, `provision`, `up`, and `down --purge` forms used by the hook and runbook are current. |
+| [`az rest`](https://learn.microsoft.com/en-us/cli/azure/reference-index#az-rest) | ARM and Microsoft Graph requests support explicit methods, URLs, headers, JSON output, and `@file` bodies. The Python Graph boundary uses temporary UTF-8 body files so Windows quoting cannot corrupt JSON. |
+| [`az account show`](https://learn.microsoft.com/en-us/cli/azure/account#az-account-show) and [`az account list`](https://learn.microsoft.com/en-us/cli/azure/account#az-account-list) | Tenant and subscription IDs are obtained from the signed-in Azure context and checked exactly before any operation. |
+| [Secure Webhook authentication](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/action-groups#configure-authentication-for-secure-webhook) | The fixed AzNS application ID is `461e8683-5575-4561-ac7f-899cc907d62a`; the protected API uses v2 application tokens, exposes `ActionGroupsSecureWebhook`, makes AzNS an owner, and assigns AzNS that application role. |
+| [Graph create application](https://learn.microsoft.com/en-us/graph/api/application-post-applications), [update application](https://learn.microsoft.com/en-us/graph/api/application-update), [application resource](https://learn.microsoft.com/en-us/graph/api/resources/application), [API application](https://learn.microsoft.com/en-us/graph/api/resources/apiapplication), and [app role](https://learn.microsoft.com/en-us/graph/api/resources/approle) | Application create/reuse, `identifierUris`, application-only roles, and `requestedAccessTokenVersion: 2` match Graph. PATCH preserves existing nested API authorization fields rather than clearing scopes or preauthorized applications. |
+| [List application owners](https://learn.microsoft.com/en-us/graph/api/application-list-owners), [add application owner](https://learn.microsoft.com/en-us/graph/api/application-post-owners), and [get user](https://learn.microsoft.com/en-us/graph/api/user-get) | Owner lookup/add uses the documented `owners/$ref` body. `/me` is used only for delegated user authentication. |
+| [Create service principal](https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-serviceprincipals) and [list service principals](https://learn.microsoft.com/en-us/graph/api/serviceprincipal-list) | The API and official AzNS service principals are found by exact `appId`; missing API/AzNS principals are created only where the documented flow permits, and ambiguous results fail closed. |
+| [Create app-role assignment](https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-approleassignments) and [list app-role assignments](https://learn.microsoft.com/en-us/graph/api/serviceprincipal-list-approleassignments) | The assignment body uses exact `principalId`, `resourceId`, and `appRoleId` values and reruns detect the existing assignment idempotently. |
+| [Graph paging](https://learn.microsoft.com/en-us/graph/paging) | Collection reads follow `@odata.nextLink` with a bounded page limit. |
+| [Container Apps Entra authentication](https://learn.microsoft.com/en-us/azure/container-apps/authentication-entra) and [authConfigs resource](https://learn.microsoft.com/en-us/azure/templates/microsoft.app/containerapps/authconfigs) | Bicep, not the setup CLI, owns Easy Auth client registration, issuer, accepted audiences, allowed AzNS application, HTTPS enforcement, and anonymous route behavior. Secure Webhook is an application-to-application daemon flow, so the setup CLI does not add an interactive redirect URI. |
+| [Action Groups](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/action-groups) and [Action Group Bicep resource](https://learn.microsoft.com/en-us/azure/templates/microsoft.insights/actiongroups) | Service Health Action Groups are `Global`; receiver fields for AAD auth, object ID, identifier URI, and Common Alert Schema match the resource contract. |
+| [Activity Log Alert Bicep resource](https://learn.microsoft.com/en-us/azure/templates/microsoft.insights/activitylogalerts) and [Service Health overview](https://learn.microsoft.com/en-us/azure/service-health/overview) | Alerts use the documented `scopes`, Action Group IDs, and `category = ServiceHealth` condition. The CLI implements logical Management Group fan-out as subscription-scoped members rather than claiming unsupported native selected-MG scope behavior. |
+| [`test-notifications create`](https://learn.microsoft.com/en-us/cli/azure/monitor/action-group/test-notifications#az-monitor-action-group-test-notifications-create) and [test-notification REST response](https://learn.microsoft.com/en-us/rest/api/monitor/action-groups/create-notifications-at-action-group-resource-level) | The positional Secure Webhook action grammar and `servicehealth` alert type match the CLI reference. Learn examples return `Completed`; the prior isolated Azure run returned `Complete`/`Succeeded`. The manager accepts only those explicit success variants and leaves new alerts disabled for every other value. |
+| [Subscription Bicep deployment](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/deploy-to-subscription), [resource-group resource](https://learn.microsoft.com/en-us/azure/templates/microsoft.resources/resourcegroups), and [`az deployment sub create`](https://learn.microsoft.com/en-us/cli/azure/deployment/sub#az-deployment-sub-create) | The day-2 template targets a subscription, creates its tagged peripheral resource group, and is deployed with an explicit subscription, location, name, template, and parameters. |
+| [`az resource`](https://learn.microsoft.com/en-us/cli/azure/resource), [Action Group list](https://learn.microsoft.com/en-us/cli/azure/monitor/action-group#az-monitor-action-group-list), and [Activity Log Alert list](https://learn.microsoft.com/en-us/cli/azure/monitor/activity-log/alert#az-monitor-activity-log-alert-list) | Discovery, enable/disable updates, exact-ID reads, and deletes use documented commands and API versions. Ownership tags are validated before mutation. |
+| [Management Group get](https://learn.microsoft.com/en-us/rest/api/managementgroups/management-groups/get) and [get descendants](https://learn.microsoft.com/en-us/rest/api/managementgroups/management-groups/get-descendants) | Tenant ownership comes from `properties.tenantId`; descendants use the documented `2020-05-01` API, distinguish management groups from subscriptions by type, and follow `nextLink`. |
+| [Azure CLI service-principal authentication](https://learn.microsoft.com/en-us/cli/azure/authenticate-azure-cli-service-principal) | Noninteractive callers are supported. Setup resolves a caller owner for both delegated users and service-principal sessions and rejects unknown caller types. |
+
+Two official-documentation gaps remain explicit rather than being hidden:
+
+1. The [Authorization permissions operation group](https://learn.microsoft.com/en-us/rest/api/authorization/permissions)
+   documents resource and resource-group variants, but not the same effective
+   permissions endpoint at subscription or Management Group scope. The endpoint
+   is retained because it was exercised successfully in the isolated tenant and
+   gives a stricter effective-permission check than reconstructing access from
+   role assignments.
+2. Microsoft Learn documents `az account show` but not the exact nested
+   `user.type`/`user.name` output shape used to distinguish delegated and
+   service-principal callers. Tests pin both observed shapes and unknown values
+   fail explicitly.
+
+### Complete PowerShell inventory and disposition
+
+| Tracked item | Classification | Rationale |
+|---|---|---|
+| `scripts/manage-alert-scopes.ps1` | (2) Temporary compatibility wrapper | Preserves existing automation while delegating all arguments and exit codes to `manage_alert_scopes.py`; no Azure business logic remains. |
+| `scripts/configure-secure-webhook.ps1` | (2) Temporary compatibility wrapper | Preserves the former setup entry point while delegating Entra/AZD work to `configure_secure_webhook.py`; no Graph or Azure logic remains. |
+| `test/ManageAlertScopes.Tests.ps1` | (3) Test-only code retained until wrapper retirement | Parses the wrapper and proves argument/exit-code delegation only. Python owns behavior and destructive-path regression tests. |
+| `test/ConfigureSecureWebhook.Tests.ps1` | (3) Test-only code retained until wrapper retirement | Parses the wrapper and proves setup delegation only. Python owns Graph, idempotency, and error-path tests. |
+
+No tracked PowerShell file remains in category (1), and no tracked PowerShell
+file is obsolete enough for category (4) while compatibility is supported.
+The remaining references are intentional: `azure.yaml` uses `pwsh` only as the
+official Windows AZD command host; CI parses/tests the wrappers; README and
+CONTRIBUTING describe the temporary compatibility surface and its tests; and
+the README's Windows PowerShell Docker example is shell-specific usage, not
+operational business logic.
+
+### Process, command, and build evidence
+
+| Boundary | Command or exercised contract | Result |
+|---|---|---|
+| Full Python suite | `python -m pytest -q` | **120 passed** |
+| Python lint | `python -m flake8 .` | **0 findings** |
+| Canonical CLI suite exactly as documented in CONTRIBUTING | `python -m pytest -q test/test_manage_alert_scopes.py test/test_configure_secure_webhook.py test/test_cli_subprocess.py` | **72 passed** |
+| Wrapper suite exactly as documented in CONTRIBUTING | `pwsh -NoProfile -Command "Invoke-Pester test/ManageAlertScopes.Tests.ps1, test/ConfigureSecureWebhook.Tests.ps1 -CI"` | **4 passed** |
+| CLI entry points | `python scripts/manage_alert_scopes.py --help`; `python scripts/configure_secure_webhook.py --help` | Both exit 0 with usage on stdout. |
+| Cross-platform subprocess contract | Real child processes with stateful fake `az`/`azd` executables | Help, documented command forms, quoted display names, paths with spaces, JSON output, invalid input/exit codes, temporary body-file cleanup, idempotent rerun, wrappers, and current-OS AZD hook command passed. |
+| Installed Azure CLI boundary | `az version` through `AzureCli` with a JMESPath string literal containing `&`, `%`, and double quotes | Passed through a real subprocess on Windows. The MSI `az.cmd` launcher was bypassed through its bundled `python.exe -IBm azure.cli`, and Azure CLI returned the exact special-character value. The same assertion runs on every CI matrix OS. |
+| Real documented Management Groups reads | `GET` group and descendants with `api-version=2020-05-01` through the shared Python boundary | Passed against tenant root `cc8ad65c-a10c-42a1-9fdc-65d99db48492`; three descendants returned. |
+| Main and day-2 Bicep | The four build/lint commands in CONTRIBUTING | Passed. Existing `core.windows.net` portability warning in `network.bicep` and CLI upgrade notice only. |
+| Docker | `docker build -t azure-service-health-slack-bot:ci .` | Passed; image ID `sha256:f8d36805a5aba66b48e720df02c8f392708447fe20f9bfe83ec4ba8f8487f97b`. |
+
+The Windows hook command from `azure.yaml` was executed exactly through `pwsh`
+by the subprocess suite. The POSIX `sh` command cannot execute on this Windows
+workstation; the same test selects and executes the exact POSIX hook on the
+Ubuntu and macOS GitHub Actions matrix. The README additions in this change are
+explanatory citations, not new shell snippets. Previously updated day-2
+invocation forms were executed with their documented tokens against the
+isolated tenant; with no central deployment present, each failed safely before
+mutation. The subprocess suite additionally exercises every documented
+operation parser and JSON form without representing those fakes as live Azure
+validation.
+
+### Current isolated Azure/Entra E2E attempt
+
+Read-only preflight succeeded:
+
+- authenticated tenant: `cc8ad65c-a10c-42a1-9fdc-65d99db48492`;
+- accessible subscriptions: Management
+  `09f7fca2-63df-4326-b31c-aec3bcbb23db`, Connectivity
+  `d61e43e0-4793-4b0e-ac08-002e8c18763f`, and Identity
+  `5f48510d-3bdc-43e0-babf-bb7860b6f76b`;
+- the caller has Owner at all three subscription boundaries;
+- all three subscriptions are direct children of the tenant root;
+- the protected tenant `16b3c013-d300-468d-ac64-7eda0820b6d3` and protected
+  subscription `00052886-0d2d-493f-8b47-8ca68a0402ad` are absent from the
+  Azure CLI account cache; and
+- no Slack API or protected deployment operation was performed.
+
+The proposed unique disposable prefix was
+`shb-portability-e2e-20260810`. Retained snapshots
+`portability-e2e-before.json` and `portability-e2e-after.json` in the session
+artifact directory both prove zero matching resource groups, Action Groups,
+Activity Log Alerts, Entra applications, service principals, and local AZD
+environments across the three approved subscriptions. The snapshots are
+identical apart from timestamps and record that the protected tenant is absent.
+
+Credentials and Owner permissions were available, but the required explicit
+confirmation for creating/deleting resources and confirming subscription and
+location could not be obtained in the unattended session: the confirmation
+request returned that the user was unavailable. Therefore no disposable Azure
+or Entra object was created or deleted, no configure create/rerun/cleanup
+lifecycle was claimed, and no add/list/migrate/remove lifecycle was claimed.
+This confirmation gate is the sole current live E2E blocker; process fakes and
+the earlier infrastructure E2E are not presented as substitutes.
