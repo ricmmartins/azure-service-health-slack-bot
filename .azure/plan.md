@@ -362,7 +362,7 @@ evidence. Unset transient shell variables immediately after use.
 | Cloud deployment what-if | **Passed** via `az deployment sub what-if`: 25 creates in `rg-shb-day2-e2e-9fdc`, 0 deletes, 0 existing-resource modifications; two expected unresolved new role-assignment IDs |
 | Azure policy visibility | **Passed**: no policy assignments visible at the isolated subscription scope and no policy denial in what-if |
 | AZD package | **Passed** for the isolated environment |
-| Live resource validation | **Passed** for the approved isolated boundary; details below. Cleanup remains separately gated. |
+| Live resource validation | **Passed** for the approved isolated boundary; details below. Cleanup completed 2026-08-10. |
 
 ### Live day-2 E2E proof
 
@@ -396,13 +396,21 @@ Live validation found and corrected three Azure-contract issues:
    non-empty scopes. Logical Management Group coverage now enumerates
    descendants and manages one subscription-scoped member path per descendant.
 
-### Retained temporary resources and cleanup gate
+### Cleanup record — 2026-08-10
 
-Cleanup is not authorized. The isolated central resource group, protected API,
-child Management Group, descendant alert resource groups, and subscription
-ancestry remain in place. The failed pre-fan-out attempt also left
-`rg-shb-day2-e2e-9fdc-alerts-mg-f90d88a59ce8` in Management with an Action
-Group but no Activity Log Alert. Before any cleanup, obtain separate
-confirmation, inventory all IDs again, restore Connectivity and Identity
-ancestry, and verify that deleting alerts cannot affect the protected baseline
-or create a required coverage gap.
+Validated and cleaned. All temporary E2E resources have been removed. The
+following authoritative proof was recorded on 2026-08-10.
+
+| Item | Observed result |
+|---|---|
+| Temporary Management Group | `mg-shb-day2-e2e-9fdc` absent; no longer present under tenant root `cc8ad65c-a10c-42a1-9fdc-65d99db48492`. |
+| Management subscription ancestry | `09f7fca2-63df-4326-b31c-aec3bcbb23db` restored as direct child of tenant root. |
+| Connectivity subscription ancestry | `d61e43e0-4793-4b0e-ac08-002e8c18763f` restored as direct child of tenant root. |
+| Identity subscription ancestry | `5f48510d-3bdc-43e0-babf-bb7860b6f76b` restored as direct child of tenant root. |
+| Resource groups (all three subscriptions) | 0 resource groups containing `shb-day2-e2e-9fdc` across Management, Connectivity, and Identity, including auto-managed `ME_*` groups. |
+| Activity Log Alerts | 0 Activity Log Alerts matching `shb-day2-e2e-9fdc` across all subscriptions. |
+| Action Groups | 0 Action Groups matching `shb-day2-e2e-9fdc` across all subscriptions, including the cleanup-required orphan from the failed pre-fan-out attempt. |
+| Entra application | Display name `Azure Service Health Slack Bot - shb-day2-e2e-9fdc`, appId `dc5a4e15-f71b-4380-af70-0f5e3803a1ac`, and its service principal are absent. |
+| AZD local environment | Local AZD test environment for `shb-day2-e2e-9fdc` absent. |
+| DPAPI token artifact | DPAPI-encrypted token artifact for the E2E run absent. |
+| Production endpoint health | `ca-service-health-test.gentleforest-19f9d19f.eastus2.azurecontainerapps.io` returns `GET /healthz` HTTP 200, `GET /readyz` HTTP 200, unauthenticated `POST /api/service-health` HTTP 401; production environment unaffected. |
