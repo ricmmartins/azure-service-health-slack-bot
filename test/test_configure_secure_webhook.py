@@ -291,6 +291,69 @@ def test_existing_configuration_is_idempotent():
     assert result["SERVICE_HEALTH_API_IDENTIFIER_URI"] == f"api://{APP_ID}"
 
 
+def test_v2_token_patch_preserves_existing_api_authorization_settings():
+    existing = application()
+    existing["api"] = {
+        "requestedAccessTokenVersion": 1,
+        "oauth2PermissionScopes": [{"id": "scope-id", "value": "existing"}],
+        "preAuthorizedApplications": [
+            {"appId": AZNS_APP_ID, "delegatedPermissionIds": ["scope-id"]}
+        ],
+    }
+    patches = []
+
+    def handler(method, uri, body):
+        if method == "GET" and "/applications?" in uri:
+            return {"value": [existing]}
+        if method == "PATCH" and f"/applications/{APP_OBJECT_ID}" in uri:
+            patches.append(body)
+            return None
+        if f"appId eq '{APP_ID}'" in uri:
+            return {"value": [{"id": "api-sp-id", "appId": APP_ID}]}
+        if f"appId eq '{AZNS_APP_ID}'" in uri:
+            return {"value": [{"id": "azns-sp-id", "appId": AZNS_APP_ID}]}
+        if "/owners?" in uri:
+            return {
+                "value": [
+                    {"id": "user-id"},
+                    {"id": "azns-sp-id"},
+                ]
+            }
+        if "/me?" in uri:
+            return {"id": "user-id"}
+        if "/appRoleAssignments?" in uri:
+            return {
+                "value": [
+                    {
+                        "resourceId": "api-sp-id",
+                        "appRoleId": ROLE_ID,
+                    }
+                ]
+            }
+        raise AssertionError((method, uri, body))
+
+    SecureWebhookConfigurator(
+        FakeAzure(), FakeGraph(handler), FakeAzd()
+    ).configure("existing-api-settings")
+
+    assert patches == [
+        {
+            "api": {
+                "requestedAccessTokenVersion": 2,
+                "oauth2PermissionScopes": [
+                    {"id": "scope-id", "value": "existing"}
+                ],
+                "preAuthorizedApplications": [
+                    {
+                        "appId": AZNS_APP_ID,
+                        "delegatedPermissionIds": ["scope-id"],
+                    }
+                ],
+            }
+        }
+    ]
+
+
 def test_missing_configuration_is_created_in_safe_order(monkeypatch):
     generated_role_id = "generated-role-id"
     monkeypatch.setattr(

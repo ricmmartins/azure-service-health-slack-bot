@@ -29,7 +29,7 @@ Run the checks used by CI before opening a pull request.
 ```sh
 python -m pytest -q
 python -m flake8 .
-python -m pytest -q test/test_manage_alert_scopes.py test/test_configure_secure_webhook.py
+python -m pytest -q test/test_manage_alert_scopes.py test/test_configure_secure_webhook.py test/test_cli_subprocess.py
 pwsh -NoProfile -Command "Invoke-Pester test/ManageAlertScopes.Tests.ps1, test/ConfigureSecureWebhook.Tests.ps1 -CI"
 az bicep build --file infra/main.bicep --stdout
 az bicep lint --file infra/main.bicep

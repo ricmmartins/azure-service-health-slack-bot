@@ -44,10 +44,16 @@ jobs:
           python -m pytest -q
           test/test_manage_alert_scopes.py
           test/test_configure_secure_webhook.py
+          test/test_cli_subprocess.py
       - name: Verify CLI entry points
         run: |
           python scripts/manage_alert_scopes.py --help
           python scripts/configure_secure_webhook.py --help
+      - name: Verify installed Azure CLI special-character boundary
+        run: >-
+          python -c "from scripts.manage_alert_scopes import AzureCli;
+          q=chr(39)+chr(34)+'a&b%'+chr(34)+chr(39);
+          assert AzureCli().invoke('version','--query',q)==chr(34)+'a&b%'+chr(34)"
 
   bicep:
     name: Bicep build and lint
