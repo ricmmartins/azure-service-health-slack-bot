@@ -27,6 +27,7 @@ events, and no Azure support-ticket workflow. It only initializes a Slack
 - [Day-2 alert scope management](#day-2-alert-scope-management)
 - [Operations](#operations)
 - [Tests](#tests)
+- [Community and support](#community-and-support)
 
 ## Start here
 
@@ -988,6 +989,13 @@ cover day-2 add/list/remove/migrate behavior, idempotency, cross-tenant
 rejection, overlap prevention, permission and test failures, confirmation,
 `-WhatIf`, coverage-gap prevention, and the absence of central redeployment
 commands.
+
+## Community and support
+
+Review [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a change. Use
+[SUPPORT.md](SUPPORT.md) to choose the appropriate support channel, and report
+suspected vulnerabilities privately as described in
+[SECURITY.md](SECURITY.md).
 
 ## License
 
