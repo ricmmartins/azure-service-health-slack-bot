@@ -11,9 +11,4 @@ services:
       context: .
 hooks:
   preprovision:
-    windows:
-      shell: pwsh
-      run: python ./scripts/configure_secure_webhook.py
-    posix:
-      shell: sh
-      run: python3 ./scripts/configure_secure_webhook.py
+    run: ./scripts/configure_secure_webhook.py
