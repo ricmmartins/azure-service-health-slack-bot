@@ -225,8 +225,7 @@ For deployment:
 - Microsoft Entra `Application Administrator` while the Secure Webhook hook runs
 
 The documented Bash commands work in Linux, macOS where the command syntax is
-available, and Ubuntu on WSL. `base64 -w0` is GNU syntax, so macOS users should
-use an equivalent no-wrap base64 command.
+available, and Ubuntu on WSL.
 
 Register the resource providers documented for Container Apps:
 
@@ -277,44 +276,232 @@ network policy.
 
 ## Deploy with Azure Developer CLI
 
-### 1. Create the Slack app
+Use the stages in order. Each checkpoint is a stop/go decision. Do not continue
+when a checkpoint fails, even if a later command appears able to run.
 
-1. Create a Slack app at <https://api.slack.com/apps>.
+The examples use placeholders. Set them only in your local shell and AZD
+environment. Do not add real tenant IDs, subscription IDs, user names, Slack
+tokens, or channel IDs to tracked files.
+
+### Stage 0: verify the workstation
+
+Prerequisites:
+
+- Bash on Linux, macOS, or Ubuntu on WSL
+- Python 3.13
+- current stable Azure CLI with Bicep
+- current stable Azure Developer CLI
+- Docker with a running Linux container engine
+- Git
+
+Run:
+
+```bash
+python --version
+az version
+az bicep version
+azd version
+docker version --format 'client={{.Client.Version}} server={{.Server.Version}}'
+docker info --format 'os={{.OSType}}'
+git --version
+```
+
+Expected state:
+
+- Python reports `3.13.x`.
+- Every command exits with status `0`.
+- Docker reports both a client and server version.
+- Docker reports `os=linux`.
+
+Checkpoint: stop until all six tools respond successfully. A Docker client
+version without a server version is not sufficient.
+
+Recovery:
+
+- Install or update the tool from the links in [Prerequisites](#prerequisites).
+- On WSL, enable the distribution in Docker Desktop under **WSL integration**,
+  then rerun `docker info`.
+- If `az bicep version` fails, run `az bicep install` and repeat the check.
+
+### Stage 1: select the Azure tenant and subscription
+
+Prerequisites:
+
+- the target tenant ID;
+- the target subscription ID;
+- a supported Azure region;
+- an active `Owner` assignment, or `Contributor` plus
+  `User Access Administrator`, on the target subscription;
+- an active Microsoft Entra `Application Administrator` directory role for the
+  operator who runs the Secure Webhook hook.
+
+Choose a short environment name with lowercase letters, numbers, and hyphens.
+Keep it between 3 and 20 characters and begin and end with a letter or number.
+
+Run, replacing every angle-bracket placeholder:
+
+```bash
+export TARGET_TENANT_ID="<tenant-id>"
+export TARGET_SUBSCRIPTION_ID="<subscription-id>"
+export AZURE_LOCATION="<azure-region>"
+export AZURE_ENV_NAME="<environment-name>"
+
+az login --tenant "$TARGET_TENANT_ID"
+az account set --subscription "$TARGET_SUBSCRIPTION_ID"
+azd auth login --tenant-id "$TARGET_TENANT_ID"
+
+az account show \
+  --query '{tenant:tenantId,subscription:id,name:name,isDefault:isDefault}' \
+  -o table
+azd auth status
+
+OPERATOR_OBJECT_ID="$(az ad signed-in-user show --query id -o tsv)"
+az role assignment list \
+  --assignee "$OPERATOR_OBJECT_ID" \
+  --scope "/subscriptions/$TARGET_SUBSCRIPTION_ID" \
+  --include-groups \
+  --include-inherited \
+  --query '[].{role:roleDefinitionName,scope:scope}' \
+  -o table
+```
+
+Expected state:
+
+- `tenant` and `subscription` match the values you supplied.
+- `isDefault` is `True`.
+- AZD reports an authenticated user in the same tenant.
+- The role table shows the required active Azure role combination. Microsoft
+  Entra directory roles do not appear in this Azure RBAC table, so confirm the
+  active `Application Administrator` role separately in the Entra admin center.
+
+Register and check the Container Apps providers:
+
+```bash
+az provider register --namespace Microsoft.App --wait
+az provider register --namespace Microsoft.OperationalInsights --wait
+az provider show --namespace Microsoft.App \
+  --query '{namespace:namespace,state:registrationState}' -o table
+az provider show --namespace Microsoft.OperationalInsights \
+  --query '{namespace:namespace,state:registrationState}' -o table
+```
+
+Checkpoint:
+
+```bash
+test "$(az account show --query tenantId -o tsv)" = "$TARGET_TENANT_ID" &&
+test "$(az account show --query id -o tsv)" = "$TARGET_SUBSCRIPTION_ID" &&
+test "$(az provider show --namespace Microsoft.App \
+  --query registrationState -o tsv)" = "Registered" &&
+test "$(az provider show --namespace Microsoft.OperationalInsights \
+  --query registrationState -o tsv)" = "Registered" &&
+echo "azure-context-ready"
+```
+
+Proceed only when the final line is `azure-context-ready`.
+
+Recovery:
+
+- If the account values are wrong, rerun
+  `az login --tenant "$TARGET_TENANT_ID"` and
+  `az account set --subscription "$TARGET_SUBSCRIPTION_ID"`; do not rely on a
+  previous shell context.
+- If a role is eligible through Privileged Identity Management, activate it and
+  rerun the role query.
+- If provider registration is forbidden, ask a subscription administrator to
+  register the namespaces. Do not substitute `Microsoft.ContainerService`.
+
+### Stage 2: create and authorize the Slack app
+
+Prerequisites:
+
+- permission to create or approve an app in the target Slack workspace;
+- one destination channel ID for the fallback route;
+- any additional destination channel IDs needed by routing rules.
+
+In <https://api.slack.com/apps>:
+
+1. Create a Slack app in the target workspace.
 2. Under **OAuth & Permissions**, add the bot scope `chat:write`.
-3. Install the app to the workspace and keep the `xoxb-` token private.
-4. Invite the bot to every configured destination channel.
+3. Install or reinstall the app to the workspace.
+4. Store the resulting `xoxb-` bot token in an approved password manager.
+5. Invite the bot to every destination channel.
+6. Open each channel's details and record its channel ID.
 
-The service calls only `chat.postMessage` and `chat.update`. It does not need a
-Slack signing secret, event subscriptions, slash commands, or an inbound app
-manifest.
+Expected state: you have one `xoxb-` token and every configured channel shows
+the bot as a member. The service does not need a signing secret, event
+subscription, slash command, or inbound app manifest.
 
-### 2. Clone and sign in
+Checkpoint: do not continue with only channel names. Routing requires channel
+IDs, and the bot must already be a channel member when using only `chat:write`.
+
+Recovery:
+
+- If app installation is blocked, request workspace administrator approval.
+- If a channel is private, have a member invite the bot.
+- If you changed scopes after installation, reinstall the app before using the
+  new token.
+
+### Stage 3: clone and validate the routing file
+
+Prerequisites: stages 0 through 2 are complete.
+
+Run:
 
 ```bash
 git clone https://github.com/ricmmartins/azure-service-health-slack-bot.git
 cd azure-service-health-slack-bot
-az login
-azd auth login
-az account show --query '{tenant:tenantId,subscription:id,name:name}' -o table
-azd auth status
+python -m venv .venv
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+
+cp config/service_health_routes.example.json \
+  config/service_health_routes.json
+vi config/service_health_routes.json
 ```
 
-This runbook signs in to Azure CLI and AZD explicitly. Use the normal browser
-flows required by your tenant's Conditional Access policy.
-
-### 3. Create routing
+Replace every synthetic channel and subscription ID. Keep
+`default_channel_id`; it is required. Then validate both JSON syntax and the
+application routing contract:
 
 ```bash
-cp config/service_health_routes.example.json config/service_health_routes.json
+python -m json.tool config/service_health_routes.json >/dev/null &&
+python -c 'import json; from pathlib import Path; from service_health.routing import RoutingConfig; RoutingConfig.from_dict(json.loads(Path("config/service_health_routes.json").read_text())); print("routing-valid")' &&
+! grep -Eq \
+  'C0123456789|C1111111111|C2222222222|00000000-0000-0000-0000-000000000000' \
+  config/service_health_routes.json &&
+echo "routing-checkpoint-passed"
 ```
 
-Replace every synthetic value. `default_channel_id` is mandatory. In Slack,
-open a channel's details and copy its channel ID.
+Expected state: the parser prints `routing-valid`, the placeholder scan is
+silent, and the final line is `routing-checkpoint-passed`.
 
-### 4. Create the AZD environment
+Checkpoint: inspect the file once more and confirm that its subscription IDs
+belong to the intended tenant and its channel IDs belong to the intended Slack
+workspace.
+
+Recovery:
+
+- A `JSONDecodeError` identifies malformed JSON. Correct the indicated line and
+  rerun both validators.
+- `InvalidRoutingConfiguration` identifies a missing channel, invalid rule, or
+  invalid priority.
+- If the placeholder scan stops the command before the final line, replace the
+  remaining example value.
+
+### Stage 4: create the AZD environment
+
+Prerequisites:
+
+- the shell variables from stage 1 are still set;
+- the validated routing file from stage 3 exists;
+- the Slack bot token is available from the approved password manager.
+
+Create an AZD environment bound to the selected subscription and location:
 
 ```bash
-azd env new
+azd env new "$AZURE_ENV_NAME" \
+  --subscription "$TARGET_SUBSCRIPTION_ID" \
+  --location "$AZURE_LOCATION"
 
 read -rsp "Slack bot token (input hidden): " SLACK_BOT_TOKEN; printf '\n'
 while [[ "$SLACK_BOT_TOKEN" != xoxb-* ]]; do
@@ -325,10 +512,35 @@ done
 azd env set SLACK_BOT_TOKEN "$SLACK_BOT_TOKEN"
 unset SLACK_BOT_TOKEN
 
-ROUTES_B64="$(base64 -w0 config/service_health_routes.json)"
+ROUTES_B64="$(
+  python -c 'import base64, pathlib; print(base64.b64encode(pathlib.Path("config/service_health_routes.json").read_bytes()).decode())'
+)"
 azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64"
 unset ROUTES_B64
+chmod 600 ".azure/$AZURE_ENV_NAME/.env"
 ```
+
+Expected state:
+
+- `.azure/<environment-name>/.env` exists.
+- AZD returns the selected environment name, subscription, and location.
+- The local environment contains the two required keys without printing their
+  values.
+
+Checkpoint:
+
+```bash
+test "$(azd env get-value AZURE_ENV_NAME)" = "$AZURE_ENV_NAME" &&
+test "$(azd env get-value AZURE_SUBSCRIPTION_ID)" = \
+  "$TARGET_SUBSCRIPTION_ID" &&
+test "$(azd env get-value AZURE_LOCATION)" = "$AZURE_LOCATION" &&
+grep -q '^SLACK_BOT_TOKEN=' ".azure/$AZURE_ENV_NAME/.env" &&
+grep -q '^SERVICE_HEALTH_ROUTES_JSON_B64=' \
+  ".azure/$AZURE_ENV_NAME/.env" &&
+echo "azd-environment-ready"
+```
+
+Proceed only when the final line is `azd-environment-ready`.
 
 Hidden input prevents terminal echo, and the command history contains only the
 variable name. The expanded token is still passed to the local `azd` process
@@ -343,96 +555,286 @@ into `infra/main.parameters.json` before JSON parsing. Bicep decodes the value
 before setting the container's plain JSON
 `SERVICE_HEALTH_ROUTES_JSON` environment variable.
 
-### 5. Preview or provision
+Recovery:
 
-Register the providers from [Prerequisites](#prerequisites), then provision:
+- Correct a wrong binding before provisioning:
+  `azd env set AZURE_SUBSCRIPTION_ID "$TARGET_SUBSCRIPTION_ID"` or
+  `azd env set AZURE_LOCATION "$AZURE_LOCATION"`.
+- Repeat the hidden token input if the wrong token was stored.
+- If the wrong environment name was used and no hook or provisioning command
+  has run, create a new environment with the correct name and remove the unused
+  local environment with `azd env remove "<wrong-environment-name>"`.
+
+### Stage 5: reconcile Microsoft Entra and preview Azure changes
+
+Prerequisites:
+
+- the stage 4 checkpoint passed;
+- `Application Administrator` is active for the Azure CLI user;
+- the operator can create enterprise applications in the target tenant.
+
+Run the project hook explicitly:
 
 ```bash
-azd provision
+azd hooks run preprovision \
+  -e "$AZURE_ENV_NAME" \
+  --no-prompt
 ```
 
-`azure.yaml` registers `scripts/configure_secure_webhook.py` as a Python
-`preprovision` hook. AZD infers the Python runtime from the file extension,
-installs dependencies from the nearest `requirements.txt`, and runs the hook
-before provisioning.
+Expected state: the hook exits with status `0` after creating or reconciling the
+protected API application, service principal, identifier URI,
+`ActionGroupsSecureWebhook` role, verified owners, and AzNS role assignment.
+This stage changes Microsoft Entra, but does not provision the Azure resources.
 
-The preview command needs the values produced by that hook. Run the hook
-explicitly before the first preview of a new environment:
+Check the nonsecret hook outputs without printing the local Slack token:
 
 ```bash
-ENV_NAME="$(azd env get-value AZURE_ENV_NAME)"
-azd hooks run preprovision -e "$ENV_NAME" --no-prompt
-azd provision --preview -e "$ENV_NAME" --no-prompt
+test -n "$(azd env get-value SERVICE_HEALTH_API_CLIENT_ID)" &&
+test -n "$(azd env get-value SERVICE_HEALTH_API_OBJECT_ID)" &&
+test -n "$(azd env get-value SERVICE_HEALTH_API_IDENTIFIER_URI)" &&
+echo "entra-hook-ready"
 ```
+
+Preview the Azure Resource Manager changes:
+
+```bash
+azd provision --preview \
+  -e "$AZURE_ENV_NAME" \
+  --subscription "$TARGET_SUBSCRIPTION_ID" \
+  --location "$AZURE_LOCATION" \
+  --no-prompt
+```
+
+Expected state: preview exits with status `0`, shows planned creates for the
+central resources, and shows no unexpected deletes or changes outside the
+selected subscription.
+
+Checkpoint: proceed only after `entra-hook-ready` appears and a human has
+reviewed the complete preview. Save the preview in an approved operational
+record if your change process requires it, but redact local paths and IDs before
+sharing.
 
 Microsoft documents the preview flag and independent hook execution. It does
 not document a guarantee about whether preview invokes lifecycle hooks. The
-explicit command above is therefore a project requirement, not a general AZD
+explicit hook command is therefore a project requirement, not a general AZD
 platform claim.
 
-Provisioning creates the resource group, network, private endpoints, Log
-Analytics, Application Insights, Key Vault and token secret, Storage account
-and table, Container Registry, Container Apps environment and app, Action
-Group, and baseline Activity Log Alert.
+Recovery:
 
-### 6. Deploy the image
+- A directory authorization error usually means `Application Administrator` is
+  inactive or the Azure CLI signed into the wrong tenant. Correct the context
+  and rerun the hook; it is designed to reconcile existing objects.
+- If the hook reports conflicting persisted application IDs, stop and inspect
+  the named app registration. Do not delete an existing application to force a
+  clean run.
+- If preview shows a delete or the wrong subscription, stop, correct the AZD
+  environment binding, and rerun preview.
+
+### Stage 6: provision the Azure resources
+
+Prerequisites: the stage 5 preview was reviewed and approved.
+
+Run:
 
 ```bash
-azd deploy
+azd provision \
+  -e "$AZURE_ENV_NAME" \
+  --subscription "$TARGET_SUBSCRIPTION_ID" \
+  --location "$AZURE_LOCATION" \
+  --no-prompt
 ```
 
-AZD builds the Docker image, pushes it to the registry, and updates the
-Container App. `azd up` runs provision and deploy as one workflow.
+Expected state: AZD reports successful provisioning and writes nonsecret Bicep
+outputs to the selected environment. The resource group contains the network,
+private endpoints, Log Analytics, Application Insights, Key Vault, token
+secret, Storage account and table, Container Registry, managed identity,
+Container Apps environment and app, Action Group, and baseline Activity Log
+Alert.
 
-### 7. Verify the deployment
-
-Capture nonsecret outputs:
+Capture outputs and inspect the central resources:
 
 ```bash
-APP_URI="$(azd env get-value SERVICE_APP_URI)"
 RESOURCE_GROUP="$(azd env get-value AZURE_RESOURCE_GROUP)"
 APP_NAME="$(azd env get-value SERVICE_APP_NAME)"
-ENV_NAME="$(azd env get-value AZURE_ENV_NAME)"
-ACTION_GROUP="ag-${ENV_NAME}-service-health"
+APP_URI="$(azd env get-value SERVICE_APP_URI)"
+ACTION_GROUP="ag-${AZURE_ENV_NAME}-service-health"
+
+test -n "$RESOURCE_GROUP"
+test -n "$APP_NAME"
+test -n "$APP_URI"
+az group show --name "$RESOURCE_GROUP" \
+  --query '{name:name,location:location,state:properties.provisioningState}' \
+  -o table
+az containerapp show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
+  --query '{name:name,state:properties.provisioningState,external:properties.configuration.ingress.external}' \
+  -o table
+az monitor action-group show \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$ACTION_GROUP" \
+  --query '{location:location,enabled:enabled,aad:webhookReceivers[0].useAadAuth,commonSchema:webhookReceivers[0].useCommonAlertSchema}' \
+  -o table
 ```
 
-Check public probes and unauthenticated webhook rejection:
+Run the machine checkpoint:
 
 ```bash
-test "$(curl -fsS "$APP_URI/healthz")" = '{"status":"healthy"}'
-test "$(curl -fsS "$APP_URI/readyz")" = '{"status":"ready"}'
+test -n "$RESOURCE_GROUP" &&
+test -n "$APP_NAME" &&
+test -n "$APP_URI" &&
+test "$(az group show --name "$RESOURCE_GROUP" \
+  --query properties.provisioningState -o tsv)" = "Succeeded" &&
+test "$(az containerapp show --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --query properties.provisioningState -o tsv)" = "Succeeded" &&
+test "$(az containerapp show --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --query properties.configuration.ingress.external -o tsv)" = "true" &&
+test "$(az monitor action-group show --resource-group "$RESOURCE_GROUP" \
+  --name "$ACTION_GROUP" --query location -o tsv | \
+  tr '[:upper:]' '[:lower:]')" = "global" &&
+test "$(az monitor action-group show --resource-group "$RESOURCE_GROUP" \
+  --name "$ACTION_GROUP" --query enabled -o tsv)" = "true" &&
+test "$(az monitor action-group show --resource-group "$RESOURCE_GROUP" \
+  --name "$ACTION_GROUP" \
+  --query 'webhookReceivers[0].useAadAuth' -o tsv)" = "true" &&
+test "$(az monitor action-group show --resource-group "$RESOURCE_GROUP" \
+  --name "$ACTION_GROUP" \
+  --query 'webhookReceivers[0].useCommonAlertSchema' -o tsv)" = "true" &&
+echo "azure-resources-ready"
+```
 
+Expected checkpoint values:
+
+- the resource group and Container App provisioning states are `Succeeded`;
+- Container App external ingress is `True`;
+- the Action Group location is `Global`;
+- `enabled`, `aad`, and `commonSchema` are `True`.
+
+Checkpoint: do not deploy application code until all expected values are
+present and the machine checkpoint prints `azure-resources-ready`. Provisioning
+success alone is not enough if the Action Group contract is wrong.
+
+Recovery:
+
+- For `MissingSubscriptionRegistration`, register the namespace named in the
+  error and rerun the same idempotent provision command.
+- For role-assignment failures, verify the Azure RBAC assignments from stage 1
+  and allow for propagation before retrying.
+- For a regional capacity or policy error, do not change regions without a new
+  preview. Update `AZURE_LOCATION`, rerun preview, and obtain approval again.
+
+### Stage 7: build and deploy the application
+
+Prerequisites:
+
+- the stage 6 resource checkpoint passed;
+- Docker still reports a running Linux server;
+- the current directory is the repository root.
+
+Run:
+
+```bash
+docker info --format 'os={{.OSType}}'
+azd deploy -e "$AZURE_ENV_NAME" --no-prompt
+```
+
+Expected state: AZD builds the Docker image, pushes it to the deployed registry,
+updates the Container App, and reports a successful service deployment.
+
+Inspect active revisions:
+
+```bash
+az containerapp revision list \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --query '[?properties.active].{name:name,active:properties.active,created:properties.createdTime}' \
+  -o table
+
+test "$(az containerapp revision list \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --query 'length([?properties.active])' -o tsv)" = "1" &&
+echo "application-revision-ready"
+```
+
+Checkpoint: single revision mode must show exactly one active revision and its
+`active` value must be `True`. The final line must be
+`application-revision-ready`.
+
+Recovery:
+
+- If Docker cannot connect, fix the engine before rerunning `azd deploy`.
+- If image push or pull fails, inspect the managed identity's `AcrPull` role and
+  allow for role-assignment propagation.
+- If the new revision does not become active, inspect
+  `az containerapp logs show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --type system --tail 100`
+  before retrying or activating a known-good revision.
+
+### Stage 8: verify probes and the authentication boundary
+
+Prerequisites: stage 7 shows one active revision.
+
+Run:
+
+```bash
+test "$(curl -fsS "$APP_URI/healthz")" = '{"status":"healthy"}' &&
+test "$(curl -fsS "$APP_URI/readyz")" = '{"status":"ready"}' &&
 HTTP_CODE="$(curl -sS -o /tmp/service-health-response.json -w '%{http_code}' \
   -X POST -H 'Content-Type: application/json' --data '{}' \
-  "$APP_URI/api/service-health")"
-test "$HTTP_CODE" = "401"
-python3 -m json.tool /tmp/service-health-response.json
-rm -f /tmp/service-health-response.json
+  "$APP_URI/api/service-health")" &&
+test "$HTTP_CODE" = "401" &&
+python3 -m json.tool /tmp/service-health-response.json &&
+rm -f /tmp/service-health-response.json &&
+echo "ingress-auth-checkpoint-passed"
 ```
 
-Check the Azure resource contract:
+Expected state:
+
+- `/healthz` returns exactly `{"status":"healthy"}`;
+- `/readyz` returns exactly `{"status":"ready"}`;
+- an unauthenticated webhook request returns HTTP `401`;
+- the final line is `ingress-auth-checkpoint-passed`.
+
+Checkpoint: all three responses must match. A public `200` from the webhook is a
+security failure and must block the signed test.
+
+Recovery:
+
+- A probe timeout points to ingress, revision, or startup failure. Inspect
+  system and console logs.
+- A readiness `503` points to missing required environment values or client
+  construction failure.
+- A webhook response other than `401` requires inspection of Container Apps
+  authentication and Flask authorization before proceeding.
+
+### Stage 9: send the signed Service Health test
+
+Prerequisites:
+
+- the stage 8 checkpoint passed;
+- the bot is present in the configured Slack destination;
+- the operator can invoke Action Group test notifications.
+
+The Azure CLI test requires the receiver definition even though the Action
+Group already exists:
 
 ```bash
-az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" \
-  --query '{state:properties.runningStatus,min:properties.template.scale.minReplicas,external:properties.configuration.ingress.external}' \
-  -o yaml
-
-az monitor action-group show -g "$RESOURCE_GROUP" -n "$ACTION_GROUP" \
-  --query '{location:location,enabled:enabled,aad:webhookReceivers[0].useAadAuth,commonSchema:webhookReceivers[0].useCommonAlertSchema}' \
-  -o yaml
-```
-
-Use Azure Monitor's signed Service Health test. The test command requires the
-receiver definition even when an Action Group already exists:
-
-```bash
-URI="$(az monitor action-group show -g "$RESOURCE_GROUP" -n "$ACTION_GROUP" \
+URI="$(az monitor action-group show \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$ACTION_GROUP" \
   --query 'webhookReceivers[0].serviceUri' -o tsv)"
-OBJECT_ID="$(az monitor action-group show -g "$RESOURCE_GROUP" -n "$ACTION_GROUP" \
+OBJECT_ID="$(az monitor action-group show \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$ACTION_GROUP" \
   --query 'webhookReceivers[0].objectId' -o tsv)"
-IDENTIFIER_URI="$(az monitor action-group show -g "$RESOURCE_GROUP" -n "$ACTION_GROUP" \
+IDENTIFIER_URI="$(az monitor action-group show \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$ACTION_GROUP" \
   --query 'webhookReceivers[0].identifierUri' -o tsv)"
 
+test -n "$URI" &&
+test -n "$OBJECT_ID" &&
+test -n "$IDENTIFIER_URI" &&
 az monitor action-group test-notifications create \
   --resource-group "$RESOURCE_GROUP" \
   --action-group-name "$ACTION_GROUP" \
@@ -443,15 +845,39 @@ az monitor action-group test-notifications create \
   -o json
 ```
 
-Confirm an HTTP `200` webhook request in Container App logs and a formatted
-message in Slack. Microsoft REST examples show a completed operation state.
-Live tests for this project have also returned `Complete` for the operation and
-`Succeeded` for the receiver. The day-2 command accepts only the explicit states
-covered by its tests and leaves a new alert disabled for any other result.
+Expected state: the Azure operation completes, the receiver succeeds, the
+Container App records an HTTP `200` request, and a formatted Service Health root
+message appears in the configured Slack channel. Microsoft REST examples show
+`Completed`; live project tests have also returned operation state `Complete`
+and receiver state `Succeeded`.
 
-Do not repeat a failing test in a tight loop. Azure Monitor retries eligible
-webhook failures and, after the retry sequence fails, suppresses Action Group
-calls to that endpoint for 15 minutes.
+Inspect recent application logs:
+
+```bash
+az containerapp logs show \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --type console \
+  --tail 100
+```
+
+Checkpoint: deployment is accepted only when the signed test succeeds and the
+Slack message appears in the intended channel. After telemetry arrives, use the
+[Application Insights queries](#application-insights-queries) to confirm the
+Table and Slack dependencies.
+
+Recovery:
+
+- A `401` or `403` indicates an audience, allowed-client, owner, or app-role
+  mismatch. Reconcile the hook and inspect the Container Apps authentication
+  settings.
+- A signed HTTP `200` with no Slack message points to token, scope, routing, or
+  channel membership.
+- A `503` points to a transient Slack or Storage dependency failure. Inspect
+  dependencies and retry only after correction.
+- Do not repeat a failing test in a tight loop. Azure Monitor retries eligible
+  failures and can suppress calls to the endpoint for 15 minutes after
+  exhausting the retry sequence.
 
 ## Manage alert scopes
 
@@ -527,7 +953,9 @@ successful deliveries when an incident is expected.
 Routing is revision configuration, not image content:
 
 ```bash
-ROUTES_B64="$(base64 -w0 config/service_health_routes.json)"
+ROUTES_B64="$(
+  python -c 'import base64, pathlib; print(base64.b64encode(pathlib.Path("config/service_health_routes.json").read_bytes()).decode())'
+)"
 azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64"
 unset ROUTES_B64
 azd provision

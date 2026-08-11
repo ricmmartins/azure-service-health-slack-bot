@@ -225,6 +225,8 @@ Microsoft guarantees.
 ## Maintenance rules
 
 - Keep the README focused on clean installation and operator tasks.
+- Keep the central deployment sequence gated by prerequisites, expected state,
+  a checkpoint, and focused recovery for every stage.
 - Add a Microsoft source to the evidence record when a platform-sensitive claim
   changes.
 - Put repository-specific behavior next to its implementation or test evidence.
