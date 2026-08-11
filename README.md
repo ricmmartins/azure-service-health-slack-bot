@@ -228,10 +228,13 @@ For deployment:
 
 The documented Bash commands work in Linux, macOS where the command syntax is
 available, and Ubuntu on WSL. On WSL, keep the repository in the Linux file
-system, such as `~/src`, rather than a mounted Windows drive under `/mnt`.
-Microsoft documents that Linux permission metadata is not enabled by default on
-DrvFS, so `chmod 600` alone does not provide the expected POSIX file mode there.
-See [File Permissions for WSL](https://learn.microsoft.com/windows/wsl/file-permissions).
+system, such as `~/src`, rather than a mounted Windows drive. Microsoft
+documents that the DrvFS automount root is configurable and Linux permission
+metadata is not enabled there by default, so a path-prefix check and
+`chmod 600` alone are insufficient. Stage 4 checks the actual mount metadata
+before reading the token. See
+[Advanced settings configuration in WSL](https://learn.microsoft.com/windows/wsl/wsl-config#automount-settings)
+and [File Permissions for WSL](https://learn.microsoft.com/windows/wsl/file-permissions).
 Stage 1 pins the Azure subscription and AZD environment before registering the
 Container Apps resource providers.
 
@@ -338,7 +341,7 @@ Recovery:
 Prerequisites:
 
 - a local directory where the repository can be cloned; on WSL this must be in
-  the Linux file system, not under `/mnt`;
+  the Linux file system, not a DrvFS mount;
 - the target tenant ID;
 - the target subscription ID;
 - a supported Azure region;
@@ -464,8 +467,8 @@ Recovery:
   rerun the role query.
 - If provider registration is forbidden, ask a subscription administrator to
   register the namespaces. Do not substitute `Microsoft.ContainerService`.
-- On WSL, if the repository was cloned under `/mnt`, remove any local secret
-  data from that copy and clone again under `~/src` before stage 4.
+- On WSL, if the repository was cloned on a Windows drive, remove any local
+  secret data from that copy and clone again under `~/src` before stage 4.
 
 ### Stage 2: create and authorize the Slack app
 
@@ -588,74 +591,91 @@ if ! (
 fi
 echo "deployment-target-reconfirmed"
 
-AZD_ENV_DIR="$(pwd -P)/.azure/$AZURE_ENV_NAME"
+AZD_ENV_FILE=".azure/$AZURE_ENV_NAME/.env"
+
+check_wsl_secret_path() {
+  local target="$1"
+  local mount_info
+  if ! mount_info="$(
+    findmnt --target "$target" --raw --noheadings \
+      --output FSTYPE,SOURCE,FS-OPTIONS
+  )"; then
+    echo "Could not resolve mount metadata for $target." >&2
+    return 1
+  fi
+  if [[ "$mount_info" == drvfs* ]] ||
+     [[ "$mount_info" == 9p* && "$mount_info" == *aname=drvfs* ]] ||
+     [[ "$mount_info" == virtiofs* ]]; then
+    echo "$target is on DrvFS; use the WSL Linux file system." >&2
+    return 1
+  fi
+}
+
 if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
-  if ! WSL_FS_TYPE="$(
-    findmnt -T "$AZD_ENV_DIR" -n -r -o FSTYPE 2>/dev/null
-  )" ||
-     ! WSL_FS_SOURCE="$(
-       findmnt -T "$AZD_ENV_DIR" -n -r -o SOURCE 2>/dev/null
-     )" ||
-     ! WSL_FS_OPTIONS="$(
-       findmnt -T "$AZD_ENV_DIR" -n -r -o OPTIONS 2>/dev/null
-     )" ||
-     [[ -z "$WSL_FS_TYPE" || -z "$WSL_FS_SOURCE" ]]; then
-    echo "Could not identify the AZD environment mount on WSL." >&2
-    exit 1
-  fi
-  WSL_WINDOWS_FS=false
-  case "$WSL_FS_TYPE" in
-    drvfs)
-      WSL_WINDOWS_FS=true
-      ;;
-    9p)
-      if [[ "$WSL_FS_OPTIONS" == *"aname=drvfs"* ||
-            "$WSL_FS_SOURCE" == [[:alpha:]]:\\* ]]; then
-        WSL_WINDOWS_FS=true
-      fi
-      ;;
-  esac
-  if [[ "$WSL_WINDOWS_FS" == true ]]; then
-    echo "The AZD environment is on DrvFS; use the WSL Linux file system." >&2
-    exit 1
-  fi
-  unset WSL_FS_TYPE WSL_FS_SOURCE WSL_FS_OPTIONS WSL_WINDOWS_FS
+  command -v findmnt >/dev/null ||
+    { echo "findmnt is required to verify the WSL secret path." >&2; exit 1; }
+  test -f "$AZD_ENV_FILE" ||
+    { echo "The selected AZD environment file does not exist." >&2; exit 1; }
+  check_wsl_secret_path "$PWD" || exit 1
+  check_wsl_secret_path "$AZD_ENV_FILE" || exit 1
 fi
 echo "local-secret-path-confirmed"
 
-AZD_ENV_FILE="$AZD_ENV_DIR/.env"
-cleanup_local_slack_token() {
-  local cleanup_file
-  local old_umask
-  old_umask="$(umask)"
-  umask 077
-  if ! cleanup_file="$(mktemp "${AZD_ENV_FILE}.cleanup.XXXXXX")"; then
-    umask "$old_umask"
-    return 1
-  fi
-  umask "$old_umask"
-  if ! awk '!/^SLACK_BOT_TOKEN=/' "$AZD_ENV_FILE" >"$cleanup_file" ||
-     ! mv -f "$cleanup_file" "$AZD_ENV_FILE"; then
-    rm -f "$cleanup_file"
-    return 1
-  fi
-}
-abort_secret_stage() {
-  local reason="$1"
-  if cleanup_local_slack_token; then
-    echo "$reason The stored Slack token was removed." >&2
-  else
-    echo "$reason Automatic Slack token cleanup also failed." >&2
-  fi
-  exit 1
-}
+(
+SECRET_STAGE_ARMED=0
+remove_local_slack_token() {
+  python - "$AZD_ENV_FILE" <<'PY'
+import fcntl
+import os
+from pathlib import Path
+import sys
+import tempfile
 
+path = Path(sys.argv[1])
+lock_fd = os.open(f"{path}.lock", os.O_CREAT | os.O_RDWR, 0o600)
+with os.fdopen(lock_fd, "r+") as lock_stream:
+    fcntl.flock(lock_stream, fcntl.LOCK_EX)
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    fd, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=".env.cleanup.", text=True
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
+            stream.writelines(
+                line for line in lines if not line.startswith("SLACK_BOT_TOKEN=")
+            )
+        os.chmod(temporary_name, 0o600)
+        os.replace(temporary_name, path)
+    except BaseException:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+        raise
+PY
+}
+cleanup_secret_stage() {
+  local status=$?
+  unset SLACK_BOT_TOKEN ROUTES_B64
+  if [[ "$SECRET_STAGE_ARMED" == 1 ]]; then
+    if ! remove_local_slack_token; then
+      echo "Could not remove the stored Slack token after stage failure." >&2
+      status=1
+    fi
+  fi
+  return "$status"
+}
+trap cleanup_secret_stage EXIT
+trap 'exit 130' HUP INT TERM
+
+set +x
 read -rsp "Slack bot token (input hidden): " SLACK_BOT_TOKEN; printf '\n'
 while [[ "$SLACK_BOT_TOKEN" != xoxb-* ]]; do
   unset SLACK_BOT_TOKEN
   echo "Expected an xoxb token; try again." >&2
   read -rsp "Slack bot token (input hidden): " SLACK_BOT_TOKEN; printf '\n'
 done
+SECRET_STAGE_ARMED=1
 if ! azd env set SLACK_BOT_TOKEN "$SLACK_BOT_TOKEN" \
   -e "$AZURE_ENV_NAME" --no-prompt; then
   unset SLACK_BOT_TOKEN
@@ -667,27 +687,30 @@ unset SLACK_BOT_TOKEN
 if ! ROUTES_B64="$(
   python -c 'import base64, pathlib; print(base64.b64encode(pathlib.Path("config/service_health_routes.json").read_bytes()).decode())'
 )"; then
-  abort_secret_stage "Could not encode the routing file."
+  echo "Could not encode the routing file." >&2
+  exit 1
 fi
 if ! azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64" \
   -e "$AZURE_ENV_NAME" --no-prompt; then
   unset ROUTES_B64
-  abort_secret_stage \
-    "Could not store routing in the selected AZD environment."
+  echo "Could not store routing in the selected AZD environment." >&2
+  exit 1
 fi
 unset ROUTES_B64
 if ! chmod 600 "$AZD_ENV_FILE"; then
-  abort_secret_stage "Could not restrict the local AZD environment file."
+  echo "Could not restrict the local AZD environment file." >&2
+  exit 1
 fi
 if ! ENV_FILE_MODE="$(
   python -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' \
     "$AZD_ENV_FILE"
 )"; then
-  abort_secret_stage "Could not verify the local AZD environment file mode."
+  echo "Could not verify the local AZD environment file mode." >&2
+  exit 1
 fi
 if [[ "$ENV_FILE_MODE" != "600" ]]; then
-  unset ENV_FILE_MODE
-  abort_secret_stage "The local AZD environment file mode is not 600."
+  echo "The local AZD environment file mode is not 600." >&2
+  exit 1
 fi
 unset ENV_FILE_MODE
 if ! (
@@ -701,20 +724,37 @@ if ! (
   grep -q '^SLACK_BOT_TOKEN=' "$AZD_ENV_FILE" &&
   grep -q '^SERVICE_HEALTH_ROUTES_JSON_B64=' "$AZD_ENV_FILE"
 ); then
-  abort_secret_stage "The AZD environment checkpoint failed."
+  echo "The secret-stage checkpoint failed." >&2
+  exit 1
 fi
-echo "azd-environment-ready"
+trap '' HUP INT TERM
+if ! printf '%s\n' "azd-environment-ready"; then
+  exit 1
+fi
+SECRET_STAGE_ARMED=0
+trap - EXIT
+)
 ```
 
 Expected state:
 
 - `.azure/<environment-name>/.env` exists.
-- the command prints `deployment-target-reconfirmed` and
-  `local-secret-path-confirmed`;
+- the command prints `deployment-target-reconfirmed`,
+  `local-secret-path-confirmed`, and `azd-environment-ready`;
 - the local environment contains the two required keys without printing their
-  values, and the command prints `azd-environment-ready`.
+  values.
 
 Proceed only when the final line is `azd-environment-ready`.
+
+The secret stage runs in a subshell, so its traps do not replace traps in the
+operator's shell. Shell tracing is disabled before token input and remains
+disabled in that subshell. After the token storage attempt begins, an exit or
+interruption before the final line removes the `SLACK_BOT_TOKEN` entry from the
+local environment without reading it back through AZD or printing it. Cleanup
+holds AZD's `.env.lock` file across the atomic rewrite. The cleanup also applies
+when token or routing storage, file-mode enforcement, or the final checkpoint
+fails. Do not run another AZD command for this environment concurrently with
+stage 4.
 
 Hidden input prevents terminal echo, and the command history contains only the
 variable name. The expanded token is still passed to the local `azd` process
@@ -726,7 +766,7 @@ environment, and do not run `azd env get-values` in logs.
 
 On a later failure, cleanup filters only the exact `SLACK_BOT_TOKEN=` line. It
 does not retrieve or print the stored value, and it preserves every other
-environment entry.
+environment entry while holding the same cross-process lock used by AZD.
 
 The routing document is base64 encoded because AZD substitutes parameter values
 into `infra/main.parameters.json` before JSON parsing. Bicep decodes the value
@@ -737,11 +777,14 @@ Recovery:
 
 - Stop before entering the token if `deployment-target-reconfirmed` does not
   print. Repeat the stage 1 account and environment recovery.
-- On WSL, stop if `local-secret-path-confirmed` does not print. Clone a clean
-  copy under `~/src` and repeat from stage 1.
-- If routing persistence, permission enforcement, or a later check fails after
-  the token is stored, the stage removes only the local `SLACK_BOT_TOKEN`
-  entry. Fix the reported error and rerun the whole stage.
+- On WSL, stop if `local-secret-path-confirmed` does not print. The check reads
+  the mount type and options for both the repository and selected AZD
+  environment file, so it also detects DrvFS when its automount root is not
+  `/mnt`.
+  Clone a clean copy under `~/src` and repeat from stage 1.
+- If a command fails after the token is stored, confirm only that
+  `grep -q '^SLACK_BOT_TOKEN=' ".azure/$AZURE_ENV_NAME/.env"` returns nonzero.
+  Do not display the file or value. Fix the reported failure and repeat stage 4.
 - Repeat the hidden token input if the wrong token was stored.
 - If the wrong environment name was used and no hook or provisioning command
   has run, create a new environment with the correct name and remove the unused
