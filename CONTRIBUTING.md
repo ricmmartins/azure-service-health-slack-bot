@@ -10,12 +10,16 @@ setup and day-2 scope management, including the native AZD pre-provision hook.
 Create and activate a virtual environment, then install the application and
 test dependencies:
 
-```sh
+```bash
 python -m venv .venv
+source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python -m pip install -r requirements-test.txt
 ```
+
+On Windows, use Ubuntu on WSL and run the Bash commands above. Activate the
+environment again in each new shell before running the validation commands.
 
 Copy `.env-example` to `.env` only when running the application locally. Never
 commit `.env` or real credentials.
@@ -24,7 +28,7 @@ commit `.env` or real credentials.
 
 Run the checks used by CI before opening a pull request.
 
-```sh
+```bash
 python -m pytest -q
 python -m flake8 .
 python -m pytest -q test/test_manage_alert_scopes.py test/test_configure_secure_webhook.py test/test_cli_subprocess.py
