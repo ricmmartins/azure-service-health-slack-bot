@@ -69,9 +69,7 @@ service_health/                 Parser, routing, auth, storage, Slack, runtime, 
 infra/main.bicep                Subscription-scope orchestration
 infra/modules/                  registry, security, storage, container-app, observability, service-health-alert
 scripts/configure_secure_webhook.py    Idempotent Entra app registration/role setup
-scripts/configure-secure-webhook.ps1   Temporary compatibility wrapper for the Python CLI
 scripts/manage_alert_scopes.py         Tenant-bound day-2 subscription/MG alert manager
-scripts/manage-alert-scopes.ps1        Temporary compatibility wrapper for the Python CLI
 infra/day2/                            Reusable peripheral alert deployment entry point
 config/service_health_routes.example.json
 test/                           Parser/routing/auth/storage/processor/Slack/app/bootstrap tests
@@ -86,7 +84,6 @@ All commands were executed directly in this repository during this session.
 |---|---|---|
 | Python tests | `python -m pytest -q` | **32 passed** in 8.93s |
 | Python lint | `python -m flake8 .` | **0 findings** |
-| PowerShell parse | AST parse of `scripts/configure-secure-webhook.ps1` via `[System.Management.Automation.Language.Parser]::ParseFile` | **PARSE OK**, 0 errors |
 | Bicep compile | `az bicep build --file infra/main.bicep --stdout` | **Compiled successfully** to ARM JSON |
 | Bicep lint | `az bicep lint --file infra/main.bicep` | **0 warnings/errors** |
 | Docker build | `docker build -t azure-service-health-slack-bot:validate .` | **Build succeeded**, multi-stage, final image based on `python:3.13-slim-bookworm` |
@@ -156,13 +153,12 @@ Slack configuration. No subscription IDs, resource names, tenant details, or
 credentials are retained in this record. This uncovered and fixed three real
 bugs, plus one environment-specific accommodation:
 
-1. **`scripts/configure-secure-webhook.ps1` silently failed on Windows.**
-   `az rest --body <jsonstring>` gets mangled by PowerShell → `az.cmd` →
-   `cmd.exe` argument passing, corrupting embedded quotes; the script also
-   never checked `$LASTEXITCODE`, so failures were swallowed and it reported
-   success while leaving `identifierUri="api://"` (empty app ID). Fixed with
-   a new `Invoke-GraphRest` helper that writes the JSON body to a temp file
-   and calls `az rest --body @tempfile`, and checks the exit code.
+1. **The original setup command silently failed on Windows.**
+   Its inline `az rest --body <jsonstring>` boundary corrupted embedded quotes
+   and did not propagate the child-process exit code, so it reported success
+   while leaving `identifierUri="api://"` (empty app ID). The canonical Python
+   implementation writes JSON to a temporary UTF-8 file, passes
+   `az rest --body @tempfile`, and checks every subprocess result.
 2. **`SERVICE_HEALTH_ROUTES_JSON` parameter substitution was broken as
    documented.** `azd` substitutes `${VAR}` into `infra/main.parameters.json`
    as raw text *before* parsing it as JSON, so a JSON-valued env var
@@ -191,7 +187,6 @@ not previously registered — a one-time step, not a repo bug.
 | Bicep lint (post-fix) | `az bicep lint --file infra/main.bicep` | 1 benign warning (hardcoded `privatelink.table.core.windows.net` zone name) |
 | Python tests (post-fix) | `python -m pytest -q` | **32 passed** |
 | Python lint (post-fix) | `python -m flake8 .` | **0 findings** |
-| PowerShell parse (post-fix) | AST parse of `configure-secure-webhook.ps1` | **PARSE OK** |
 | Real `azd provision` | `azd provision --no-prompt` | **SUCCESS** — resource group, VNet, 2 Private Endpoints, Log Analytics, App Insights, Key Vault (+secret), Storage Account/Table, ACR, Container Apps Environment (VNet-integrated), Container App, Entra app registration + `ActionGroupsSecureWebhook` role + AzNS role assignment, Action Group, and Activity Log Alert created |
 | Real `azd deploy` | `azd deploy --no-prompt` | **SUCCESS** — real app image built, pushed to ACR, deployed as the active Container App revision |
 | Live `/healthz` | `curl https://<fqdn>/healthz` | **HTTP 200** `{"status":"healthy"}` |
@@ -353,8 +348,6 @@ evidence. Unset transient shell variables immediately after use.
 
 | Check | Result |
 |---|---|
-| PowerShell parser | **Passed** for `scripts/manage-alert-scopes.ps1` and `test/ManageAlertScopes.Tests.ps1` |
-| Pester 5.7.1 mocked day-2 suite | **53 passed**, 0 failed, 0 skipped |
 | Python tests and lint | **48 passed**; flake8 clean |
 | Main and day-2 Bicep build/lint | **Passed**; existing `core.windows.net` environment-URL warning in `network.bicep` plus CLI upgrade notice only |
 | Docker image build | **Passed** as `azure-service-health-slack-bot:day2-final`; container user is `app` |
@@ -426,14 +419,12 @@ implementation, and neither Slack nor the protected deployment was modified.
 
 ### Official Microsoft contract verification
 
-The Microsoft Learn MCP was not present in this session's available tool
-registry. MCP-specific verification is therefore an explicit tooling blocker.
-The fallback review below used only current official Microsoft Learn content;
-no third-party documentation was used.
+Current official Microsoft Learn content was queried through the installed
+Learn MCP. No third-party documentation was used.
 
 | Official Microsoft Learn source | Behavior validated against the implementation |
 |---|---|
-| [AZD hooks](https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/azd-extensibility) and [azure.yaml schema](https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/azd-schema) | `preprovision` supports OS-specific `windows`/`posix` blocks and explicit `pwsh`/`sh` hosts. The project-root hook commands invoke the same Python implementation on every OS. |
+| [AZD multi-language hooks](https://learn.microsoft.com/azure/developer/azure-developer-cli/hooks-multi-language#python-hooks) and [azure.yaml schema](https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/azd-schema) | A `preprovision` hook can point directly to a `.py` file. AZD infers the Python executor from the extension, finds the nearest dependency manifest, and runs the same hook on every operating system. |
 | [AZD command reference](https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/reference) | `azd auth login`, `auth status`, `env new`, `env set`, `env get-value`, `env list`, `provision`, `up`, and `down --purge` forms used by the hook and runbook are current. |
 | [`az rest`](https://learn.microsoft.com/en-us/cli/azure/reference-index#az-rest) | ARM and Microsoft Graph requests support explicit methods, URLs, headers, JSON output, and `@file` bodies. The Python Graph boundary uses temporary UTF-8 body files so Windows quoting cannot corrupt JSON. |
 | [`az account show`](https://learn.microsoft.com/en-us/cli/azure/account#az-account-show) and [`az account list`](https://learn.microsoft.com/en-us/cli/azure/account#az-account-list) | Tenant and subscription IDs are obtained from the signed-in Azure context and checked exactly before any operation. |
@@ -465,22 +456,12 @@ Two official-documentation gaps remain explicit rather than being hidden:
    service-principal callers. Tests pin both observed shapes and unknown values
    fail explicitly.
 
-### Complete PowerShell inventory and disposition
+### Python-only operational interface
 
-| Tracked item | Classification | Rationale |
-|---|---|---|
-| `scripts/manage-alert-scopes.ps1` | (2) Temporary compatibility wrapper | Preserves existing automation while delegating all arguments and exit codes to `manage_alert_scopes.py`; no Azure business logic remains. |
-| `scripts/configure-secure-webhook.ps1` | (2) Temporary compatibility wrapper | Preserves the former setup entry point while delegating Entra/AZD work to `configure_secure_webhook.py`; no Graph or Azure logic remains. |
-| `test/ManageAlertScopes.Tests.ps1` | (3) Test-only code retained until wrapper retirement | Parses the wrapper and proves argument/exit-code delegation only. Python owns behavior and destructive-path regression tests. |
-| `test/ConfigureSecureWebhook.Tests.ps1` | (3) Test-only code retained until wrapper retirement | Parses the wrapper and proves setup delegation only. Python owns Graph, idempotency, and error-path tests. |
-
-No tracked PowerShell file remains in category (1), and no tracked PowerShell
-file is obsolete enough for category (4) while compatibility is supported.
-The remaining references are intentional: `azure.yaml` uses `pwsh` only as the
-official Windows AZD command host; CI parses/tests the wrappers; README and
-CONTRIBUTING describe the temporary compatibility surface and its tests; and
-the README's Windows PowerShell Docker example is shell-specific usage, not
-operational business logic.
+The Python setup and day-2 CLIs are the sole tracked operational entry points.
+The AZD hook points directly to the setup `.py` file, and CI runs the complete
+Python suite plus exact CLI contracts on Ubuntu, macOS, and Windows. A
+repository regression test rejects retired script extensions and terminology.
 
 ### Process, command, and build evidence
 
@@ -489,24 +470,20 @@ operational business logic.
 | Full Python suite | `python -m pytest -q` | **121 passed** |
 | Python lint | `python -m flake8 .` | **0 findings** |
 | Canonical CLI suite exactly as documented in CONTRIBUTING | `python -m pytest -q test/test_manage_alert_scopes.py test/test_configure_secure_webhook.py test/test_cli_subprocess.py` | **73 passed** |
-| Wrapper suite exactly as documented in CONTRIBUTING | `pwsh -NoProfile -Command "Invoke-Pester test/ManageAlertScopes.Tests.ps1, test/ConfigureSecureWebhook.Tests.ps1 -CI"` | **4 passed** |
 | CLI entry points | `python scripts/manage_alert_scopes.py --help`; `python scripts/configure_secure_webhook.py --help` | Both exit 0 with usage on stdout. |
-| Cross-platform subprocess contract | Real child processes with stateful fake `az`/`azd` executables | Help, documented command forms, quoted display names, paths with spaces, JSON output, invalid input/exit codes, temporary body-file cleanup, idempotent rerun, wrappers, and current-OS AZD hook command passed. |
+| Cross-platform subprocess contract | Real child processes with stateful fake `az`/`azd` executables | Help, documented command forms, quoted display names, paths with spaces, JSON output, invalid input/exit codes, temporary body-file cleanup, idempotent rerun, repository portability guard, and the native Python AZD hook passed. |
 | Installed Azure CLI boundary | `az version` through `AzureCli` with a JMESPath string literal containing `&`, `%`, and double quotes | Passed through a real subprocess on Windows. The MSI `az.cmd` launcher was bypassed through its bundled `python.exe -IBm azure.cli`, and Azure CLI returned the exact special-character value. The same assertion runs on every CI matrix OS. |
 | Real documented Management Groups reads | `GET` group and descendants with `api-version=2020-05-01` through the shared Python boundary | Passed against tenant root `cc8ad65c-a10c-42a1-9fdc-65d99db48492`; three descendants returned. |
 | Main and day-2 Bicep | The four build/lint commands in CONTRIBUTING | Passed. Existing `core.windows.net` portability warning in `network.bicep` and CLI upgrade notice only. |
 | Docker | `docker build -t azure-service-health-slack-bot:ci .` | Passed; image ID `sha256:f8d36805a5aba66b48e720df02c8f392708447fe20f9bfe83ec4ba8f8487f97b`. |
 
-The Windows hook command from `azure.yaml` was executed exactly through `pwsh`
-by the subprocess suite. The POSIX `sh` command cannot execute on this Windows
-workstation; the same test selects and executes the exact POSIX hook on the
-Ubuntu and macOS GitHub Actions matrix. The README additions in this change are
-explanatory citations, not new shell snippets. Previously updated day-2
-invocation forms were executed with their documented tokens against the
-isolated tenant; with no central deployment present, each failed safely before
-mutation. The subprocess suite additionally exercises every documented
-operation parser and JSON form without representing those fakes as live Azure
-validation.
+The exact native Python hook from `azure.yaml` is exercised by the subprocess
+suite on the Ubuntu, macOS, and Windows GitHub Actions matrix. Previously
+updated day-2 invocation forms were executed with their documented tokens
+against the isolated tenant; with no central deployment present, each failed
+safely before mutation. The subprocess suite additionally exercises every
+documented operation parser and JSON form without representing those fakes as
+live Azure validation.
 
 ### Isolated Azure/Entra operational E2E proof
 

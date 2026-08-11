@@ -8,8 +8,12 @@ on:
 
 jobs:
   python:
-    name: Python tests and lint
-    runs-on: ubuntu-latest
+    name: Python validation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,21 +28,6 @@ jobs:
         run: python -m pytest -q
       - name: Run flake8
         run: python -m flake8 .
-
-  scope-cli:
-    name: Scope CLI (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - name: Install test dependency
-        run: python -m pip install -r requirements-test.txt
       - name: Test cross-platform operational CLIs
         run: >-
           python -m pytest -q
@@ -67,32 +56,6 @@ jobs:
           az bicep lint --file infra/main.bicep
           az bicep build --file infra/day2/service-health-alert-scope.bicep --stdout > /dev/null
           az bicep lint --file infra/day2/service-health-alert-scope.bicep
-
-  powershell:
-    name: PowerShell tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Pester
-        shell: pwsh
-        run: Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
-      - name: Parse and test compatibility wrappers
-        shell: pwsh
-        run: |
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path scripts/manage-alert-scopes.ps1),
-            [ref]$null,
-            [ref]$errors
-          ) | Out-Null
-          if ($errors.Count -gt 0) { throw ($errors | Out-String) }
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path scripts/configure-secure-webhook.ps1),
-            [ref]$null,
-            [ref]$errors
-          ) | Out-Null
-          if ($errors.Count -gt 0) { throw ($errors | Out-String) }
-          Invoke-Pester test/ManageAlertScopes.Tests.ps1, test/ConfigureSecureWebhook.Tests.ps1 -CI
 
   docker:
     name: Docker image build
