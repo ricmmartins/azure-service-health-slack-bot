@@ -8,9 +8,9 @@ param location string
 param slackBotToken string
 
 param serviceHealthRoutesJsonB64 string
-param secureWebhookClientId string = ''
-param secureWebhookObjectId string = ''
-param secureWebhookIdentifierUri string = ''
+param secureWebhookClientId string
+param secureWebhookObjectId string
+param secureWebhookIdentifierUri string
 param tenantId string = tenant().tenantId
 
 @allowed([
@@ -29,17 +29,8 @@ deployment with scripts/manage_alert_scopes.py.
 ])
 param managementGroupId string = ''
 var resourceToken = toLower(uniqueString(subscription().id, environmentName))
-var hasSecureWebhookConfiguration = !empty(secureWebhookClientId) && !empty(secureWebhookObjectId) && !empty(secureWebhookIdentifierUri)
-var resourceGroupName = hasSecureWebhookConfiguration
-  ? 'rg-${environmentName}'
-  : fail('Secure Webhook configuration is missing. Run the preprovision hook before deploying.')
+var resourceGroupName = 'rg-${environmentName}'
 var serviceHealthRoutesJson = base64ToString(serviceHealthRoutesJsonB64)
-var secureWebhookConfiguration = hasSecureWebhookConfiguration ? {
-    clientId: secureWebhookClientId
-    objectId: secureWebhookObjectId
-    identifierUri: secureWebhookIdentifierUri
-  }
-  : fail('Secure Webhook configuration is missing. Run the preprovision hook before deploying.')
 var centralAlertSubscriptionId = empty(managementGroupId)
   ? subscription().subscriptionId
   : ''
@@ -129,8 +120,8 @@ module app 'modules/container-app.bicep' = {
     slackBotTokenSecretUri: security.outputs.slackBotTokenSecretUri
     tableEndpoint: storage.outputs.tableEndpoint
     serviceHealthRoutesJson: serviceHealthRoutesJson
-    secureWebhookClientId: secureWebhookConfiguration.clientId
-    secureWebhookIdentifierUri: secureWebhookConfiguration.identifierUri
+    secureWebhookClientId: secureWebhookClientId
+    secureWebhookIdentifierUri: secureWebhookIdentifierUri
     tenantId: tenantId
     infraSubnetId: network.outputs.infraSubnetId
     tags: tags
@@ -143,8 +134,8 @@ module serviceHealthAlert 'modules/service-health-alert.bicep' = {
   params: {
     environmentName: environmentName
     webhookUri: 'https://${app.outputs.fqdn}/api/service-health'
-    secureWebhookObjectId: secureWebhookConfiguration.objectId
-    secureWebhookIdentifierUri: secureWebhookConfiguration.identifierUri
+    secureWebhookObjectId: secureWebhookObjectId
+    secureWebhookIdentifierUri: secureWebhookIdentifierUri
     tenantId: tenantId
     targetSubscriptionId: centralAlertSubscriptionId
     tags: tags
