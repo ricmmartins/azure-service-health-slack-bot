@@ -621,32 +621,37 @@ if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
 fi
 echo "local-secret-path-confirmed"
 
+(
 SECRET_STAGE_ARMED=0
 remove_local_slack_token() {
   python - "$AZD_ENV_FILE" <<'PY'
+import fcntl
 import os
 from pathlib import Path
 import sys
 import tempfile
 
 path = Path(sys.argv[1])
-lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-fd, temporary_name = tempfile.mkstemp(
-    dir=path.parent, prefix=".env.cleanup.", text=True
-)
-try:
-    with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
-        stream.writelines(
-            line for line in lines if not line.startswith("SLACK_BOT_TOKEN=")
-        )
-    os.chmod(temporary_name, 0o600)
-    os.replace(temporary_name, path)
-except BaseException:
+lock_fd = os.open(f"{path}.lock", os.O_CREAT | os.O_RDWR, 0o600)
+with os.fdopen(lock_fd, "r+") as lock_stream:
+    fcntl.flock(lock_stream, fcntl.LOCK_EX)
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    fd, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=".env.cleanup.", text=True
+    )
     try:
-        os.unlink(temporary_name)
-    except FileNotFoundError:
-        pass
-    raise
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
+            stream.writelines(
+                line for line in lines if not line.startswith("SLACK_BOT_TOKEN=")
+            )
+        os.chmod(temporary_name, 0o600)
+        os.replace(temporary_name, path)
+    except BaseException:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+        raise
 PY
 }
 cleanup_secret_stage() {
@@ -682,13 +687,14 @@ unset SLACK_BOT_TOKEN
 if ! ROUTES_B64="$(
   python -c 'import base64, pathlib; print(base64.b64encode(pathlib.Path("config/service_health_routes.json").read_bytes()).decode())'
 )"; then
-  abort_secret_stage "Could not encode the routing file."
+  echo "Could not encode the routing file." >&2
+  exit 1
 fi
 if ! azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64" \
   -e "$AZURE_ENV_NAME" --no-prompt; then
   unset ROUTES_B64
-  abort_secret_stage \
-    "Could not store routing in the selected AZD environment."
+  echo "Could not store routing in the selected AZD environment." >&2
+  exit 1
 fi
 unset ROUTES_B64
 if ! chmod 600 "$AZD_ENV_FILE"; then
@@ -698,10 +704,15 @@ fi
 if ! ENV_FILE_MODE="$(
   python -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' \
     "$AZD_ENV_FILE"
-)" != "600" ]]; then
+)"; then
+  echo "Could not verify the local AZD environment file mode." >&2
+  exit 1
+fi
+if [[ "$ENV_FILE_MODE" != "600" ]]; then
   echo "The local AZD environment file mode is not 600." >&2
   exit 1
 fi
+unset ENV_FILE_MODE
 if ! (
   test "$(azd env get-value AZURE_ENV_NAME \
     -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_ENV_NAME" &&
@@ -716,9 +727,13 @@ if ! (
   echo "The secret-stage checkpoint failed." >&2
   exit 1
 fi
-echo "azd-environment-ready"
+trap '' HUP INT TERM
+if ! printf '%s\n' "azd-environment-ready"; then
+  exit 1
+fi
 SECRET_STAGE_ARMED=0
-trap - EXIT HUP INT TERM
+trap - EXIT
+)
 ```
 
 Expected state:
@@ -731,12 +746,15 @@ Expected state:
 
 Proceed only when the final line is `azd-environment-ready`.
 
-Shell tracing is disabled before token input and remains disabled. After the
-token storage attempt begins, an exit or interruption before the final line
-atomically removes the `SLACK_BOT_TOKEN` entry from the local environment
-without reading it back through AZD or printing it. The cleanup also applies
+The secret stage runs in a subshell, so its traps do not replace traps in the
+operator's shell. Shell tracing is disabled before token input and remains
+disabled in that subshell. After the token storage attempt begins, an exit or
+interruption before the final line removes the `SLACK_BOT_TOKEN` entry from the
+local environment without reading it back through AZD or printing it. Cleanup
+holds AZD's `.env.lock` file across the atomic rewrite. The cleanup also applies
 when token or routing storage, file-mode enforcement, or the final checkpoint
-fails.
+fails. Do not run another AZD command for this environment concurrently with
+stage 4.
 
 Hidden input prevents terminal echo, and the command history contains only the
 variable name. The expanded token is still passed to the local `azd` process
@@ -748,7 +766,7 @@ environment, and do not run `azd env get-values` in logs.
 
 On a later failure, cleanup filters only the exact `SLACK_BOT_TOKEN=` line. It
 does not retrieve or print the stored value, and it preserves every other
-environment entry.
+environment entry while holding the same cross-process lock used by AZD.
 
 The routing document is base64 encoded because AZD substitutes parameter values
 into `infra/main.parameters.json` before JSON parsing. Bicep decodes the value

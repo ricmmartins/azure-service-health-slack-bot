@@ -171,7 +171,9 @@ instead of relying on a
 `/mnt` prefix. Default DrvFS mounts do not enable the Linux metadata that makes
 `chmod 600` enforce the expected POSIX mode. If token storage succeeds but a
 later routing, permission, or checkpoint operation fails, the stage atomically
-removes the local `SLACK_BOT_TOKEN` entry without printing its value.
+removes the local `SLACK_BOT_TOKEN` entry without printing its value. Cleanup
+runs in an isolated subshell and holds AZD's `.env.lock` cross-process lock
+while rewriting the environment file.
 
 The current Bicep contract requires the real token on every provision, does not
 reject an empty value, and writes the supplied value as a new Key Vault secret
