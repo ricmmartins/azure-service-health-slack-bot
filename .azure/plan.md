@@ -190,7 +190,7 @@ not previously registered — a one-time step, not a repo bug.
 | Real `azd provision` | `azd provision --no-prompt` | **SUCCESS** — resource group, VNet, 2 Private Endpoints, Log Analytics, App Insights, Key Vault (+secret), Storage Account/Table, ACR, Container Apps Environment (VNet-integrated), Container App, Entra app registration + `ActionGroupsSecureWebhook` role + AzNS role assignment, Action Group, and Activity Log Alert created |
 | Real `azd deploy` | `azd deploy --no-prompt` | **SUCCESS** — real app image built, pushed to ACR, deployed as the active Container App revision |
 | Live `/healthz` | `curl https://<fqdn>/healthz` | **HTTP 200** `{"status":"healthy"}` |
-| Live `/readyz` | `curl https://<fqdn>/readyz` | **HTTP 200** `{"status":"ready"}` (confirms live Key Vault + Table Storage connectivity through the Private Endpoints) |
+| Live `/readyz` | `curl https://<fqdn>/readyz` | **HTTP 200** `{"status":"ready"}` (configuration/client construction readiness; the signed lifecycle test and dependency telemetry separately prove Table data-plane access) |
 | Live webhook auth | `curl -X POST https://<fqdn>/api/service-health` (no token) | **HTTP 401** `authentication_required` — confirms Easy Auth is enforced |
 | Live Action Group/Alert | `az monitor action-group list` / `az monitor activity-log alert list` | Both resources exist with `Global` location |
 

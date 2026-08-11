@@ -14,8 +14,8 @@ outbound messages sent by :mod:`service_health.slack`.
 import logging
 import os
 
+import flask
 from dotenv import load_dotenv
-from flask import Flask
 from slack_sdk import WebClient
 
 from service_health.routes import create_service_health_blueprint
@@ -34,7 +34,7 @@ configure_telemetry()
 slack_bot_token = os.environ["SLACK_BOT_TOKEN"]
 slack_client = WebClient(slack_bot_token, timeout=10)
 
-web_app = Flask(__name__)
+web_app = flask.Flask(__name__)
 _service_health_runtime = None
 
 

@@ -5,6 +5,7 @@ from enum import Enum
 from service_health.models import LifecycleStatus
 from service_health.slack import PermanentSlackError, TransientSlackError
 from service_health.storage import (
+    InvalidStoreStateError,
     StoreConsistencyError,
     StoreDecision,
     TransientStoreError,
@@ -48,6 +49,10 @@ class ServiceHealthProcessor:
         channel_id = self.routing.channel_for(event)
         try:
             work_item = self.store.begin(event, channel_id)
+        except InvalidStoreStateError as exc:
+            raise PermanentProcessingError(
+                "Incident state is invalid and requires operator repair"
+            ) from exc
         except (TransientStoreError, StoreConsistencyError) as exc:
             raise TransientProcessingError(
                 "Unable to coordinate incident state") from exc
