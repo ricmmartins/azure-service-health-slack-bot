@@ -148,18 +148,17 @@ The Slack token is hidden during interactive input and stored as plaintext in
 the selected local AZD environment because the target vault does not exist
 before provisioning. The expanded value is also passed to the local AZD
 process. Microsoft recommends secret references instead of plaintext AZD
-environment values. A two-phase or external-vault design is outside the current
-implementation. The local environment file must be protected and must not be
-committed, copied, or printed into logs.
+environment values. The local environment file must be protected and must not
+be committed, copied, or printed into logs.
 
-After a successful provision creates the Key Vault secret and versioned
-Container App reference, remove the plaintext `SLACK_BOT_TOKEN` entry from the
-local AZD environment without printing it. The current Bicep contract requires
-the real token again for every later provision and does not reject an empty
-value. Operators must restore the token from an approved secret store before
-reprovisioning and remove it again afterward. Unattended production
-reprovisioning requires a preexisting external vault, a two-phase design, or an
-equivalent implementation change.
+The current Bicep contract requires the real token on every provision, does not
+reject an empty value, and writes the supplied value as a new Key Vault secret
+version. The token must therefore remain in the protected local AZD environment
+for reprovisioning. Operators must not rotate only the Key Vault secret because
+a later provision can overwrite it. Rotation must update `SLACK_BOT_TOKEN` in
+the named AZD environment and provision that explicit environment. Removing
+local plaintext persistence requires a preexisting external vault, a two-phase
+design, or an equivalent IaC change before production.
 
 ## Day-2 scope management
 
