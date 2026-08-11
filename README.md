@@ -588,21 +588,38 @@ if ! (
 fi
 echo "deployment-target-reconfirmed"
 
-AZD_ENV_DIR=".azure/$AZURE_ENV_NAME"
+AZD_ENV_DIR="$(pwd -P)/.azure/$AZURE_ENV_NAME"
 if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
-  if ! WSL_FS_ID="$(
-    stat -f -c '%T:%t' -- "$AZD_ENV_DIR" 2>/dev/null
-  )"; then
-    echo "Could not identify the AZD environment file system on WSL." >&2
+  if ! WSL_FS_TYPE="$(
+    findmnt -T "$AZD_ENV_DIR" -n -r -o FSTYPE 2>/dev/null
+  )" ||
+     ! WSL_FS_SOURCE="$(
+       findmnt -T "$AZD_ENV_DIR" -n -r -o SOURCE 2>/dev/null
+     )" ||
+     ! WSL_FS_OPTIONS="$(
+       findmnt -T "$AZD_ENV_DIR" -n -r -o OPTIONS 2>/dev/null
+     )" ||
+     [[ -z "$WSL_FS_TYPE" || -z "$WSL_FS_SOURCE" ]]; then
+    echo "Could not identify the AZD environment mount on WSL." >&2
     exit 1
   fi
-  case "$WSL_FS_ID" in
-    drvfs:*|9p:*|*:53464846|*:1021997)
-      echo "The AZD environment is on DrvFS; use the WSL Linux file system." >&2
-      exit 1
+  WSL_WINDOWS_FS=false
+  case "$WSL_FS_TYPE" in
+    drvfs)
+      WSL_WINDOWS_FS=true
+      ;;
+    9p)
+      if [[ "$WSL_FS_OPTIONS" == *"aname=drvfs"* ||
+            "$WSL_FS_SOURCE" == [[:alpha:]]:\\* ]]; then
+        WSL_WINDOWS_FS=true
+      fi
       ;;
   esac
-  unset WSL_FS_ID
+  if [[ "$WSL_WINDOWS_FS" == true ]]; then
+    echo "The AZD environment is on DrvFS; use the WSL Linux file system." >&2
+    exit 1
+  fi
+  unset WSL_FS_TYPE WSL_FS_SOURCE WSL_FS_OPTIONS WSL_WINDOWS_FS
 fi
 echo "local-secret-path-confirmed"
 
