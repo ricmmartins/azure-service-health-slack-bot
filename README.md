@@ -194,6 +194,12 @@ still rejected against the checkpointed watermark. Slack requests use a
 10-second timeout so one request plus the SDK's bounded connection retry stays
 inside the renewed 30-second lease.
 
+Before a root checkpoint, an active pending `Resolved` lease rejects
+nonterminal deliveries. An explicit failure rolls that uncommitted event into a
+failed-attempt watermark, while an expired lease can be reclaimed by the exact
+event or superseded only by a strictly newer delivery. This prevents stale
+replays without permanently locking an incident on an uncommitted resolution.
+
 ## Security
 
 - **Easy Auth (Entra ID)**: validates the caller's Microsoft Entra token.
@@ -267,11 +273,12 @@ AzNS ownership, and AzNS app-role assignment. Azure Monitor requires both
 ownership of the protected API app by the AzNS service principal and the
 `ActionGroupsSecureWebhook` role assignment. The script is idempotent (safe to
 re-run) and requires Microsoft Graph application administration permission.
-Legacy environments that were provisioned by more than one caller before the
-owner baseline existed must review the current Entra application owners, then
-run the setup command once with `--adopt-existing-owner-baseline`. That flag is
-accepted only when the application is resolved by a persisted immutable object
-or client ID; it never enables display-name adoption.
+Legacy environments without an owner baseline must use an explicit migration
+whenever their existing owners are not limited to the current deployment caller
+and the official AzNS service principal. Review those owners, then run the setup
+command once with `--adopt-existing-owner-baseline`. That flag is accepted only
+when the application is resolved by a persisted immutable object or client ID;
+it never enables display-name adoption.
 Azure CLI and AZD maintain separate authentication sessions, so both
 `az login` and `azd auth login` are required on a clean workstation.
 The platform-neutral hook path follows the official

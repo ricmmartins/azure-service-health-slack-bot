@@ -133,6 +133,9 @@ class AzureTableIncidentStore:
             "lastSubmissionTime": None,
             "rootFingerprint": "",
             "rootSubmissionTime": None,
+            "failedFingerprint": "",
+            "failedSubmissionTime": None,
+            "failedLifecycleStatus": "",
             "lastErrorCode": "",
             **_event_properties(event),
         }
@@ -166,14 +169,6 @@ class AzureTableIncidentStore:
                 return IncidentWorkItem(
                     StoreDecision.DUPLICATE, current, _etag(current))
 
-            if (
-                current.get("pendingLifecycleStatus")
-                == LifecycleStatus.RESOLVED.value
-                and event.lifecycle_status != LifecycleStatus.RESOLVED
-            ):
-                return IncidentWorkItem(
-                    StoreDecision.STALE, current, _etag(current))
-
             lease_until = _parse_datetime(current.get("leaseUntil"))
             lease_active = (
                 current.get("processingState") in {
@@ -183,6 +178,15 @@ class AzureTableIncidentStore:
                 and lease_until
                 and lease_until > now
             )
+            if (
+                lease_active
+                and current.get("pendingLifecycleStatus")
+                == LifecycleStatus.RESOLVED.value
+                and event.lifecycle_status != LifecycleStatus.RESOLVED
+            ):
+                return IncidentWorkItem(
+                    StoreDecision.STALE, current, _etag(current))
+
             if (
                 current.get("rootFingerprint") == event.fingerprint
                 and current.get("pendingFingerprint") == event.fingerprint
@@ -226,6 +230,8 @@ class AzureTableIncidentStore:
                 current.get("rootSubmissionTime"))
             pending_submission = _parse_datetime(
                 current.get("pendingSubmissionTime"))
+            failed_submission = _parse_datetime(
+                current.get("failedSubmissionTime"))
             watermarks = [
                 value for value in (last_submission, root_submission) if value
             ]
@@ -234,6 +240,11 @@ class AzureTableIncidentStore:
                 and pending_submission
             ):
                 watermarks.append(pending_submission)
+            if (
+                current.get("failedFingerprint") != event.fingerprint
+                and failed_submission
+            ):
+                watermarks.append(failed_submission)
             latest_submission = max(watermarks) if watermarks else None
             if (
                 latest_submission
@@ -329,6 +340,7 @@ class AzureTableIncidentStore:
         last_submission = parsed_timestamp("lastSubmissionTime")
         root_submission = parsed_timestamp("rootSubmissionTime")
         pending_submission = parsed_timestamp("pendingSubmissionTime")
+        failed_submission = parsed_timestamp("failedSubmissionTime")
 
         for field_name in (
             "messageTs",
@@ -336,6 +348,7 @@ class AzureTableIncidentStore:
             "lastFingerprint",
             "rootFingerprint",
             "pendingFingerprint",
+            "failedFingerprint",
         ):
             value = current.get(field_name)
             if value is not None and not isinstance(value, str):
@@ -362,11 +375,36 @@ class AzureTableIncidentStore:
             raise InvalidStoreStateError(
                 "Incident state has an invalid lifecycle status")
         pending_lifecycle = current.get("pendingLifecycleStatus")
-        if pending_lifecycle not in {
+        pending_fingerprint = current.get("pendingFingerprint") or ""
+        valid_pending_lifecycle = pending_lifecycle in {
             status.value for status in LifecycleStatus
-        }:
+        }
+        if pending_fingerprint:
+            if pending_submission is None or not valid_pending_lifecycle:
+                raise InvalidStoreStateError(
+                    "Incident state has invalid pending event metadata")
+        elif (
+            pending_submission is not None
+            or pending_lifecycle not in {None, ""}
+        ):
             raise InvalidStoreStateError(
-                "Incident state has an invalid pending lifecycle status")
+                "Incident state has inconsistent pending event metadata")
+
+        failed_lifecycle = current.get("failedLifecycleStatus")
+        failed_fingerprint = current.get("failedFingerprint") or ""
+        valid_failed_lifecycle = failed_lifecycle in {
+            status.value for status in LifecycleStatus
+        }
+        if failed_fingerprint:
+            if failed_submission is None or not valid_failed_lifecycle:
+                raise InvalidStoreStateError(
+                    "Incident state has invalid failed event metadata")
+        elif (
+            failed_submission is not None
+            or failed_lifecycle not in {None, ""}
+        ):
+            raise InvalidStoreStateError(
+                "Incident state has inconsistent failed event metadata")
         if state == "complete":
             if (
                 not valid_lifecycle
@@ -433,6 +471,9 @@ class AzureTableIncidentStore:
             "rootSubmissionTime": entity["pendingSubmissionTime"],
             "processingState": "reply_pending",
             "leaseUntil": now + timedelta(seconds=self.lease_seconds),
+            "failedFingerprint": "",
+            "failedSubmissionTime": None,
+            "failedLifecycleStatus": "",
             "lastErrorCode": "",
             "updatedAt": now,
         })
@@ -462,6 +503,9 @@ class AzureTableIncidentStore:
             "processingState": "complete",
             "leaseUntil": None,
             "leaseOwner": "",
+            "failedFingerprint": "",
+            "failedSubmissionTime": None,
+            "failedLifecycleStatus": "",
             "lastErrorCode": "",
             "updatedAt": self.now(),
         })
@@ -473,13 +517,29 @@ class AzureTableIncidentStore:
 
     def mark_failed(self, work_item, error_code):
         entity = dict(work_item.entity)
-        entity.update({
+        root_checkpointed = (
+            bool(entity.get("messageTs"))
+            and entity.get("rootFingerprint")
+            == entity.get("pendingFingerprint")
+        )
+        updates = {
             "processingState": "failed",
             "leaseUntil": None,
             "leaseOwner": "",
+            "failedFingerprint": entity.get("pendingFingerprint", ""),
+            "failedSubmissionTime": entity.get("pendingSubmissionTime"),
+            "failedLifecycleStatus": entity.get(
+                "pendingLifecycleStatus", ""),
             "lastErrorCode": str(error_code)[:128],
             "updatedAt": self.now(),
-        })
+        }
+        if not root_checkpointed:
+            updates.update({
+                "pendingFingerprint": "",
+                "pendingSubmissionTime": None,
+                "pendingLifecycleStatus": "",
+            })
+        entity.update(updates)
         try:
             self._replace(entity, work_item.etag)
         except ResourceModifiedError as exc:

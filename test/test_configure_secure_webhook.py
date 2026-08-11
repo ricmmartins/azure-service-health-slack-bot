@@ -433,6 +433,12 @@ def test_new_application_rolls_back_when_object_id_cannot_be_persisted():
             return {"value": []}
         if method == "POST" and uri.endswith("/applications"):
             return application(role=False, display_name=body["displayName"])
+        if method == "GET" and "/me?" in uri:
+            return {"id": "user-id"}
+        if method == "GET" and f"appId eq '{AZNS_APP_ID}'" in uri:
+            return {"value": [{"id": "azns-sp-id", "appId": AZNS_APP_ID}]}
+        if method == "GET" and "/owners?" in uri:
+            return {"value": [{"id": "user-id"}]}
         if method == "DELETE" and f"/applications/{APP_OBJECT_ID}" in uri:
             deleted.append(uri)
             return None
@@ -453,6 +459,33 @@ def test_new_application_rolls_back_when_object_id_cannot_be_persisted():
 
     assert deleted == [
         f"https://graph.microsoft.com/v1.0/applications/{APP_OBJECT_ID}"
+    ]
+
+
+def test_new_application_persists_object_id_before_followup_graph_reads():
+    def handler(method, uri, body):
+        if method == "GET" and "/applications?" in uri:
+            return {"value": []}
+        if method == "POST" and uri.endswith("/applications"):
+            return application(role=False, display_name=body["displayName"])
+        if method == "GET" and "/me?" in uri:
+            raise ScopeManagerError("injected Graph read failure")
+        raise AssertionError((method, uri, body))
+
+    graph = FakeGraph(handler)
+    azd = FakeAzd()
+    with pytest.raises(ScopeManagerError, match="Graph read failure"):
+        SecureWebhookConfigurator(
+            FakeAzure(),
+            graph,
+            azd,
+        ).configure("new-application")
+
+    assert azd.values == {
+        "SERVICE_HEALTH_API_OBJECT_ID": APP_OBJECT_ID,
+    }
+    assert not [
+        call for call in graph.calls if call[0] == "DELETE"
     ]
 
 
@@ -561,9 +594,10 @@ def test_existing_application_with_unexpected_owner_is_rejected_before_mutation(
         raise AssertionError((method, uri))
 
     graph = FakeGraph(handler)
+    azd = FakeAzd()
     with pytest.raises(ScopeManagerError, match="unexpected owners"):
         SecureWebhookConfigurator(
-            FakeAzure(), graph, FakeAzd()
+            FakeAzure(), graph, azd
         ).configure(
             display_name,
             application_object_id=APP_OBJECT_ID,
@@ -571,8 +605,9 @@ def test_existing_application_with_unexpected_owner_is_rejected_before_mutation(
         )
 
     assert not [
-        call for call in graph.calls if call[0] in {"POST", "PATCH"}
+        call for call in graph.calls if call[0] != "GET"
     ]
+    assert azd.values == {}
 
 
 def test_legacy_multi_owner_baseline_requires_explicit_immutable_id_adoption():
@@ -606,17 +641,24 @@ def test_legacy_multi_owner_baseline_requires_explicit_immutable_id_adoption():
             }
         raise AssertionError((method, uri))
 
+    rejected_graph = FakeGraph(handler)
+    rejected_azd = FakeAzd()
     with pytest.raises(ScopeManagerError, match="unexpected owners"):
         SecureWebhookConfigurator(
-            FakeAzure(), FakeGraph(handler), FakeAzd()
+            FakeAzure(), rejected_graph, rejected_azd
         ).configure(
             display_name,
             application_object_id=APP_OBJECT_ID,
             application_client_id=APP_ID,
         )
+    assert rejected_azd.values == {}
+    assert not [
+        call for call in rejected_graph.calls if call[0] != "GET"
+    ]
 
+    adopted_azd = FakeAzd()
     result = SecureWebhookConfigurator(
-        FakeAzure(), FakeGraph(handler), FakeAzd()
+        FakeAzure(), FakeGraph(handler), adopted_azd
     ).configure(
         display_name,
         application_object_id=APP_OBJECT_ID,
@@ -629,6 +671,23 @@ def test_legacy_multi_owner_baseline_requires_explicit_immutable_id_adoption():
         "user-two-id",
         "azns-sp-id",
     }
+    assert adopted_azd.values == result
+
+    rerun_graph = FakeGraph(handler)
+    rerun = SecureWebhookConfigurator(
+        FakeAzure(), rerun_graph, FakeAzd()
+    ).configure(
+        display_name,
+        application_object_id=APP_OBJECT_ID,
+        application_client_id=APP_ID,
+        expected_owner_ids=result["SERVICE_HEALTH_API_OWNER_IDS"],
+    )
+    assert rerun["SERVICE_HEALTH_API_OWNER_IDS"] == (
+        result["SERVICE_HEALTH_API_OWNER_IDS"]
+    )
+    assert not [
+        call for call in rerun_graph.calls if call[0] != "GET"
+    ]
 
 
 def test_owner_baseline_adoption_requires_immutable_application_identity():
@@ -710,12 +769,13 @@ def test_partial_identity_persistence_recovers_by_immutable_id(persisted_id):
     ]
 
 
-def test_legacy_rerun_allows_new_caller_and_persists_owner_baseline():
+def test_legacy_rerun_requires_review_before_adding_new_caller():
     display_name = "legacy-shared-environment"
     account = {
         "tenantId": TENANT_ID,
         "user": {"type": "user", "name": "new@example.com"},
     }
+    owners = {"original-user-id", "azns-sp-id"}
     owner_posts = []
 
     def handler(method, uri, body):
@@ -728,14 +788,11 @@ def test_legacy_rerun_allows_new_caller_and_persists_owner_baseline():
         if f"appId eq '{AZNS_APP_ID}'" in uri:
             return {"value": [{"id": "azns-sp-id", "appId": AZNS_APP_ID}]}
         if "/owners?" in uri:
-            return {
-                "value": [
-                    {"id": "original-user-id"},
-                    {"id": "azns-sp-id"},
-                ]
-            }
+            return {"value": [{"id": value} for value in sorted(owners)]}
         if method == "POST" and "/owners/$ref" in uri:
+            owner_id = body["@odata.id"].rsplit("/", 1)[-1]
             owner_posts.append(body["@odata.id"])
+            owners.add(owner_id)
             return None
         if "/appRoleAssignments?" in uri:
             return {
@@ -748,14 +805,31 @@ def test_legacy_rerun_allows_new_caller_and_persists_owner_baseline():
             }
         raise AssertionError((method, uri, body))
 
+    rejected_graph = FakeGraph(handler)
+    rejected_azd = FakeAzd()
+    with pytest.raises(ScopeManagerError, match="unexpected owners"):
+        SecureWebhookConfigurator(
+            FakeAzure(account), rejected_graph, rejected_azd
+        ).configure(
+            display_name,
+            application_object_id=APP_OBJECT_ID,
+            application_client_id=APP_ID,
+        )
+    assert rejected_azd.values == {}
+    assert owner_posts == []
+    assert not [
+        call for call in rejected_graph.calls if call[0] != "GET"
+    ]
+
+    adopted_azd = FakeAzd()
     result = SecureWebhookConfigurator(
-        FakeAzure(account), FakeGraph(handler), FakeAzd()
+        FakeAzure(account), FakeGraph(handler), adopted_azd
     ).configure(
         display_name,
         application_object_id=APP_OBJECT_ID,
         application_client_id=APP_ID,
+        adopt_existing_owner_baseline=True,
     )
-
     assert owner_posts == [
         "https://graph.microsoft.com/v1.0/directoryObjects/new-user-id"
     ]
@@ -764,6 +838,25 @@ def test_legacy_rerun_allows_new_caller_and_persists_owner_baseline():
         "new-user-id",
         "azns-sp-id",
     }
+    assert adopted_azd.values == result
+
+    owner_posts.clear()
+    rerun_graph = FakeGraph(handler)
+    rerun = SecureWebhookConfigurator(
+        FakeAzure(account), rerun_graph, FakeAzd()
+    ).configure(
+        display_name,
+        application_object_id=APP_OBJECT_ID,
+        application_client_id=APP_ID,
+        expected_owner_ids=result["SERVICE_HEALTH_API_OWNER_IDS"],
+    )
+    assert rerun["SERVICE_HEALTH_API_OWNER_IDS"] == (
+        result["SERVICE_HEALTH_API_OWNER_IDS"]
+    )
+    assert owner_posts == []
+    assert not [
+        call for call in rerun_graph.calls if call[0] != "GET"
+    ]
 
 
 def test_azd_cli_surfaces_failure_without_exposing_value():

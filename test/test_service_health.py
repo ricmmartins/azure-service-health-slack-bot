@@ -452,6 +452,9 @@ def test_table_store_resumes_reply_without_regressing_root_watermark():
         LifecycleStatus.UPDATED,
     )
     store.mark_failed(checkpointed, "slack_transient")
+    assert table.entity["pendingFingerprint"] == updated.fingerprint
+    assert table.entity["failedFingerprint"] == updated.fingerprint
+    assert table.entity["processingState"] == "failed"
 
     older = replace(
         active,

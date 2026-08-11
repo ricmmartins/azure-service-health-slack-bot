@@ -465,30 +465,20 @@ class SecureWebhookConfigurator:
                 "Microsoft Graph did not return both appId and id for the Secure Webhook application."
             )
         identifier_uri = f"api://{application_id}"
-        values = {
-            "AZURE_TENANT_ID": tenant_id,
-            "SERVICE_HEALTH_API_CLIENT_ID": application_id,
-            "SERVICE_HEALTH_API_OBJECT_ID": application_object_id,
-            "SERVICE_HEALTH_API_IDENTIFIER_URI": identifier_uri,
-        }
-        try:
-            self.azd.set_environment_value(
-                "SERVICE_HEALTH_API_OBJECT_ID",
-                application_object_id,
-            )
-        except ScopeManagerError:
-            if application_created:
+        application_object_persisted = False
+        if application_created:
+            try:
+                self.azd.set_environment_value(
+                    "SERVICE_HEALTH_API_OBJECT_ID",
+                    application_object_id,
+                )
+            except ScopeManagerError:
                 self.graph.request(
                     "DELETE",
                     f"{GRAPH_ROOT}/applications/{application_object_id}",
                 )
-            raise
-        for name in (
-            "SERVICE_HEALTH_API_CLIENT_ID",
-            "AZURE_TENANT_ID",
-            "SERVICE_HEALTH_API_IDENTIFIER_URI",
-        ):
-            self.azd.set_environment_value(name, values[name])
+                raise
+            application_object_persisted = True
 
         caller_object_id = resolve_caller_owner_object_id(account, self.graph)
         existing_azns_principal = self._find_service_principal(
@@ -532,17 +522,8 @@ class SecureWebhookConfigurator:
             )
         elif adopt_existing_owner_baseline and not application_created:
             permitted_owner_ids = owner_ids | official_owner_ids
-        elif application_created or owner_ids <= official_owner_ids:
+        elif owner_ids <= official_owner_ids:
             permitted_owner_ids = official_owner_ids
-        elif (
-            len(owner_ids) == 1
-            or (
-                azns_owner_id
-                and azns_owner_id.casefold() in owner_ids
-                and len(owner_ids) == 2
-            )
-        ):
-            permitted_owner_ids = owner_ids | official_owner_ids
         else:
             permitted_owner_ids = official_owner_ids
 
@@ -552,6 +533,24 @@ class SecureWebhookConfigurator:
                 "The Secure Webhook application has unexpected owners; "
                 "refusing to modify an application with unverified provenance."
             )
+        values = {
+            "AZURE_TENANT_ID": tenant_id,
+            "SERVICE_HEALTH_API_CLIENT_ID": application_id,
+            "SERVICE_HEALTH_API_OBJECT_ID": application_object_id,
+            "SERVICE_HEALTH_API_IDENTIFIER_URI": identifier_uri,
+        }
+        if not application_object_persisted:
+            self.azd.set_environment_value(
+                "SERVICE_HEALTH_API_OBJECT_ID",
+                application_object_id,
+            )
+        for name in (
+            "SERVICE_HEALTH_API_CLIENT_ID",
+            "AZURE_TENANT_ID",
+            "SERVICE_HEALTH_API_IDENTIFIER_URI",
+        ):
+            self.azd.set_environment_value(name, values[name])
+
         expected_owner_ids = ",".join(sorted(permitted_owner_ids))
         self.azd.set_environment_value(
             "SERVICE_HEALTH_API_OWNER_IDS",

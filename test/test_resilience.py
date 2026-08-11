@@ -495,7 +495,7 @@ def test_resolved_is_terminal_even_when_later_update_has_newer_timestamp():
     assert now == datetime(2025, 6, 1, 12, tzinfo=timezone.utc)
 
 
-def test_expired_replay_cannot_erase_pending_resolution():
+def test_pending_resolution_blocks_stale_replays_only_while_lease_is_active():
     current_time = [
         datetime(2025, 6, 1, 12, tzinfo=timezone.utc)
     ]
@@ -519,25 +519,89 @@ def test_expired_replay_cannot_erase_pending_resolution():
     assert pending.decision == StoreDecision.UPDATE
     assert table.entity["pendingLifecycleStatus"] == "Resolved"
 
-    current_time[0] += timedelta(seconds=31)
     assert (
         store.begin(active, "CDEFAULT").decision
         == StoreDecision.STALE
     )
-    assert table.entity["pendingLifecycleStatus"] == "Resolved"
-    assert table.entity["pendingFingerprint"] == resolved.fingerprint
-
-    later_updated = replace(
+    older_active = replace(
         active,
-        lifecycle_status=LifecycleStatus.UPDATED,
-        communication="Late nonterminal update.",
-        submission_time=active.submission_time + timedelta(minutes=10),
+        communication="Older Active delivery.",
+        submission_time=active.submission_time + timedelta(minutes=2),
     )
     assert (
-        store.begin(later_updated, "CDEFAULT").decision
+        store.begin(older_active, "CDEFAULT").decision
         == StoreDecision.STALE
     )
     assert table.entity["pendingFingerprint"] == resolved.fingerprint
+
+    current_time[0] += timedelta(seconds=31)
+    later_active = replace(
+        active,
+        communication="Later Active delivery.",
+        submission_time=active.submission_time + timedelta(minutes=10),
+    )
+    reclaimed = store.begin(later_active, "CDEFAULT")
+    assert reclaimed.decision == StoreDecision.UPDATE
+    assert reclaimed.message_ts == "100.000"
+    assert reclaimed.entity["pendingFingerprint"] == later_active.fingerprint
+    assert reclaimed.entity["pendingLifecycleStatus"] == "Active"
+
+    assert (
+        store.begin(active, "CDEFAULT").decision
+        == StoreDecision.STALE
+    )
+
+
+def test_explicit_failure_rolls_back_pending_terminal_veto():
+    now, table, store, active = completed_incident()
+    resolved = replace(
+        active,
+        lifecycle_status=LifecycleStatus.RESOLVED,
+        communication="Resolution attempt.",
+        submission_time=active.submission_time + timedelta(minutes=5),
+    )
+    pending = store.begin(resolved, "CDEFAULT")
+    store.mark_failed(pending, "slack_permanent")
+
+    assert table.entity["processingState"] == "failed"
+    assert table.entity["pendingFingerprint"] == ""
+    assert table.entity["pendingSubmissionTime"] is None
+    assert table.entity["pendingLifecycleStatus"] == ""
+    assert table.entity["failedFingerprint"] == resolved.fingerprint
+    assert table.entity["failedSubmissionTime"] == resolved.submission_time
+    assert table.entity["failedLifecycleStatus"] == "Resolved"
+
+    assert (
+        store.begin(active, "CDEFAULT").decision
+        == StoreDecision.STALE
+    )
+    later_active = replace(
+        active,
+        communication="Later Active delivery.",
+        submission_time=active.submission_time + timedelta(minutes=10),
+    )
+    recovered = store.begin(later_active, "CDEFAULT")
+    assert recovered.decision == StoreDecision.UPDATE
+    assert recovered.message_ts == "100.000"
+    assert recovered.entity["pendingFingerprint"] == later_active.fingerprint
+    assert now == datetime(2025, 6, 1, 12, tzinfo=timezone.utc)
+
+
+def test_exact_failed_resolution_can_be_retried():
+    _now, table, store, active = completed_incident()
+    resolved = replace(
+        active,
+        lifecycle_status=LifecycleStatus.RESOLVED,
+        communication="Resolution attempt.",
+        submission_time=active.submission_time + timedelta(minutes=5),
+    )
+    pending = store.begin(resolved, "CDEFAULT")
+    store.mark_failed(pending, "slack_transient")
+
+    retried = store.begin(resolved, "CDEFAULT")
+    assert retried.decision == StoreDecision.UPDATE
+    assert retried.message_ts == "100.000"
+    assert retried.entity["pendingFingerprint"] == resolved.fingerprint
 
 
 def test_pending_watermark_rejects_older_distinct_resolution():
@@ -632,6 +696,10 @@ def test_seeded_processor_state_model_never_regresses_or_duplicates_root():
         lambda entity: entity.update(lifecycleStatus=""),
         lambda entity: entity.update(pendingLifecycleStatus="Reopened"),
         lambda entity: entity.update(pendingLifecycleStatus=""),
+        lambda entity: entity.update(failedFingerprint="orphaned"),
+        lambda entity: entity.update(
+            failedSubmissionTime="2025-06-01T12:01:00Z"),
+        lambda entity: entity.update(failedLifecycleStatus="Resolved"),
         lambda entity: entity.update(messageTs=123),
         lambda entity: entity.update(threadReplyTs=123),
         lambda entity: entity.update(lastFingerprint=123),
