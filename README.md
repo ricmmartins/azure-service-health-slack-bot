@@ -133,9 +133,6 @@ itself escaped JSON containing `ServiceName` and `RegionName`, as documented in
 - Current stable [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli),
   [Azure Developer CLI (`azd`)](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd),
   and Docker with a Linux container engine
-- PowerShell 7+ (`pwsh`) only when running the AZD hook on Windows or testing
-  the temporary compatibility wrappers; all operational business logic runs in
-  Python
 - A Slack app with an [`xoxb-` bot token](https://docs.slack.dev/authentication/tokens/#bot)
   limited to the granular [`chat:write` scope](https://docs.slack.dev/reference/scopes/chat.write)
   and invited to every configured destination channel
@@ -268,13 +265,10 @@ the protected API app by the AzNS service principal and the
 re-run) and requires Microsoft Graph application administration permission.
 Azure CLI and AZD maintain separate authentication sessions, so both
 `az login` and `azd auth login` are required on a clean workstation.
-The OS-specific `sh`/`pwsh` command hosts follow the official
-[AZD hook contract](https://learn.microsoft.com/azure/developer/azure-developer-cli/azd-extensibility);
-the hook business logic is Python on every platform.
-
-The legacy `scripts/configure-secure-webhook.ps1` entry point remains
-temporarily available as a thin compatibility wrapper. It delegates all Entra
-and AZD operations to the Python CLI and contains no setup business logic.
+The platform-neutral hook path follows the official
+[AZD Python hook contract](https://learn.microsoft.com/azure/developer/azure-developer-cli/hooks-multi-language#python-hooks):
+AZD detects the runtime from the `.py` extension and runs the same script on
+Windows, Linux, and macOS.
 
 `infra/modules/service-health-alert.bicep` is deliberately isolated so
 `scripts/manage_alert_scopes.py` can create only the Activity Log Alerts and
@@ -349,10 +343,6 @@ existing coverage, permissions, or Secure Webhook test success cannot be
 proven. It rejects cross-tenant subscriptions and Management Groups. Use
 `--json` for machine-readable output.
 
-The legacy `scripts/manage-alert-scopes.ps1` entry point remains temporarily
-available as a thin compatibility wrapper. It delegates every operation to the
-Python CLI and contains no Azure business logic.
-
 Manager-tagged Action Groups left behind by an interrupted delete remain
 discoverable in `list` as cleanup-required state; a later repair or confirmed
 remove can reconcile them without relying on local files or the original
@@ -419,13 +409,13 @@ docker info --format 'engine={{.ServerVersion}} os={{.OSType}}'
 docker run --rm hello-world
 ```
 
-The Docker `os` must be `linux`. In Windows PowerShell, the Docker Desktop
-context is normally `desktop-linux`; inside an integrated WSL distribution it
-may appear as `default`. If the daemon is unavailable or reports Windows
-containers, start Docker Desktop, select **Use the WSL 2 based engine**, enable
-the distribution under **Settings → Resources → WSL Integration**, switch to
-Linux containers, and reopen WSL. Do not install a second Docker Engine inside
-the distribution when using Docker Desktop.
+The Docker `os` must be `linux`. On Windows, the Docker Desktop context is
+normally `desktop-linux`; inside an integrated WSL distribution it may appear
+as `default`. If the daemon is unavailable or reports Windows containers,
+start Docker Desktop, select **Use the WSL 2 based engine**, enable the
+distribution under **Settings → Resources → WSL Integration**, switch to Linux
+containers, and reopen WSL. Do not install a second Docker Engine inside the
+distribution when using Docker Desktop.
 
 ### 1. Create the Slack app and bot token
 
@@ -1007,7 +997,6 @@ correct the Table entity if needed, and then replay the alert.
 pip install -r requirements-test.txt
 pytest
 flake8 .
-pwsh -NoProfile -Command "Invoke-Pester test/ManageAlertScopes.Tests.ps1, test/ConfigureSecureWebhook.Tests.ps1 -CI"
 ```
 
 Tests cover the Common Alert Schema parser, routing rules, Easy Auth/app-role
@@ -1020,13 +1009,12 @@ and test failures, confirmation, `--what-if`, coverage-gap prevention,
 destructive rollback, and the absence of central redeployment commands. They
 also cover delegated and service-principal Secure Webhook setup, Graph request
 portability, idempotent app/role/owner/assignment creation, ambiguity failures,
-and AZD error redaction. Pester retains parser and delegation coverage for the
-temporary compatibility wrappers only.
-The cross-platform subprocess suite also launches the documented entry points
-and compatibility wrappers with real OS process resolution and fake `az`/`azd`
-executables. It verifies quoting and paths with spaces, JSON output, help,
-invalid exit codes, temporary request files, idempotent reruns, and the exact
-Windows/POSIX AZD hook command on Ubuntu, macOS, and Windows.
+AZD error redaction, and a repository-wide portability regression guard.
+The cross-platform subprocess suite launches the documented entry points with
+real OS process resolution and fake `az`/`azd` executables. It verifies quoting
+and paths with spaces, JSON output, help, invalid exit codes, temporary request
+files, idempotent reruns, and the exact native Python AZD hook on Ubuntu, macOS,
+and Windows.
 
 ## Community and support
 

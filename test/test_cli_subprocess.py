@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import shutil
 import stat
 import subprocess
 import sys
@@ -16,8 +15,6 @@ ROOT = Path(__file__).resolve().parent.parent
 FAKE_CLI = ROOT / "test" / "fake_operational_cli.py"
 SCOPE_CLI = ROOT / "scripts" / "manage_alert_scopes.py"
 SETUP_CLI = ROOT / "scripts" / "configure_secure_webhook.py"
-SCOPE_WRAPPER = ROOT / "scripts" / "manage-alert-scopes.ps1"
-SETUP_WRAPPER = ROOT / "scripts" / "configure-secure-webhook.ps1"
 AZURE_YAML = ROOT / "azure.yaml"
 
 
@@ -226,66 +223,49 @@ def test_setup_cli_missing_display_name_fails_without_subprocess(
     assert not log_path.exists()
 
 
-@pytest.mark.skipif(shutil.which("pwsh") is None, reason="pwsh unavailable")
-def test_compatibility_wrappers_delegate_through_real_processes(
-    cli_environment,
-):
-    environment, _state_path, _log_path = cli_environment
-    setup = run_cli(
-        [
-            "pwsh",
-            "-NoProfile",
-            "-File",
-            str(SETUP_WRAPPER),
-            "-DisplayName",
-            "Wrapper Contract With Spaces",
-        ],
-        environment,
-    )
-    assert setup.returncode == 0, setup.stderr
-    assert "Secure webhook application is configured" in setup.stdout
-
-    scope = run_cli(
-        [
-            "pwsh",
-            "-NoProfile",
-            "-File",
-            str(SCOPE_WRAPPER),
-            "list",
-            "-EnvironmentName",
-            "contract-env",
-            "-Json",
-        ],
-        environment,
-    )
-    assert scope.returncode == 0, scope.stderr
-    assert json.loads(scope.stdout) == []
-
-
-def test_azure_yaml_hook_command_executes_on_current_os(cli_environment):
+def test_azure_yaml_python_hook_executes_on_current_os(cli_environment):
     environment, _state_path, _log_path = cli_environment
     azure_yaml = AZURE_YAML.read_text(encoding="utf-8")
-    if os.name == "nt":
-        assert "shell: pwsh\n      run: python ./scripts/configure_secure_webhook.py" in (
-            azure_yaml
-        )
-        command = [
-            "pwsh",
-            "-NoProfile",
-            "-Command",
-            "python ./scripts/configure_secure_webhook.py",
-        ]
-    else:
-        assert "shell: sh\n      run: python3 ./scripts/configure_secure_webhook.py" in (
-            azure_yaml
-        )
-        command = [
-            "sh",
-            "-c",
-            "python3 ./scripts/configure_secure_webhook.py",
-        ]
+    hook = "hooks:\n  preprovision:\n    run: ./scripts/configure_secure_webhook.py\n"
 
-    result = run_cli(command, environment)
+    assert azure_yaml.endswith(hook)
+    result = run_cli([sys.executable, str(SETUP_CLI)], environment)
 
     assert result.returncode == 0, result.stderr
     assert "Secure webhook application is configured" in result.stdout
+
+
+def test_tracked_repository_excludes_retired_portability_surface():
+    forbidden = (
+        "power" + "shell",
+        "p" + "wsh",
+        "invoke-" + "pest" + "er",
+        "pest" + "er",
+        "." + "p" + "s1",
+        "compatibility " + "wrapper",
+    )
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split("\0")
+    violations = []
+
+    for relative in filter(None, tracked):
+        path = ROOT / relative
+        if not path.is_file():
+            continue
+        if relative.casefold().endswith(forbidden[4]):
+            violations.append(relative)
+            continue
+        try:
+            text = path.read_text(encoding="utf-8").casefold()
+        except UnicodeDecodeError:
+            continue
+        for token in forbidden:
+            if token in text:
+                violations.append(f"{relative}: {token}")
+
+    assert not violations, "\n".join(violations)
