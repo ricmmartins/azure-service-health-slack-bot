@@ -16,6 +16,13 @@ from azure.data.tables import UpdateMode
 
 from service_health.models import LifecycleStatus, ServiceHealthEvent
 
+_PROCESSING_STATES = {
+    "processing",
+    "reply_pending",
+    "complete",
+    "failed",
+}
+
 
 class StoreDecision(str, Enum):
     CREATE = "create"
@@ -31,6 +38,10 @@ class TransientStoreError(RuntimeError):
 
 
 class StoreConsistencyError(RuntimeError):
+    pass
+
+
+class InvalidStoreStateError(StoreConsistencyError):
     pass
 
 
@@ -141,17 +152,27 @@ class AzureTableIncidentStore:
             if exc.status_code in {408, 429, 500, 502, 503, 504}:
                 raise TransientStoreError(
                     "Unable to reserve incident state") from exc
-            raise
+            raise StoreConsistencyError(
+                "Azure Table rejected the incident reservation") from exc
 
     def _begin_existing(self, event, now):
         for _ in range(3):
             current = self._get(event)
+            self._validate_existing(current, event)
             if (
                 current.get("lastFingerprint") == event.fingerprint
                 and current.get("processingState") == "complete"
             ):
                 return IncidentWorkItem(
                     StoreDecision.DUPLICATE, current, _etag(current))
+
+            if (
+                current.get("pendingLifecycleStatus")
+                == LifecycleStatus.RESOLVED.value
+                and event.lifecycle_status != LifecycleStatus.RESOLVED
+            ):
+                return IncidentWorkItem(
+                    StoreDecision.STALE, current, _etag(current))
 
             lease_until = _parse_datetime(current.get("leaseUntil"))
             lease_active = (
@@ -164,17 +185,19 @@ class AzureTableIncidentStore:
             )
             if (
                 current.get("rootFingerprint") == event.fingerprint
+                and current.get("pendingFingerprint") == event.fingerprint
                 and current.get("messageTs")
             ):
                 if lease_active:
                     return IncidentWorkItem(
                         StoreDecision.BUSY, current, _etag(current))
                 lease_owner = uuid.uuid4().hex
+                attempt_count = current["attemptCount"]
                 current.update({
                     "processingState": "reply_pending",
                     "leaseUntil": now + timedelta(seconds=self.lease_seconds),
                     "leaseOwner": lease_owner,
-                    "attemptCount": int(current.get("attemptCount", 0)) + 1,
+                    "attemptCount": attempt_count + 1,
                     "updatedAt": now,
                     "lastErrorCode": "",
                     **_event_properties(event),
@@ -189,13 +212,28 @@ class AzureTableIncidentStore:
                 except ResourceModifiedError:
                     continue
 
+            if (
+                current.get("lifecycleStatus")
+                == LifecycleStatus.RESOLVED.value
+                and event.lifecycle_status != LifecycleStatus.RESOLVED
+            ):
+                return IncidentWorkItem(
+                    StoreDecision.STALE, current, _etag(current))
+
             last_submission = _parse_datetime(
                 current.get("lastSubmissionTime"))
             root_submission = _parse_datetime(
                 current.get("rootSubmissionTime"))
+            pending_submission = _parse_datetime(
+                current.get("pendingSubmissionTime"))
             watermarks = [
                 value for value in (last_submission, root_submission) if value
             ]
+            if (
+                current.get("pendingFingerprint") != event.fingerprint
+                and pending_submission
+            ):
+                watermarks.append(pending_submission)
             latest_submission = max(watermarks) if watermarks else None
             if (
                 latest_submission
@@ -209,11 +247,12 @@ class AzureTableIncidentStore:
                     StoreDecision.BUSY, current, _etag(current))
 
             lease_owner = uuid.uuid4().hex
+            attempt_count = current["attemptCount"]
             current.update({
                 "processingState": "processing",
                 "leaseUntil": now + timedelta(seconds=self.lease_seconds),
                 "leaseOwner": lease_owner,
-                "attemptCount": int(current.get("attemptCount", 0)) + 1,
+                "attemptCount": attempt_count + 1,
                 "updatedAt": now,
                 "lastErrorCode": "",
                 **_event_properties(event),
@@ -234,6 +273,135 @@ class AzureTableIncidentStore:
                 continue
         raise TransientStoreError(
             "Incident state changed too often to acquire a lease")
+
+    def _validate_existing(self, current, event):
+        if not hasattr(current, "get"):
+            raise InvalidStoreStateError(
+                "Incident state is not a valid entity")
+        if (
+            current.get("PartitionKey") != event.partition_key
+            or current.get("RowKey") != event.row_key
+        ):
+            raise InvalidStoreStateError(
+                "Incident state key does not match the requested event")
+        if (
+            not isinstance(current.get("channelId"), str)
+            or not current["channelId"].strip()
+        ):
+            raise InvalidStoreStateError(
+                "Incident state has no valid channel id")
+        if current.get("processingState") not in _PROCESSING_STATES:
+            raise InvalidStoreStateError(
+                "Incident state has an invalid processing state")
+        if not _etag(current):
+            raise InvalidStoreStateError(
+                "Incident state did not include an ETag")
+        attempt_count = current.get("attemptCount")
+        if (
+            not isinstance(attempt_count, int)
+            or isinstance(attempt_count, bool)
+            or attempt_count < 1
+        ):
+            raise InvalidStoreStateError(
+                "Incident state contains an invalid attempt count")
+
+        def parsed_timestamp(field_name):
+            raw_value = current.get(field_name)
+            if raw_value is None:
+                return None
+            if not isinstance(raw_value, (datetime, str)) or (
+                isinstance(raw_value, str) and not raw_value
+            ):
+                raise InvalidStoreStateError(
+                    f"Incident state contains an invalid {field_name}")
+            try:
+                parsed = _parse_datetime(raw_value)
+            except ValueError as exc:
+                raise InvalidStoreStateError(
+                    f"Incident state contains an invalid {field_name}"
+                ) from exc
+            if parsed is None:
+                raise InvalidStoreStateError(
+                    f"Incident state contains an invalid {field_name}")
+            return parsed
+
+        lease_until = parsed_timestamp("leaseUntil")
+        last_submission = parsed_timestamp("lastSubmissionTime")
+        root_submission = parsed_timestamp("rootSubmissionTime")
+        pending_submission = parsed_timestamp("pendingSubmissionTime")
+
+        for field_name in (
+            "messageTs",
+            "threadReplyTs",
+            "lastFingerprint",
+            "rootFingerprint",
+            "pendingFingerprint",
+        ):
+            value = current.get(field_name)
+            if value is not None and not isinstance(value, str):
+                raise InvalidStoreStateError(
+                    f"Incident state contains an invalid {field_name}")
+
+        state = current["processingState"]
+        if current.get("processingState") in {
+            "processing",
+            "reply_pending",
+        } and (
+            lease_until is None
+            or not isinstance(current.get("leaseOwner"), str)
+            or not current["leaseOwner"]
+        ):
+            raise InvalidStoreStateError(
+                "In-progress incident state has no valid lease")
+
+        lifecycle_status = current.get("lifecycleStatus")
+        valid_lifecycle = lifecycle_status in {
+            status.value for status in LifecycleStatus
+        }
+        if lifecycle_status is not None and not valid_lifecycle:
+            raise InvalidStoreStateError(
+                "Incident state has an invalid lifecycle status")
+        pending_lifecycle = current.get("pendingLifecycleStatus")
+        if pending_lifecycle not in {
+            status.value for status in LifecycleStatus
+        }:
+            raise InvalidStoreStateError(
+                "Incident state has an invalid pending lifecycle status")
+        if state == "complete":
+            if (
+                not valid_lifecycle
+                or not current.get("messageTs")
+                or not current.get("lastFingerprint")
+                or not current.get("rootFingerprint")
+                or last_submission is None
+                or root_submission is None
+            ):
+                raise InvalidStoreStateError(
+                    "Completed incident state is missing required fields")
+        if state == "reply_pending":
+            if (
+                not valid_lifecycle
+                or not current.get("messageTs")
+                or not current.get("rootFingerprint")
+                or not current.get("pendingFingerprint")
+                or root_submission is None
+                or pending_submission is None
+            ):
+                raise InvalidStoreStateError(
+                    "Reply-pending incident state is missing required fields")
+        if state == "processing" and (
+            not current.get("pendingFingerprint")
+            or pending_submission is None
+        ):
+            raise InvalidStoreStateError(
+                "Processing incident state is missing required fields")
+        if state == "failed" and current.get("messageTs") and (
+            not valid_lifecycle
+            or not current.get("rootFingerprint")
+            or root_submission is None
+        ):
+            raise InvalidStoreStateError(
+                "Failed incident state is missing its root checkpoint")
 
     def renew(self, work_item):
         entity = dict(work_item.entity)
@@ -334,7 +502,8 @@ class AzureTableIncidentStore:
             if exc.status_code in {408, 429, 500, 502, 503, 504}:
                 raise TransientStoreError(
                     "Unable to read incident state") from exc
-            raise
+            raise StoreConsistencyError(
+                "Azure Table rejected the incident state read") from exc
 
     def _owned_work_item(self, decision, entity, response=None):
         lease_until = _parse_datetime(entity.get("leaseUntil"))

@@ -73,6 +73,38 @@ class AzdCli:
                 f"Azure Developer CLI command failed: azd env set {name} <value>\n{detail}"
             )
 
+    def get_environment_value(self, name: str) -> str:
+        if self.executable is None:
+            raise ScopeManagerError(
+                "Azure Developer CLI is required. Install it, run "
+                "'azd auth login', and retry."
+            )
+        result = self.runner(
+            [
+                self.executable,
+                "env",
+                "get-value",
+                name,
+                "--no-prompt",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+        detail = "\n".join(
+            text.strip()
+            for text in (result.stdout, result.stderr)
+            if text.strip()
+        )
+        if "key not found in environment values" in detail.casefold():
+            return ""
+        raise ScopeManagerError(
+            "Azure Developer CLI command failed: "
+            f"azd env get-value {name} --no-prompt\n{detail}"
+        )
+
 
 class GraphClient:
     """Microsoft Graph requests through the authenticated Azure CLI session."""
@@ -241,18 +273,28 @@ class SecureWebhookConfigurator:
         self.graph = graph
         self.azd = azd
 
-    def _service_principal(
+    def _find_service_principal(
         self,
         application_id: str,
         description: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         escaped = application_id.replace("'", "''")
-        existing = single_graph_value(
+        return single_graph_value(
             graph_collection(
                 self.graph,
                 f"{GRAPH_ROOT}/servicePrincipals"
                 f"?$filter=appId eq '{escaped}'&$select=id,appId",
             ),
+            description,
+        )
+
+    def _service_principal(
+        self,
+        application_id: str,
+        description: str,
+    ) -> dict[str, Any]:
+        existing = self._find_service_principal(
+            application_id,
             description,
         )
         if existing is not None:
@@ -268,11 +310,121 @@ class SecureWebhookConfigurator:
             )
         return created
 
+    def _application(
+        self,
+        display_name: str,
+        application_object_id: str,
+        application_client_id: str,
+    ) -> tuple[dict[str, Any], bool]:
+        select = "id,appId,displayName,api,appRoles,identifierUris"
+        if application_object_id:
+            try:
+                uuid.UUID(application_object_id)
+            except ValueError as exc:
+                raise ScopeManagerError(
+                    "Secure Webhook application object id must be a UUID."
+                ) from exc
+            if application_client_id:
+                try:
+                    uuid.UUID(application_client_id)
+                except ValueError as exc:
+                    raise ScopeManagerError(
+                        "Secure Webhook application client id must be a UUID."
+                    ) from exc
+            application = self.graph.request(
+                "GET",
+                f"{GRAPH_ROOT}/applications/{application_object_id}"
+                f"?$select={select}",
+            )
+            if not isinstance(application, dict):
+                raise ScopeManagerError(
+                    "Microsoft Graph returned an invalid Secure Webhook "
+                    "application response."
+                )
+            if (
+                not same_id(member(application, "id"), application_object_id)
+                or (
+                    application_client_id
+                    and not same_id(
+                        member(application, "appId"),
+                        application_client_id,
+                    )
+                )
+                or member(application, "displayName") != display_name
+            ):
+                raise ScopeManagerError(
+                    "The persisted Secure Webhook application identity does "
+                    "not match the requested environment."
+                )
+            return application, False
+
+        if application_client_id:
+            try:
+                uuid.UUID(application_client_id)
+            except ValueError as exc:
+                raise ScopeManagerError(
+                    "Secure Webhook application client id must be a UUID."
+                ) from exc
+            escaped_id = application_client_id.replace("'", "''")
+            application = single_graph_value(
+                graph_collection(
+                    self.graph,
+                    f"{GRAPH_ROOT}/applications"
+                    f"?$filter=appId eq '{escaped_id}'&$select={select}",
+                ),
+                "Secure Webhook application for the persisted client id",
+                allow_absent=False,
+            )
+            if (
+                not same_id(
+                    member(application, "appId"),
+                    application_client_id,
+                )
+                or member(application, "displayName") != display_name
+            ):
+                raise ScopeManagerError(
+                    "The persisted Secure Webhook application identity does "
+                    "not match the requested environment."
+                )
+            return application, False
+
+        escaped_name = display_name.replace("'", "''")
+        collisions = graph_collection(
+            self.graph,
+            f"{GRAPH_ROOT}/applications"
+            f"?$filter=displayName eq '{escaped_name}'&$select=id,appId",
+        )
+        if collisions:
+            raise ScopeManagerError(
+                f"Application name '{display_name}' already exists, but no "
+                "persisted object and client ids were provided. Refusing to "
+                "adopt an application by display name."
+            )
+        application = self.graph.request(
+            "POST",
+            f"{GRAPH_ROOT}/applications",
+            {
+                "displayName": display_name,
+                "api": {"requestedAccessTokenVersion": 2},
+            },
+        )
+        if not isinstance(application, dict):
+            raise ScopeManagerError(
+                "Microsoft Graph returned an invalid response after creating "
+                "the Secure Webhook application."
+            )
+        return application, True
+
     def configure(
         self,
         display_name: str,
         azns_application_id: str = DEFAULT_AZNS_APPLICATION_ID,
         role_name: str = DEFAULT_ROLE_NAME,
+        application_object_id: str = "",
+        application_client_id: str = "",
+        expected_tenant_id: str = "",
+        expected_owner_ids: str = "",
+        adopt_existing_owner_baseline: bool = False,
     ) -> dict[str, str]:
         account = self.azure.invoke("account", "show")
         if not isinstance(account, dict):
@@ -284,26 +436,26 @@ class SecureWebhookConfigurator:
             raise ScopeManagerError(
                 "The active Azure CLI account has no tenant id."
             )
-
-        escaped_name = display_name.replace("'", "''")
-        application = single_graph_value(
-            graph_collection(
-                self.graph,
-                f"{GRAPH_ROOT}/applications"
-                f"?$filter=displayName eq '{escaped_name}'"
-                "&$select=id,appId,api,appRoles,identifierUris",
-            ),
-            f"application named '{display_name}'",
-        )
-        if application is None:
-            application = self.graph.request(
-                "POST",
-                f"{GRAPH_ROOT}/applications",
-                {
-                    "displayName": display_name,
-                    "api": {"requestedAccessTokenVersion": 2},
-                },
+        if expected_tenant_id and not same_id(tenant_id, expected_tenant_id):
+            raise ScopeManagerError(
+                "The active Azure CLI tenant does not match the persisted "
+                "AZD environment tenant."
             )
+
+        has_persisted_identity = bool(
+            application_object_id or application_client_id
+        )
+        if adopt_existing_owner_baseline and not has_persisted_identity:
+            raise ScopeManagerError(
+                "Owner-baseline adoption requires a persisted Secure Webhook "
+                "application object or client id."
+            )
+
+        application, application_created = self._application(
+            display_name,
+            application_object_id,
+            application_client_id,
+        )
         application_id = str(member(application, "appId", "") or "").strip()
         application_object_id = str(
             member(application, "id", "") or ""
@@ -312,6 +464,100 @@ class SecureWebhookConfigurator:
             raise ScopeManagerError(
                 "Microsoft Graph did not return both appId and id for the Secure Webhook application."
             )
+        identifier_uri = f"api://{application_id}"
+        values = {
+            "AZURE_TENANT_ID": tenant_id,
+            "SERVICE_HEALTH_API_CLIENT_ID": application_id,
+            "SERVICE_HEALTH_API_OBJECT_ID": application_object_id,
+            "SERVICE_HEALTH_API_IDENTIFIER_URI": identifier_uri,
+        }
+        try:
+            self.azd.set_environment_value(
+                "SERVICE_HEALTH_API_OBJECT_ID",
+                application_object_id,
+            )
+        except ScopeManagerError:
+            if application_created:
+                self.graph.request(
+                    "DELETE",
+                    f"{GRAPH_ROOT}/applications/{application_object_id}",
+                )
+            raise
+        for name in (
+            "SERVICE_HEALTH_API_CLIENT_ID",
+            "AZURE_TENANT_ID",
+            "SERVICE_HEALTH_API_IDENTIFIER_URI",
+        ):
+            self.azd.set_environment_value(name, values[name])
+
+        caller_object_id = resolve_caller_owner_object_id(account, self.graph)
+        existing_azns_principal = self._find_service_principal(
+            azns_application_id,
+            "Azure Monitor AzNS service principal",
+        )
+        owners = graph_collection(
+            self.graph,
+            f"{GRAPH_ROOT}/applications/{application_object_id}/owners?$select=id",
+        )
+        owner_ids = {
+            str(member(owner, "id", "") or "").strip().casefold()
+            for owner in owners
+        }
+        if "" in owner_ids:
+            raise ScopeManagerError(
+                "The Secure Webhook application has an owner without an "
+                "object id."
+            )
+
+        persisted_owner_ids = {
+            owner_id.strip().casefold()
+            for owner_id in expected_owner_ids.split(",")
+            if owner_id.strip()
+        }
+        official_owner_ids = {caller_object_id.casefold()}
+        azns_owner_id = ""
+        if existing_azns_principal is not None:
+            azns_owner_id = str(
+                member(existing_azns_principal, "id", "") or ""
+            ).strip()
+            if not azns_owner_id:
+                raise ScopeManagerError(
+                    "The Azure Monitor AzNS service principal has no object id."
+                )
+            official_owner_ids.add(azns_owner_id.casefold())
+
+        if persisted_owner_ids:
+            permitted_owner_ids = (
+                persisted_owner_ids | official_owner_ids
+            )
+        elif adopt_existing_owner_baseline and not application_created:
+            permitted_owner_ids = owner_ids | official_owner_ids
+        elif application_created or owner_ids <= official_owner_ids:
+            permitted_owner_ids = official_owner_ids
+        elif (
+            len(owner_ids) == 1
+            or (
+                azns_owner_id
+                and azns_owner_id.casefold() in owner_ids
+                and len(owner_ids) == 2
+            )
+        ):
+            permitted_owner_ids = owner_ids | official_owner_ids
+        else:
+            permitted_owner_ids = official_owner_ids
+
+        unexpected_owner_ids = sorted(owner_ids - permitted_owner_ids)
+        if unexpected_owner_ids:
+            raise ScopeManagerError(
+                "The Secure Webhook application has unexpected owners; "
+                "refusing to modify an application with unverified provenance."
+            )
+        expected_owner_ids = ",".join(sorted(permitted_owner_ids))
+        self.azd.set_environment_value(
+            "SERVICE_HEALTH_API_OWNER_IDS",
+            expected_owner_ids,
+        )
+        values["SERVICE_HEALTH_API_OWNER_IDS"] = expected_owner_ids
 
         api = member(application, "api", {}) or {}
         if member(api, "requestedAccessTokenVersion") != 2:
@@ -326,7 +572,6 @@ class SecureWebhookConfigurator:
                 },
             )
 
-        identifier_uri = f"api://{application_id}"
         roles = as_list(member(application, "appRoles"))
         matching_roles = [
             role for role in roles if member(role, "value") == role_name
@@ -393,11 +638,6 @@ class SecureWebhookConfigurator:
             "Azure Monitor AzNS service principal",
         )
 
-        owners = graph_collection(
-            self.graph,
-            f"{GRAPH_ROOT}/applications/{application_object_id}/owners?$select=id",
-        )
-        caller_object_id = resolve_caller_owner_object_id(account, self.graph)
         for owner_id in (
             caller_object_id,
             str(member(azns_principal, "id", "") or ""),
@@ -417,6 +657,14 @@ class SecureWebhookConfigurator:
                     },
                 )
                 owners.append({"id": owner_id})
+                permitted_owner_ids.add(owner_id.casefold())
+
+        expected_owner_ids = ",".join(sorted(permitted_owner_ids))
+        self.azd.set_environment_value(
+            "SERVICE_HEALTH_API_OWNER_IDS",
+            expected_owner_ids,
+        )
+        values["SERVICE_HEALTH_API_OWNER_IDS"] = expected_owner_ids
 
         azns_object_id = str(member(azns_principal, "id", "") or "")
         api_sp_object_id = str(
@@ -444,14 +692,6 @@ class SecureWebhookConfigurator:
                 },
             )
 
-        values = {
-            "AZURE_TENANT_ID": tenant_id,
-            "SERVICE_HEALTH_API_CLIENT_ID": application_id,
-            "SERVICE_HEALTH_API_OBJECT_ID": application_object_id,
-            "SERVICE_HEALTH_API_IDENTIFIER_URI": identifier_uri,
-        }
-        for name, value in values.items():
-            self.azd.set_environment_value(name, value)
         return values
 
 
@@ -467,6 +707,17 @@ def build_parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("--display-name")
+    parser.add_argument("--application-object-id")
+    parser.add_argument("--application-client-id")
+    parser.add_argument(
+        "--adopt-existing-owner-baseline",
+        action="store_true",
+        help=(
+            "Persist the current owners of an application resolved by an "
+            "immutable object/client id. Use only for a reviewed legacy "
+            "environment with no owner baseline."
+        ),
+    )
     parser.add_argument(
         "--azns-application-id",
         default=DEFAULT_AZNS_APPLICATION_ID,
@@ -492,14 +743,42 @@ def main(argv: list[str] | None = None) -> int:
         )
     try:
         azure = AzureCli()
+        azd = AzdCli()
+
+        def persisted_value(argument_value, environment_name):
+            return (
+                argument_value
+                or os.environ.get(environment_name, "")
+                or azd.get_environment_value(environment_name)
+            ).strip()
+
         result = SecureWebhookConfigurator(
             azure,
             GraphClient(azure),
-            AzdCli(),
+            azd,
         ).configure(
             display_name,
             azns_application_id=args.azns_application_id,
             role_name=args.role_name,
+            application_object_id=persisted_value(
+                args.application_object_id,
+                "SERVICE_HEALTH_API_OBJECT_ID",
+            ),
+            application_client_id=persisted_value(
+                args.application_client_id,
+                "SERVICE_HEALTH_API_CLIENT_ID",
+            ),
+            expected_tenant_id=persisted_value(
+                "",
+                "AZURE_TENANT_ID",
+            ),
+            expected_owner_ids=persisted_value(
+                "",
+                "SERVICE_HEALTH_API_OWNER_IDS",
+            ),
+            adopt_existing_owner_baseline=(
+                args.adopt_existing_owner_baseline
+            ),
         )
     except ScopeManagerError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

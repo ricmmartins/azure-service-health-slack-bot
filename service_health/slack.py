@@ -149,7 +149,8 @@ def render_incident_message(event: ServiceHealthEvent, lifecycle_status):
     portal_url = _service_health_url(event)
     fallback = _truncate(
         f"{icon} Azure Service Health {lifecycle_status.value}: "
-        f"{event.title} ({event.tracking_id})",
+        f"{_escape_mrkdwn(event.title)} "
+        f"({_escape_mrkdwn(event.tracking_id)})",
         4000,
     )
 
@@ -236,7 +237,8 @@ def render_incident_update(event: ServiceHealthEvent, lifecycle_status):
     update_text = _truncate(f"{title}\n\n{communication}", 3000)
     fallback = _truncate(
         f"{icon} Azure Service Health {lifecycle_status.value}: "
-        f"{event.title} — {event.communication}",
+        f"{_escape_mrkdwn(event.title)} — "
+        f"{_escape_mrkdwn(event.communication)}",
         4000,
     )
     blocks = [

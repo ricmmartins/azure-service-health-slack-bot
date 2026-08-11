@@ -6,7 +6,14 @@ the environment. Parsing, routing, auth, storage, processing, and Slack
 rendering are covered in ``test_service_health.py``.
 """
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import app
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_only_the_three_expected_routes_are_registered():
@@ -52,3 +59,37 @@ def test_service_health_runtime_is_created_lazily_and_cached():
     first = app.get_service_health_runtime()
     second = app.get_service_health_runtime()
     assert first is second
+
+
+def test_flask_app_uses_class_installed_by_telemetry_configuration():
+    script = """
+import flask
+import service_health.telemetry as telemetry
+
+OriginalFlask = flask.Flask
+
+class InstrumentedFlask(OriginalFlask):
+    pass
+
+def configure_test_telemetry():
+    flask.Flask = InstrumentedFlask
+    return True
+
+telemetry.configure_telemetry = configure_test_telemetry
+import app
+assert isinstance(app.web_app, InstrumentedFlask)
+"""
+    environment = {
+        **os.environ,
+        "SLACK_BOT_TOKEN": "xoxb-test-token",
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr

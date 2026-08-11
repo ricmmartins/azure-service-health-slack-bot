@@ -102,6 +102,11 @@ def graph_request(
     if "/applications?" in uri and method == "get":
         application = state["application"]
         return {"value": [application] if application else []}
+    if (
+        f"/applications/{APPLICATION_OBJECT_ID}?" in uri
+        and method == "get"
+    ):
+        return state["application"]
     if uri.endswith("/applications") and method == "post":
         state["application"] = {
             "id": APPLICATION_OBJECT_ID,
@@ -245,11 +250,25 @@ def main() -> int:
     record(tool, arguments, body, body_path)
     state = load_state()
     if tool == "azd":
-        if arguments[:2] != ["env", "set"] or len(arguments) != 4:
-            fail(f"Unsupported azd command: {' '.join(arguments)}")
-        state["azd"][arguments[2]] = arguments[3]
-        save_state(state)
-        return 0
+        if arguments[:2] == ["env", "set"] and len(arguments) == 4:
+            state["azd"][arguments[2]] = arguments[3]
+            save_state(state)
+            return 0
+        if (
+            arguments[:2] == ["env", "get-value"]
+            and len(arguments) == 4
+            and arguments[3] == "--no-prompt"
+        ):
+            key = arguments[2]
+            if key not in state["azd"]:
+                print(
+                    f"ERROR: key not found in environment values: '{key}'",
+                    file=sys.stderr,
+                )
+                return 1
+            print(state["azd"][key])
+            return 0
+        fail(f"Unsupported azd command: {' '.join(arguments)}")
     response = azure_response(state, arguments, body)
     save_state(state)
     emit(response)

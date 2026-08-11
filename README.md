@@ -256,13 +256,22 @@ unset SLACK_BOT_TOKEN
 > (`base64ToString(...)`) before writing it to the container's
 > `SERVICE_HEALTH_ROUTES_JSON` environment variable.
 
-The pre-provision hook runs `scripts/configure_secure_webhook.py`. It creates
-or reuses the protected API app registration, app role, API service
-principal, AzNS ownership, and AzNS app-role assignment, then writes the
-resulting IDs to the AZD environment. Azure Monitor requires both ownership of
-the protected API app by the AzNS service principal and the
+The pre-provision hook runs `scripts/configure_secure_webhook.py`. On the first
+run it creates the protected API app registration; later runs load that same
+application by the immutable object and client IDs persisted in the AZD
+environment. It refuses to adopt an application by display name or modify one
+with owners outside the persisted owner baseline. The exact owner IDs are also
+persisted so a later deployment identity can be added without trusting a
+same-name app. The hook then reconciles the app role, API service principal,
+AzNS ownership, and AzNS app-role assignment. Azure Monitor requires both
+ownership of the protected API app by the AzNS service principal and the
 `ActionGroupsSecureWebhook` role assignment. The script is idempotent (safe to
 re-run) and requires Microsoft Graph application administration permission.
+Legacy environments that were provisioned by more than one caller before the
+owner baseline existed must review the current Entra application owners, then
+run the setup command once with `--adopt-existing-owner-baseline`. That flag is
+accepted only when the application is resolved by a persisted immutable object
+or client ID; it never enables display-name adoption.
 Azure CLI and AZD maintain separate authentication sessions, so both
 `az login` and `azd auth login` are required on a clean workstation.
 The platform-neutral hook path follows the official
@@ -538,8 +547,11 @@ azd provision
 This runs `scripts/configure_secure_webhook.py` as a `preprovision` hook
 before touching any Azure resource. The script:
 
-1. Creates (or reuses) an Entra app registration that represents the
-   protected webhook API and sets its `identifierUri` to `api://<app-id>`.
+1. Creates an Entra app registration that represents the protected webhook API
+   on the first run, or loads the exact persisted object and client IDs on a
+   rerun, then sets its `identifierUri` to `api://<app-id>`. A same-name app
+   without those persisted IDs and an app with unexpected owners both fail
+   closed.
 2. Adds an app role named `ActionGroupsSecureWebhook` (application-only) if
    it doesn't already exist.
 3. Ensures a service principal exists for that app, and for Microsoft's
@@ -629,10 +641,13 @@ python3 -m json.tool "$WEBHOOK_RESPONSE"
 rm -f "$WEBHOOK_RESPONSE"
 ```
 
-Both probes are intentionally public. `/readyz` returning `200` also proves
-the production configuration can initialize with managed identity, Key Vault,
-and Table Storage. The unauthenticated webhook must return HTTP `401` with
-`authentication_required`; `200` would be a security regression.
+Both probes are intentionally public. `/readyz` returning `200` proves the
+production configuration and managed-identity/Table clients can be
+constructed. It is not a Table data-plane transaction; verify private endpoint,
+RBAC, and Table access through an accepted test event and dependency telemetry.
+Key Vault reference failures prevent the Container App revision from becoming
+ready before this route is served. The unauthenticated webhook must return HTTP
+`401` with `authentication_required`; `200` would be a security regression.
 
 #### 7.2 Slack authentication and a visible test post
 
@@ -953,7 +968,7 @@ Slack error, verify the configured channel IDs and bot channel membership.
 | Official test returns `401` or `403` | Inspect Container App logs. Easy Auth and the app accept the Entra v2 client-ID GUID audience and `api://<client-id>`; verify both remain in `allowedAudiences` and that the AzNS caller/role checks were not removed. |
 | Official test reports success but Slack has no message | Run the Slack validation in step 7.2. Confirm the token is a bot `xoxb` token, the ID is a channel ID rather than a name, the bot is invited, and `chat:write` is granted. |
 | Corrected webhook still receives nothing | Failed webhook retries suppress Action Group calls to the endpoint for 15 minutes. Wait for the cooldown before one new `servicehealth` test. |
-| `/readyz` returns `503` | Stream console and system logs with `az containerapp logs show`. Verify the managed identity role assignments, Key Vault/Table private endpoints, private DNS links, and that the current revision references the latest Key Vault secret. |
+| `/readyz` returns `503` | Stream console and system logs with `az containerapp logs show` and verify required configuration values. A `200` is configuration readiness, not a Table data-plane probe; use an accepted test event and dependency telemetry to verify managed identity, private DNS, and Table access. Key Vault reference failures normally prevent the revision from becoming ready. |
 | Day-2 discovery finds no deployment or more than one | Confirm Reader access to the central subscription and the `workload=azure-service-health-slack-bot` / `azd-env-name` tags. Pass `--environment-name` when multiple environments exist. |
 | Day-2 discovery warns it is skipping a subscription | Stale or inaccessible cached subscriptions returned by `az account list` (for example an `AuthorizationFailed` or `SubscriptionNotFound` from another tenant) are skipped only during central discovery's initial resource-group listing so an explicitly requested, accessible environment is still found. Selected tenant/scope, permission, webhook, and destructive operations remain fail closed. Run `az account clear` then `az login` to prune stale subscriptions. |
 | Day-2 add/remove reports missing permissions | Grant Contributor on each target subscription and read access to the Management Group hierarchy. The command does not elevate its own permissions. |
@@ -1002,7 +1017,11 @@ flake8 .
 Tests cover the Common Alert Schema parser, routing rules, Easy Auth/app-role
 authorization, Table Storage idempotency, the processing state machine, Slack
 message rendering and error classification, the Flask endpoints, and runtime
-bootstrap/credential selection. Python tests fake every Azure CLI and REST
+bootstrap/credential selection. Deterministic seeded corpora exercise valid and
+invalid schema variants, Unicode and large communications, routing precedence,
+parallel duplicate bursts, terminal-state ordering, malformed Table entities,
+ETag conflicts, Slack and Table fault classification, checkpoint recovery, and
+ambiguous post-write failures. Python tests fake every Azure CLI and REST
 boundary and cover day-2 add/list/remove/migrate behavior, idempotency,
 cross-tenant rejection, overlap prevention, bounded read retries, permission
 and test failures, confirmation, `--what-if`, coverage-gap prevention,
