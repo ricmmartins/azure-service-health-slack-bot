@@ -152,6 +152,15 @@ environment values. A two-phase or external-vault design is outside the current
 implementation. The local environment file must be protected and must not be
 committed, copied, or printed into logs.
 
+After a successful provision creates the Key Vault secret and versioned
+Container App reference, remove the plaintext `SLACK_BOT_TOKEN` entry from the
+local AZD environment without printing it. The current Bicep contract requires
+the real token again for every later provision and does not reject an empty
+value. Operators must restore the token from an approved secret store before
+reprovisioning and remove it again afterward. Unattended production
+reprovisioning requires a preexisting external vault, a two-phase design, or an
+equivalent implementation change.
+
 ## Day-2 scope management
 
 The command supports discovery, subscription add and remove, Management Group
@@ -187,6 +196,10 @@ Cleanup has three separate surfaces:
    deletion behavior.
 3. The project-created protected API app registration must be deleted
    separately. The Microsoft-owned AzNS service principal must not be deleted.
+4. The Slack credential or dedicated test app must be revoked, rotated, or
+   deleted through Slack administration.
+5. The local AZD environment must be removed separately after `azd down`, and
+   cleanup must verify that no plaintext token remains.
 
 Key Vault purge protection is enabled with a 90-day retention period. A deleted
 vault remains a recoverable platform object and its name cannot be reused until

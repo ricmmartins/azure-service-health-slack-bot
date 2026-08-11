@@ -201,9 +201,10 @@ a sovereign cloud.
   secret version.
 - The bootstrap workflow stores `SLACK_BOT_TOKEN` as plaintext in
   `.azure/<environment>/.env` because the target Key Vault does not exist before
-  the first provision. Microsoft recommends against storing secrets in AZD
-  environment files. Restrict local file access and do not copy, log, or commit
-  the environment directory.
+  the first provision. The runbook removes that entry after provisioning, but
+  the current template requires the real token to be restored for every later
+  provision. This manual secret handoff is a production deployment blocker
+  until the infrastructure supports an external vault or a two-phase flow.
 - The day-2 command implements a Management Group as one managed subscription
   alert path per accessible descendant. It does not deploy one native
   Management Group Activity Log Alert.
@@ -309,6 +310,8 @@ git --version
 Expected state:
 
 - Python reports `3.13.x`.
+- AZD reports `1.30.0` or a later stable version. The deployment commands in
+  this guide were checked against the 1.30 command reference.
 - Every command exits with status `0`.
 - Docker reports both a client and server version.
 - Docker reports `os=linux`.
@@ -323,10 +326,11 @@ Recovery:
   then rerun `docker info`.
 - If `az bicep version` fails, run `az bicep install` and repeat the check.
 
-### Stage 1: select the Azure tenant and subscription
+### Stage 1: pin the Azure and AZD deployment target
 
 Prerequisites:
 
+- a local directory where the repository can be cloned;
 - the target tenant ID;
 - the target subscription ID;
 - a supported Azure region;
@@ -338,9 +342,12 @@ Prerequisites:
 Choose a short environment name with lowercase letters, numbers, and hyphens.
 Keep it between 3 and 20 characters and begin and end with a letter or number.
 
-Run, replacing every angle-bracket placeholder:
+Clone the repository, then replace every angle-bracket placeholder:
 
 ```bash
+git clone https://github.com/ricmmartins/azure-service-health-slack-bot.git
+cd azure-service-health-slack-bot
+
 export TARGET_TENANT_ID="<tenant-id>"
 export TARGET_SUBSCRIPTION_ID="<subscription-id>"
 export AZURE_LOCATION="<azure-region>"
@@ -350,10 +357,17 @@ az login --tenant "$TARGET_TENANT_ID"
 az account set --subscription "$TARGET_SUBSCRIPTION_ID"
 azd auth login --tenant-id "$TARGET_TENANT_ID"
 
+azd env new "$AZURE_ENV_NAME" \
+  --subscription "$TARGET_SUBSCRIPTION_ID" \
+  --location "$AZURE_LOCATION" \
+  --no-prompt
+azd env select "$AZURE_ENV_NAME" --no-prompt
+
 az account show \
   --query '{tenant:tenantId,subscription:id,name:name,isDefault:isDefault}' \
   -o table
 azd auth status
+azd env list
 
 OPERATOR_OBJECT_ID="$(az ad signed-in-user show --query id -o tsv)"
 az role assignment list \
@@ -370,11 +384,27 @@ Expected state:
 - `tenant` and `subscription` match the values you supplied.
 - `isDefault` is `True`.
 - AZD reports an authenticated user in the same tenant.
+- AZD lists `AZURE_ENV_NAME` as the selected environment.
+- The selected AZD environment contains the supplied subscription and location.
 - The role table shows the required active Azure role combination. Microsoft
   Entra directory roles do not appear in this Azure RBAC table, so confirm the
   active `Application Administrator` role separately in the Entra admin center.
 
-Register and check the Container Apps providers:
+Verify both tools point to the same target before making any subscription or
+directory change:
+
+```bash
+test "$(az account show --query tenantId -o tsv)" = "$TARGET_TENANT_ID" &&
+test "$(az account show --query id -o tsv)" = "$TARGET_SUBSCRIPTION_ID" &&
+test "$(azd env get-value AZURE_ENV_NAME)" = "$AZURE_ENV_NAME" &&
+test "$(azd env get-value AZURE_SUBSCRIPTION_ID)" = \
+  "$TARGET_SUBSCRIPTION_ID" &&
+test "$(azd env get-value AZURE_LOCATION)" = "$AZURE_LOCATION" &&
+echo "deployment-target-pinned"
+```
+
+Proceed only when the final line is `deployment-target-pinned`. Register and
+check the Container Apps providers only after this checkpoint:
 
 ```bash
 az provider register --namespace Microsoft.App --wait
@@ -388,8 +418,6 @@ az provider show --namespace Microsoft.OperationalInsights \
 Checkpoint:
 
 ```bash
-test "$(az account show --query tenantId -o tsv)" = "$TARGET_TENANT_ID" &&
-test "$(az account show --query id -o tsv)" = "$TARGET_SUBSCRIPTION_ID" &&
 test "$(az provider show --namespace Microsoft.App \
   --query registrationState -o tsv)" = "Registered" &&
 test "$(az provider show --namespace Microsoft.OperationalInsights \
@@ -405,6 +433,15 @@ Recovery:
   `az login --tenant "$TARGET_TENANT_ID"` and
   `az account set --subscription "$TARGET_SUBSCRIPTION_ID"`; do not rely on a
   previous shell context.
+- If `azd env new` reports that the environment already exists, run
+  `azd env select "$AZURE_ENV_NAME" --no-prompt`, then rerun the complete
+  `deployment-target-pinned` checkpoint. Do not assume the existing
+  subscription and location are correct.
+- Correct a wrong unused environment binding before any hook or provisioning
+  command with
+  `azd env set AZURE_SUBSCRIPTION_ID "$TARGET_SUBSCRIPTION_ID" -e "$AZURE_ENV_NAME"`
+  and
+  `azd env set AZURE_LOCATION "$AZURE_LOCATION" -e "$AZURE_ENV_NAME"`.
 - If a role is eligible through Privileged Identity Management, activate it and
   rerun the role query.
 - If provider registration is forbidden, ask a subscription administrator to
@@ -441,15 +478,13 @@ Recovery:
 - If you changed scopes after installation, reinstall the app before using the
   new token.
 
-### Stage 3: clone and validate the routing file
+### Stage 3: install dependencies and validate the routing file
 
 Prerequisites: stages 0 through 2 are complete.
 
 Run:
 
 ```bash
-git clone https://github.com/ricmmartins/azure-service-health-slack-bot.git
-cd azure-service-health-slack-bot
 python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
@@ -488,20 +523,26 @@ Recovery:
 - If the placeholder scan stops the command before the final line, replace the
   remaining example value.
 
-### Stage 4: create the AZD environment
+### Stage 4: load inputs into the pinned AZD environment
 
 Prerequisites:
 
 - the shell variables from stage 1 are still set;
+- the terminal is in the repository root;
 - the validated routing file from stage 3 exists;
 - the Slack bot token is available from the approved password manager.
 
-Create an AZD environment bound to the selected subscription and location:
+Reselect and verify the deployment target, then load the two deployment inputs:
 
 ```bash
-azd env new "$AZURE_ENV_NAME" \
-  --subscription "$TARGET_SUBSCRIPTION_ID" \
-  --location "$AZURE_LOCATION"
+az account set --subscription "$TARGET_SUBSCRIPTION_ID"
+azd env select "$AZURE_ENV_NAME" --no-prompt
+test "$(az account show --query tenantId -o tsv)" = "$TARGET_TENANT_ID" &&
+test "$(az account show --query id -o tsv)" = "$TARGET_SUBSCRIPTION_ID" &&
+test "$(azd env get-value AZURE_SUBSCRIPTION_ID)" = \
+  "$TARGET_SUBSCRIPTION_ID" &&
+test "$(azd env get-value AZURE_LOCATION)" = "$AZURE_LOCATION" &&
+echo "deployment-target-reconfirmed"
 
 read -rsp "Slack bot token (input hidden): " SLACK_BOT_TOKEN; printf '\n'
 while [[ "$SLACK_BOT_TOKEN" != xoxb-* ]]; do
@@ -509,13 +550,15 @@ while [[ "$SLACK_BOT_TOKEN" != xoxb-* ]]; do
   echo "Expected an xoxb token; try again." >&2
   read -rsp "Slack bot token (input hidden): " SLACK_BOT_TOKEN; printf '\n'
 done
-azd env set SLACK_BOT_TOKEN "$SLACK_BOT_TOKEN"
+azd env set SLACK_BOT_TOKEN "$SLACK_BOT_TOKEN" \
+  -e "$AZURE_ENV_NAME" --no-prompt
 unset SLACK_BOT_TOKEN
 
 ROUTES_B64="$(
   python -c 'import base64, pathlib; print(base64.b64encode(pathlib.Path("config/service_health_routes.json").read_bytes()).decode())'
 )"
-azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64"
+azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64" \
+  -e "$AZURE_ENV_NAME" --no-prompt
 unset ROUTES_B64
 chmod 600 ".azure/$AZURE_ENV_NAME/.env"
 ```
@@ -523,8 +566,8 @@ chmod 600 ".azure/$AZURE_ENV_NAME/.env"
 Expected state:
 
 - `.azure/<environment-name>/.env` exists.
-- AZD returns the selected environment name, subscription, and location.
-- The local environment contains the two required keys without printing their
+- the command prints `deployment-target-reconfirmed`;
+- the local environment contains the two required keys without printing their
   values.
 
 Checkpoint:
@@ -557,9 +600,8 @@ before setting the container's plain JSON
 
 Recovery:
 
-- Correct a wrong binding before provisioning:
-  `azd env set AZURE_SUBSCRIPTION_ID "$TARGET_SUBSCRIPTION_ID"` or
-  `azd env set AZURE_LOCATION "$AZURE_LOCATION"`.
+- Stop before entering the token if `deployment-target-reconfirmed` does not
+  print. Repeat the stage 1 account and environment recovery.
 - Repeat the hidden token input if the wrong token was stored.
 - If the wrong environment name was used and no hook or provisioning command
   has run, create a new environment with the correct name and remove the unused
@@ -573,7 +615,23 @@ Prerequisites:
 - `Application Administrator` is active for the Azure CLI user;
 - the operator can create enterprise applications in the target tenant.
 
-Run the project hook explicitly:
+The hook reads the active Azure CLI account through `az account show` and can
+change Microsoft Entra. Set and verify the Azure CLI subscription again, then
+reselect the AZD environment before running it:
+
+```bash
+az account set --subscription "$TARGET_SUBSCRIPTION_ID"
+azd env select "$AZURE_ENV_NAME" --no-prompt
+test "$(az account show --query tenantId -o tsv)" = "$TARGET_TENANT_ID" &&
+test "$(az account show --query id -o tsv)" = "$TARGET_SUBSCRIPTION_ID" &&
+test "$(azd env get-value AZURE_SUBSCRIPTION_ID)" = \
+  "$TARGET_SUBSCRIPTION_ID" &&
+test "$(azd env get-value AZURE_LOCATION)" = "$AZURE_LOCATION" &&
+echo "entra-mutation-target-confirmed"
+```
+
+Do not run the hook unless the final line is
+`entra-mutation-target-confirmed`. Run the project hook explicitly:
 
 ```bash
 azd hooks run preprovision \
@@ -609,10 +667,15 @@ Expected state: preview exits with status `0`, shows planned creates for the
 central resources, and shows no unexpected deletes or changes outside the
 selected subscription.
 
-Checkpoint: proceed only after `entra-hook-ready` appears and a human has
-reviewed the complete preview. Save the preview in an approved operational
-record if your change process requires it, but redact local paths and IDs before
-sharing.
+The named AZD environment was created with an explicit subscription and
+location, and preview repeats both values. The first `--no-prompt` preview
+therefore does not depend on cached AZD defaults or an earlier interactive
+selection.
+
+Checkpoint: proceed only after `entra-mutation-target-confirmed` and
+`entra-hook-ready` appear and a human has reviewed the complete preview. Save
+the preview in an approved operational record if your change process requires
+it, but redact local paths and IDs before sharing.
 
 Microsoft documents the preview flag and independent hook execution. It does
 not document a guarantee about whether preview invokes lifecycle hooks. The
@@ -713,6 +776,91 @@ Expected checkpoint values:
 Checkpoint: do not deploy application code until all expected values are
 present and the machine checkpoint prints `azure-resources-ready`. Provisioning
 success alone is not enough if the Action Group contract is wrong.
+
+Remove the plaintext local Slack token immediately after the resource
+checkpoint. First confirm that the Container App has a versioned Key Vault
+reference. Then remove every `SLACK_BOT_TOKEN` entry from the selected AZD
+environment without printing its value:
+
+```bash
+AZD_ENV_FILE=".azure/$AZURE_ENV_NAME/.env"
+KEY_VAULT_SECRET_URI="$(
+  az containerapp show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
+    --query "properties.configuration.secrets[?name=='slack-bot-token'].keyVaultUrl | [0]" \
+    -o tsv
+)"
+if [[ -z "$KEY_VAULT_SECRET_URI" ]]; then
+  echo "The Container App has no Key Vault reference for the Slack token." >&2
+  exit 1
+fi
+case "$KEY_VAULT_SECRET_URI" in
+  */secrets/slack-bot-token/*) ;;
+  *) echo "Unexpected Key Vault secret reference." >&2; exit 1 ;;
+esac
+
+if ! python - "$AZD_ENV_FILE" <<'PY'
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+path = Path(sys.argv[1])
+lines = path.read_text().splitlines()
+filtered = [line for line in lines if not line.startswith("SLACK_BOT_TOKEN=")]
+descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, text=True)
+try:
+    with os.fdopen(descriptor, "w") as temporary:
+        temporary.write("\n".join(filtered) + "\n")
+    os.chmod(temporary_name, 0o600)
+    os.replace(temporary_name, path)
+finally:
+    if os.path.exists(temporary_name):
+        os.unlink(temporary_name)
+PY
+then
+  echo "Could not remove the local Slack token." >&2
+  exit 1
+fi
+
+chmod 600 "$AZD_ENV_FILE" &&
+! grep -q '^SLACK_BOT_TOKEN=' "$AZD_ENV_FILE" &&
+unset KEY_VAULT_SECRET_URI AZD_ENV_FILE &&
+echo "local-slack-token-removed"
+```
+
+Expected state: the final line is `local-slack-token-removed`, and the AZD
+environment no longer contains the token. Do not verify this with
+`azd env get-value SLACK_BOT_TOKEN`, because a successful call would print the
+secret.
+
+The current Bicep contract still requires `SLACK_BOT_TOKEN` for every later
+`azd provision` and writes the supplied value as a new Key Vault secret version.
+Before every later preview and provision, restore the real token from the
+approved password manager:
+
+```bash
+read -rsp "Slack bot token (input hidden): " SLACK_BOT_TOKEN; printf '\n'
+if [[ "$SLACK_BOT_TOKEN" != xoxb-* ]]; then
+  unset SLACK_BOT_TOKEN
+  echo "Expected a nonempty xoxb token; stopping." >&2
+  exit 1
+fi
+azd env set SLACK_BOT_TOKEN "$SLACK_BOT_TOKEN" \
+  -e "$AZURE_ENV_NAME" --no-prompt
+unset SLACK_BOT_TOKEN
+```
+
+Run the approved preview and provision commands, then repeat the local removal
+procedure. Never set the variable to an empty string: the template does not
+reject an empty token and could create an empty Key Vault secret version. AZD
+does not retrieve this input from the vault. Removing the token does not block
+stage 7, which deploys application code without running infrastructure
+provisioning.
+
+Unattended production reprovisioning therefore needs a design change, such as a
+preexisting external vault or a two-phase deployment. Treat that hardening as a
+production blocker rather than keeping a long-lived plaintext token in the
+local AZD environment.
 
 Recovery:
 
@@ -956,16 +1104,23 @@ Routing is revision configuration, not image content:
 ROUTES_B64="$(
   python -c 'import base64, pathlib; print(base64.b64encode(pathlib.Path("config/service_health_routes.json").read_bytes()).decode())'
 )"
-azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64"
+azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64" \
+  -e "$AZURE_ENV_NAME" --no-prompt
 unset ROUTES_B64
-azd provision
 ```
+
+Reprovisioning also needs the current Slack token even when only routing
+changed. Restore the real token with the stage 4 hidden input procedure, run
+preview and provision with the explicit stage 5 and 6 commands, then remove the
+local token again with the stage 6 secret-hygiene procedure.
 
 ### Rotate the Slack token
 
 Capture the replacement token with the hidden input procedure in deployment
-step 4, update `SLACK_BOT_TOKEN`, and run `azd provision`. Bicep creates a Key
-Vault secret version and updates the versioned Container Apps secret reference.
+stage 4, update `SLACK_BOT_TOKEN`, and run preview and provision with the
+explicit stage 5 and 6 commands. Bicep creates a Key Vault secret version and
+updates the versioned Container Apps secret reference. Confirm the new revision,
+then remove the local token again with the stage 6 procedure.
 
 ### Roll back application code
 
@@ -983,8 +1138,8 @@ az containerapp revision activate \
   --revision "<known-good-revision>"
 ```
 
-For routing or token rollback, restore the previous value and run
-`azd provision`.
+For routing or token rollback, restore the previous value, follow the safe
+reprovision procedure above, and remove the local token again.
 
 ### Troubleshooting
 
@@ -1003,11 +1158,31 @@ For routing or token rollback, restore the previous value and run
 
 ### Decommission
 
-First inventory day-2 resources:
+First inventory day-2 resources and retain the nonsecret identifiers needed
+after Azure resources are gone:
 
 ```bash
-python scripts/manage_alert_scopes.py list --json
+export AZURE_ENV_NAME="<environment-name>"
+azd env select "$AZURE_ENV_NAME" --no-prompt
+TARGET_TENANT_ID="$(azd env get-value AZURE_TENANT_ID)"
+TARGET_SUBSCRIPTION_ID="$(azd env get-value AZURE_SUBSCRIPTION_ID)"
+az login --tenant "$TARGET_TENANT_ID"
+az account set --subscription "$TARGET_SUBSCRIPTION_ID"
+test "$(az account show --query tenantId -o tsv)" = "$TARGET_TENANT_ID" &&
+test "$(az account show --query id -o tsv)" = "$TARGET_SUBSCRIPTION_ID" &&
+echo "decommission-target-confirmed"
+
+python scripts/manage_alert_scopes.py list --json &&
+API_CLIENT_ID="$(azd env get-value SERVICE_HEALTH_API_CLIENT_ID)" &&
+RESOURCE_GROUP="$(azd env get-value AZURE_RESOURCE_GROUP)" &&
+LOCAL_ENV_PATH=".azure/$AZURE_ENV_NAME" &&
+test -n "$API_CLIENT_ID" &&
+test -n "$RESOURCE_GROUP" &&
+test -d "$LOCAL_ENV_PATH" &&
+echo "decommission-identifiers-retained"
 ```
+
+Do not continue unless both decommission checkpoints print.
 
 The day-2 remove commands preserve Service Health coverage and are not a
 full-decommission switch. If you intend to end coverage, verify the
@@ -1016,17 +1191,48 @@ the listed peripheral resource groups in their target subscriptions. Those
 groups are outside the central AZD resource group and `azd down` does not remove
 them.
 
-Capture the protected API client ID, delete the central Azure resources, and
-then delete the project-created app registration:
+Revoke the Slack credential before removing the infrastructure. For a dedicated
+test app, delete the app in the Slack app administration UI. If the app is
+shared, rotate or revoke this bot token, remove the bot from the project
+channels, and delete the corresponding password-manager record. Do not display
+the token while confirming its revocation.
+
+After removing any intended day-2 peripheral resource groups, delete the
+central Azure resources and the project-created app registration. The explicit
+environment keeps `azd down` on the selected deployment:
 
 ```bash
-API_CLIENT_ID="$(azd env get-value SERVICE_HEALTH_API_CLIENT_ID)"
-azd down
+azd down -e "$AZURE_ENV_NAME" --force --no-prompt
+test "$(az group exists --name "$RESOURCE_GROUP")" = "false"
 az ad app delete --id "$API_CLIENT_ID"
-unset API_CLIENT_ID
+if az ad app show --id "$API_CLIENT_ID" >/dev/null 2>&1; then
+  echo "The project app registration still exists." >&2
+  exit 1
+fi
 ```
 
 Do not delete Microsoft's AzNS AAD Webhook service principal.
+
+`azd down` deletes Azure resources. It does not delete local application files
+or the AZD environment that may contain plaintext credentials. Remove the local
+environment separately with the current AZD command, then verify the directory
+and token key are absent without printing any value:
+
+```bash
+azd env remove "$AZURE_ENV_NAME" --force --no-prompt
+test ! -e "$LOCAL_ENV_PATH"
+if grep -R -q '^SLACK_BOT_TOKEN=' .azure 2>/dev/null; then
+  echo "A local AZD environment still contains SLACK_BOT_TOKEN." >&2
+  exit 1
+fi
+unset API_CLIENT_ID RESOURCE_GROUP LOCAL_ENV_PATH AZURE_ENV_NAME
+unset TARGET_TENANT_ID TARGET_SUBSCRIPTION_ID
+echo "decommission-local-credentials-removed"
+```
+
+The final line must be `decommission-local-credentials-removed`. If another
+environment is intentionally retained, remove or rotate its credential before
+accepting the decommission checkpoint.
 
 This deployment enables Key Vault purge protection with a 90-day retention
 period. The deleted vault cannot be purged or have its name reused until that
