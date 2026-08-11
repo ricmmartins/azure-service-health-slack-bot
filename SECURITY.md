@@ -2,16 +2,13 @@
 
 ## Supported versions
 
-Security fixes are provided for the current `0.1.x` release line on a
+Security fixes are provided for the current `0.2.x` release line on a
 best-effort basis.
 
 | Version | Supported |
 |---|---|
-| `0.1.x` | Yes |
+| `0.2.x` | Yes |
 | Earlier versions and unreleased commits | No |
-
-Until `v0.1.0` is published, reports against the latest `main` commit are
-welcome when they affect the upcoming `0.1.x` release.
 
 ## Reporting a vulnerability
 
