@@ -552,7 +552,20 @@ azd provision
 ```
 
 This runs `scripts/configure_secure_webhook.py` as a `preprovision` hook
-before touching any Azure resource. The script:
+before touching any Azure resource. A clean `azd provision` runs this hook
+automatically before Bicep input discovery and requires no separate hook
+command. AZD preview does not run lifecycle hooks, so prime a new environment
+before its first preview:
+
+```bash
+azd hooks run preprovision -e <environment-name> --no-prompt
+azd provision --preview -e <environment-name> --no-prompt
+```
+
+Hook priming performs the idempotent Entra setup described below, but it does
+not create the Azure infrastructure shown by the subsequent preview.
+
+The script:
 
 1. Creates an Entra app registration that represents the protected webhook API
    on the first run, or loads the exact persisted object and client IDs on a
