@@ -219,15 +219,21 @@ For deployment:
   with Bicep
 - current stable [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
 - Docker with a Linux container engine
-- a Slack app with an `xoxb-` bot token and `chat:write`
+- a dedicated Slack app with token rotation disabled, an `xoxb-` bot token, and
+  `chat:write`
 - an Azure subscription where you can create the resources in `infra/`
 - `Owner`, or `Contributor` plus `User Access Administrator`, at the target
   subscription so Bicep can create resources and role assignments
 - Microsoft Entra `Application Administrator` while the Secure Webhook hook runs
 
 The documented Bash commands work in Linux, macOS where the command syntax is
-available, and Ubuntu on WSL. Stage 1 pins the Azure subscription and AZD
-environment before registering the Container Apps resource providers.
+available, and Ubuntu on WSL. On WSL, keep the repository in the Linux file
+system, such as `~/src`, rather than a mounted Windows drive under `/mnt`.
+Microsoft documents that Linux permission metadata is not enabled by default on
+DrvFS, so `chmod 600` alone does not provide the expected POSIX file mode there.
+See [File Permissions for WSL](https://learn.microsoft.com/windows/wsl/file-permissions).
+Stage 1 pins the Azure subscription and AZD environment before registering the
+Container Apps resource providers.
 
 `Microsoft.ContainerService` is the Azure Kubernetes Service namespace and is
 not a general Container Apps prerequisite for this deployment.
@@ -331,7 +337,8 @@ Recovery:
 
 Prerequisites:
 
-- a local directory where the repository can be cloned;
+- a local directory where the repository can be cloned; on WSL this must be in
+  the Linux file system, not under `/mnt`;
 - the target tenant ID;
 - the target subscription ID;
 - a supported Azure region;
@@ -346,6 +353,8 @@ Keep it between 3 and 20 characters and begin and end with a letter or number.
 Clone the repository, then replace every angle-bracket placeholder:
 
 ```bash
+mkdir -p "$HOME/src"
+cd "$HOME/src"
 git clone https://github.com/ricmmartins/azure-service-health-slack-bot.git
 cd azure-service-health-slack-bot
 
@@ -455,6 +464,8 @@ Recovery:
   rerun the role query.
 - If provider registration is forbidden, ask a subscription administrator to
   register the namespaces. Do not substitute `Microsoft.ContainerService`.
+- On WSL, if the repository was cloned under `/mnt`, remove any local secret
+  data from that copy and clone again under `~/src` before stage 4.
 
 ### Stage 2: create and authorize the Slack app
 
@@ -464,21 +475,35 @@ Prerequisites:
 - one destination channel ID for the fallback route;
 - any additional destination channel IDs needed by routing rules.
 
+Use a dedicated Slack app for this deployment. Reusing an app couples its
+credential lifecycle and channel access to every other consumer.
+
 In <https://api.slack.com/apps>:
 
-1. Create a Slack app in the target workspace.
+1. Create a dedicated Slack app in the target workspace.
 2. Under **OAuth & Permissions**, add the bot scope `chat:write`.
-3. Install or reinstall the app to the workspace.
-4. Store the resulting `xoxb-` bot token in an approved password manager.
-5. Invite the bot to every destination channel.
-6. Open each channel's details and record its channel ID.
+3. In **OAuth & Permissions**, confirm token rotation is disabled. Do not enable
+   it for this application.
+4. Install or reinstall the app to the workspace.
+5. Store the resulting `xoxb-` bot token in an approved password manager.
+6. Invite the bot to every destination channel.
+7. Open each channel's details and record its channel ID.
 
 Expected state: you have one `xoxb-` token and every configured channel shows
-the bot as a member. The service does not need a signing secret, event
-subscription, slash command, or inbound app manifest.
+the bot as a member. Token rotation is disabled. The service does not need a
+signing secret, event subscription, slash command, or inbound app manifest.
+
+Slack's [token rotation documentation](https://docs.slack.dev/authentication/using-token-rotation/)
+states that rotating access tokens expire every 12 hours and must be refreshed
+with a refresh token. This runtime stores one static `xoxb-` value and has no
+OAuth client-secret or refresh-token flow. It does not support rotating
+`xoxe.xoxb-*` access tokens.
 
 Checkpoint: do not continue with only channel names. Routing requires channel
-IDs, and the bot must already be a channel member when using only `chat:write`.
+IDs, the bot must already be a channel member when using only `chat:write`, and
+token rotation must be disabled. If an existing app has token rotation enabled,
+stop and create a dedicated app without it. Slack states that token rotation
+cannot be disabled after it is enabled.
 
 Recovery:
 
@@ -486,6 +511,8 @@ Recovery:
 - If a channel is private, have a member invite the bot.
 - If you changed scopes after installation, reinstall the app before using the
   new token.
+- If the app is shared, record every owner and consumer before proceeding.
+  Prefer replacing it with a dedicated app for this deployment.
 
 ### Stage 3: install dependencies and validate the routing file
 
@@ -561,29 +588,58 @@ if ! (
 fi
 echo "deployment-target-reconfirmed"
 
+if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null &&
+   [[ "$(pwd -P)" == /mnt/?/* ]]; then
+  echo "On WSL, clone under the Linux file system before storing secrets." >&2
+  exit 1
+fi
+echo "local-secret-path-confirmed"
+
 read -rsp "Slack bot token (input hidden): " SLACK_BOT_TOKEN; printf '\n'
 while [[ "$SLACK_BOT_TOKEN" != xoxb-* ]]; do
   unset SLACK_BOT_TOKEN
   echo "Expected an xoxb token; try again." >&2
   read -rsp "Slack bot token (input hidden): " SLACK_BOT_TOKEN; printf '\n'
 done
-azd env set SLACK_BOT_TOKEN "$SLACK_BOT_TOKEN" \
-  -e "$AZURE_ENV_NAME" --no-prompt
+if ! azd env set SLACK_BOT_TOKEN "$SLACK_BOT_TOKEN" \
+  -e "$AZURE_ENV_NAME" --no-prompt; then
+  unset SLACK_BOT_TOKEN
+  echo "Could not store the Slack token in the selected AZD environment." >&2
+  exit 1
+fi
 unset SLACK_BOT_TOKEN
 
-ROUTES_B64="$(
+if ! ROUTES_B64="$(
   python -c 'import base64, pathlib; print(base64.b64encode(pathlib.Path("config/service_health_routes.json").read_bytes()).decode())'
-)"
-azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64" \
-  -e "$AZURE_ENV_NAME" --no-prompt
+)"; then
+  echo "Could not encode the routing file." >&2
+  exit 1
+fi
+if ! azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64" \
+  -e "$AZURE_ENV_NAME" --no-prompt; then
+  unset ROUTES_B64
+  echo "Could not store routing in the selected AZD environment." >&2
+  exit 1
+fi
 unset ROUTES_B64
-chmod 600 ".azure/$AZURE_ENV_NAME/.env"
+if ! chmod 600 ".azure/$AZURE_ENV_NAME/.env"; then
+  echo "Could not restrict the local AZD environment file." >&2
+  exit 1
+fi
+if [[ "$(
+  python -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' \
+    ".azure/$AZURE_ENV_NAME/.env"
+)" != "600" ]]; then
+  echo "The local AZD environment file mode is not 600." >&2
+  exit 1
+fi
 ```
 
 Expected state:
 
 - `.azure/<environment-name>/.env` exists.
-- the command prints `deployment-target-reconfirmed`;
+- the command prints `deployment-target-reconfirmed` and
+  `local-secret-path-confirmed`;
 - the local environment contains the two required keys without printing their
   values.
 
@@ -622,6 +678,8 @@ Recovery:
 
 - Stop before entering the token if `deployment-target-reconfirmed` does not
   print. Repeat the stage 1 account and environment recovery.
+- On WSL, stop if `local-secret-path-confirmed` does not print. Clone a clean
+  copy under `~/src` and repeat from stage 1. Repeat the stage 1 account and environment recovery.
 - Repeat the hidden token input if the wrong token was stored.
 - If the wrong environment name was used and no hook or provisioning command
   has run, create a new environment with the correct name and remove the unused
@@ -1133,11 +1191,18 @@ if ! (
 fi
 echo "routing-target-confirmed"
 
-ROUTES_B64="$(
+if ! ROUTES_B64="$(
   python -c 'import base64, pathlib; print(base64.b64encode(pathlib.Path("config/service_health_routes.json").read_bytes()).decode())'
-)"
-azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64" \
-  -e "$AZURE_ENV_NAME" --no-prompt
+)"; then
+  echo "Could not encode the routing file." >&2
+  exit 1
+fi
+if ! azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64" \
+  -e "$AZURE_ENV_NAME" --no-prompt; then
+  unset ROUTES_B64
+  echo "Could not store routing in the selected AZD environment." >&2
+  exit 1
+fi
 unset ROUTES_B64
 
 azd provision --preview \
@@ -1164,7 +1229,11 @@ second command.
 
 ### Rotate the Slack token
 
-Do not rotate the token directly in Key Vault. Confirm the complete target,
+This procedure replaces a long-lived static `xoxb-` credential. It is not
+Slack's expiring token rotation mode, which this runtime does not support. Keep
+that Slack setting disabled.
+
+Do not replace the token directly in Key Vault. Confirm the complete target,
 update the selected AZD environment intentionally, then preview and provision
 that same environment:
 
@@ -1202,8 +1271,12 @@ if [[ "$SLACK_BOT_TOKEN" != xoxb-* ]]; then
   echo "Expected a nonempty xoxb token; stopping." >&2
   exit 1
 fi
-azd env set SLACK_BOT_TOKEN "$SLACK_BOT_TOKEN" \
-  -e "$AZURE_ENV_NAME" --no-prompt
+if ! azd env set SLACK_BOT_TOKEN "$SLACK_BOT_TOKEN" \
+  -e "$AZURE_ENV_NAME" --no-prompt; then
+  unset SLACK_BOT_TOKEN
+  echo "Could not store the replacement token." >&2
+  exit 1
+fi
 unset SLACK_BOT_TOKEN
 
 azd provision --preview \
@@ -1293,7 +1366,8 @@ restore the previous value through the explicit routing or rotation procedure.
 ### Decommission
 
 First inventory day-2 resources and retain the nonsecret identifiers needed
-after Azure resources are gone:
+after Azure resources are gone. Keep the same shell open through the complete
+procedure:
 
 ```bash
 export AZURE_ENV_NAME="<environment-name>"
@@ -1301,6 +1375,8 @@ azd env select "$AZURE_ENV_NAME" --no-prompt
 TARGET_TENANT_ID="$(azd env get-value AZURE_TENANT_ID \
   -e "$AZURE_ENV_NAME" --no-prompt)"
 TARGET_SUBSCRIPTION_ID="$(azd env get-value AZURE_SUBSCRIPTION_ID \
+  -e "$AZURE_ENV_NAME" --no-prompt)"
+DEPLOYMENT_LOCATION="$(azd env get-value AZURE_LOCATION \
   -e "$AZURE_ENV_NAME" --no-prompt)"
 az login --tenant "$TARGET_TENANT_ID"
 az account set --subscription "$TARGET_SUBSCRIPTION_ID"
@@ -1316,20 +1392,115 @@ fi
 echo "decommission-target-confirmed"
 
 source .venv/bin/activate
-python scripts/manage_alert_scopes.py list \
-  --environment-name "$AZURE_ENV_NAME" --json &&
+if ! python scripts/manage_alert_scopes.py list \
+  --environment-name "$AZURE_ENV_NAME" --json; then
+  echo "Could not inventory day-2 resources; refusing decommission." >&2
+  exit 1
+fi
+
 API_CLIENT_ID="$(azd env get-value SERVICE_HEALTH_API_CLIENT_ID \
-  -e "$AZURE_ENV_NAME" --no-prompt)" &&
+  -e "$AZURE_ENV_NAME" --no-prompt)"
+API_OBJECT_ID="$(azd env get-value SERVICE_HEALTH_API_OBJECT_ID \
+  -e "$AZURE_ENV_NAME" --no-prompt)"
+API_IDENTIFIER_URI="$(azd env get-value SERVICE_HEALTH_API_IDENTIFIER_URI \
+  -e "$AZURE_ENV_NAME" --no-prompt)"
 RESOURCE_GROUP="$(azd env get-value AZURE_RESOURCE_GROUP \
-  -e "$AZURE_ENV_NAME" --no-prompt)" &&
-LOCAL_ENV_PATH=".azure/$AZURE_ENV_NAME" &&
-test -n "$API_CLIENT_ID" &&
-test -n "$RESOURCE_GROUP" &&
-test -d "$LOCAL_ENV_PATH" &&
+  -e "$AZURE_ENV_NAME" --no-prompt)"
+ACTION_GROUP="ag-${AZURE_ENV_NAME}-service-health"
+EXPECTED_API_DISPLAY_NAME="Azure Service Health Slack Bot - ${AZURE_ENV_NAME}"
+REPOSITORY_PATH="$(pwd -P)"
+LOCAL_ENV_PATH="$REPOSITORY_PATH/.azure/$AZURE_ENV_NAME"
+
+if ! (
+  test -n "$API_CLIENT_ID" &&
+  test -n "$API_OBJECT_ID" &&
+  test "$API_IDENTIFIER_URI" = "api://$API_CLIENT_ID" &&
+  test -n "$DEPLOYMENT_LOCATION" &&
+  test -n "$RESOURCE_GROUP" &&
+  test -d "$LOCAL_ENV_PATH"
+); then
+  echo "Required decommission identifiers are missing or inconsistent." >&2
+  exit 1
+fi
+
+ACTION_GROUP_JSON="$(az monitor action-group show \
+  --resource-group "$RESOURCE_GROUP" --name "$ACTION_GROUP" -o json)"
+if ! printf '%s' "$ACTION_GROUP_JSON" | python -c '
+import json
+import sys
+
+data = json.load(sys.stdin)
+receivers = data.get("webhookReceivers") or []
+tags = data.get("tags") or {}
+valid = (
+    len(receivers) == 1
+    and str(receivers[0].get("objectId", "")).casefold()
+        == sys.argv[1].casefold()
+    and receivers[0].get("identifierUri") == sys.argv[2]
+    and receivers[0].get("useAadAuth") is True
+    and tags.get("azd-env-name") == sys.argv[3]
+    and tags.get("workload") == "azure-service-health-slack-bot"
+)
+raise SystemExit(0 if valid else 1)
+' "$API_OBJECT_ID" "$API_IDENTIFIER_URI" "$AZURE_ENV_NAME"; then
+  echo "Action Group provenance does not match this AZD environment." >&2
+  exit 1
+fi
+
+GRAPH_APP_JSON="$(az rest --method get \
+  --url "https://graph.microsoft.com/v1.0/applications/$API_OBJECT_ID?\$select=id,appId,displayName,identifierUris" \
+  -o json)"
+if ! printf '%s' "$GRAPH_APP_JSON" | python -c '
+import json
+import sys
+
+data = json.load(sys.stdin)
+valid = (
+    str(data.get("id", "")).casefold() == sys.argv[1].casefold()
+    and str(data.get("appId", "")).casefold() == sys.argv[2].casefold()
+    and data.get("displayName") == sys.argv[3]
+    and data.get("identifierUris") == [sys.argv[4]]
+)
+raise SystemExit(0 if valid else 1)
+' "$API_OBJECT_ID" "$API_CLIENT_ID" "$EXPECTED_API_DISPLAY_NAME" \
+  "$API_IDENTIFIER_URI"; then
+  echo "Microsoft Graph application provenance is ambiguous or mismatched." >&2
+  exit 1
+fi
+
+read -rp "App object ID from the approved Entra creation record: " \
+  CREATION_RECORD_OBJECT_ID
+if [[ "$CREATION_RECORD_OBJECT_ID" != "$API_OBJECT_ID" ]]; then
+  echo "Independent creation evidence does not match; refusing deletion." >&2
+  exit 1
+fi
+
+readonly DECOMMISSION_ENV_NAME="$AZURE_ENV_NAME"
+readonly DECOMMISSION_TENANT_ID="$TARGET_TENANT_ID"
+readonly DECOMMISSION_SUBSCRIPTION_ID="$TARGET_SUBSCRIPTION_ID"
+readonly DECOMMISSION_LOCATION="$DEPLOYMENT_LOCATION"
+readonly DECOMMISSION_RESOURCE_GROUP="$RESOURCE_GROUP"
+readonly DECOMMISSION_API_CLIENT_ID="$API_CLIENT_ID"
+readonly DECOMMISSION_API_OBJECT_ID="$API_OBJECT_ID"
+readonly DECOMMISSION_API_IDENTIFIER_URI="$API_IDENTIFIER_URI"
+readonly DECOMMISSION_API_DISPLAY_NAME="$EXPECTED_API_DISPLAY_NAME"
+readonly DECOMMISSION_REPOSITORY_PATH="$REPOSITORY_PATH"
+readonly DECOMMISSION_LOCAL_ENV_PATH="$LOCAL_ENV_PATH"
+readonly DECOMMISSION_PROVENANCE="$DECOMMISSION_ENV_NAME|$DECOMMISSION_TENANT_ID|$DECOMMISSION_SUBSCRIPTION_ID|$DECOMMISSION_LOCATION|$DECOMMISSION_RESOURCE_GROUP|$DECOMMISSION_API_OBJECT_ID|$DECOMMISSION_API_CLIENT_ID|$DECOMMISSION_API_IDENTIFIER_URI|$DECOMMISSION_REPOSITORY_PATH"
+unset ACTION_GROUP_JSON GRAPH_APP_JSON
 echo "decommission-identifiers-retained"
 ```
 
-Do not continue unless both decommission checkpoints print.
+Do not continue unless both inventory checkpoints print. The provenance
+check requires one Secure Webhook receiver, matching deployment tags, the
+environment-specific identifier URI, and the exact application display name
+used by `scripts/configure_secure_webhook.py`. The creation-record object ID must
+come from an approved
+[Microsoft Entra audit log](https://learn.microsoft.com/entra/identity/monitoring-health/concept-audit-logs)
+or deployment change record independent of the local AZD environment and
+deployed Action Group. The current hook does not persist a creation-only marker.
+A missing, duplicate, adopted, or legacy app without independent creation
+evidence is a stop condition.
 
 The day-2 remove commands preserve Service Health coverage and are not a
 full-decommission switch. If you intend to end coverage, verify the
@@ -1344,26 +1515,95 @@ environment keeps `azd down` on the selected deployment:
 
 ```bash
 if ! (
-  test "$(az account show --query tenantId -o tsv)" = "$TARGET_TENANT_ID" &&
-  test "$(az account show --query id -o tsv)" = "$TARGET_SUBSCRIPTION_ID" &&
+  test "$(pwd -P)" = "$DECOMMISSION_REPOSITORY_PATH" &&
+  test "$AZURE_ENV_NAME" = "$DECOMMISSION_ENV_NAME" &&
+  test "$(az account show --query tenantId -o tsv)" = \
+    "$DECOMMISSION_TENANT_ID" &&
+  test "$(az account show --query id -o tsv)" = \
+    "$DECOMMISSION_SUBSCRIPTION_ID" &&
   test "$(azd env get-value AZURE_ENV_NAME \
-    -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_ENV_NAME"
+    -e "$DECOMMISSION_ENV_NAME" --no-prompt)" = \
+    "$DECOMMISSION_ENV_NAME" &&
+  test "$(azd env get-value AZURE_TENANT_ID \
+    -e "$DECOMMISSION_ENV_NAME" --no-prompt)" = \
+    "$DECOMMISSION_TENANT_ID" &&
+  test "$(azd env get-value AZURE_SUBSCRIPTION_ID \
+    -e "$DECOMMISSION_ENV_NAME" --no-prompt)" = \
+    "$DECOMMISSION_SUBSCRIPTION_ID" &&
+  test "$(azd env get-value AZURE_LOCATION \
+    -e "$DECOMMISSION_ENV_NAME" --no-prompt)" = \
+    "$DECOMMISSION_LOCATION" &&
+  test "$(azd env get-value AZURE_RESOURCE_GROUP \
+    -e "$DECOMMISSION_ENV_NAME" --no-prompt)" = \
+    "$DECOMMISSION_RESOURCE_GROUP" &&
+  test "$DECOMMISSION_PROVENANCE" = \
+    "$AZURE_ENV_NAME|$TARGET_TENANT_ID|$TARGET_SUBSCRIPTION_ID|$DEPLOYMENT_LOCATION|$RESOURCE_GROUP|$API_OBJECT_ID|$API_CLIENT_ID|$API_IDENTIFIER_URI|$(pwd -P)"
 ); then
   echo "Decommission target confirmation failed." >&2
   exit 1
 fi
 echo "decommission-delete-target-confirmed"
 
-azd down -e "$AZURE_ENV_NAME" --force --no-prompt
-if [[ "$(az group exists --name "$RESOURCE_GROUP")" != "false" ]]; then
+if ! azd down -e "$DECOMMISSION_ENV_NAME" --force --no-prompt; then
+  echo "AZD reported incomplete Azure resource deletion." >&2
+  exit 1
+fi
+if [[ "$(
+  az group exists --name "$DECOMMISSION_RESOURCE_GROUP"
+)" != "false" ]]; then
   echo "The central resource group still exists." >&2
   exit 1
 fi
-if ! az ad app delete --id "$API_CLIENT_ID"; then
+
+if ! (
+  test "$(az account show --query tenantId -o tsv)" = \
+    "$DECOMMISSION_TENANT_ID" &&
+  test "$(az account show --query id -o tsv)" = \
+    "$DECOMMISSION_SUBSCRIPTION_ID" &&
+  test "$DECOMMISSION_PROVENANCE" = \
+    "$DECOMMISSION_ENV_NAME|$DECOMMISSION_TENANT_ID|$DECOMMISSION_SUBSCRIPTION_ID|$DECOMMISSION_LOCATION|$DECOMMISSION_RESOURCE_GROUP|$DECOMMISSION_API_OBJECT_ID|$DECOMMISSION_API_CLIENT_ID|$DECOMMISSION_API_IDENTIFIER_URI|$DECOMMISSION_REPOSITORY_PATH"
+); then
+  echo "Entra deletion target changed after Azure cleanup." >&2
+  exit 1
+fi
+
+GRAPH_APP_JSON="$(az rest --method get \
+  --url "https://graph.microsoft.com/v1.0/applications/$DECOMMISSION_API_OBJECT_ID?\$select=id,appId,displayName,identifierUris" \
+  -o json)"
+if ! printf '%s' "$GRAPH_APP_JSON" | python -c '
+import json
+import sys
+
+data = json.load(sys.stdin)
+valid = (
+    str(data.get("id", "")).casefold() == sys.argv[1].casefold()
+    and str(data.get("appId", "")).casefold() == sys.argv[2].casefold()
+    and data.get("displayName") == sys.argv[3]
+    and data.get("identifierUris") == [sys.argv[4]]
+)
+raise SystemExit(0 if valid else 1)
+' "$DECOMMISSION_API_OBJECT_ID" "$DECOMMISSION_API_CLIENT_ID" \
+  "$DECOMMISSION_API_DISPLAY_NAME" \
+  "$DECOMMISSION_API_IDENTIFIER_URI"; then
+  echo "Entra application changed after provenance capture; refusing deletion." >&2
+  exit 1
+fi
+unset GRAPH_APP_JSON
+
+if ! az ad app delete --id "$DECOMMISSION_API_OBJECT_ID"; then
   echo "Could not delete the project app registration." >&2
   exit 1
 fi
-if az ad app show --id "$API_CLIENT_ID" >/dev/null 2>&1; then
+POST_DELETE_MATCH_COUNT="$(
+  az ad app list \
+    --filter "id eq '$DECOMMISSION_API_OBJECT_ID'" \
+    --query 'length(@)' \
+    -o tsv
+)" || {
+  echo "Could not verify project app registration deletion." >&2
+  exit 1
+}
+if [ "$POST_DELETE_MATCH_COUNT" != "0" ]; then
   echo "The project app registration still exists." >&2
   exit 1
 fi
@@ -1372,11 +1612,18 @@ echo "decommission-cloud-resources-removed"
 
 Do not delete Microsoft's AzNS AAD Webhook service principal.
 
-Now revoke the Slack credential. For a dedicated test app, delete or uninstall
-the app through Slack administration. If the app is shared, rotate or revoke
-this bot token, remove the bot from the project channels, and delete the
-corresponding password-manager record. Do not display the token while confirming
-its revocation.
+For the recommended dedicated Slack app, uninstall or delete the app through
+Slack administration, remove it from the project channels, and delete its
+password-manager record. Do not display the token while confirming revocation.
+
+If the app is shared, decommission only this project's channel membership and
+configuration. Do not remove the bot from a channel until the Slack app owner
+has confirmed that no other consumer needs its membership there. Do not
+uninstall the app or revoke, rotate, or delete its shared credential as part of
+this procedure. If replacement is required, the owner must inventory every
+consumer, distribute the replacement, verify each consumer has migrated, and
+approve revocation of the old credential. Treat that as a separate coordinated
+change.
 
 `azd down` deletes Azure resources. It does not delete local application files
 or the AZD environment that may contain plaintext credentials. Remove the local
@@ -1384,14 +1631,19 @@ environment separately with the current AZD command, then verify the directory
 is absent without reading or printing the secret:
 
 ```bash
-azd env remove "$AZURE_ENV_NAME" \
-  -e "$AZURE_ENV_NAME" --force --no-prompt
-if [[ -e "$LOCAL_ENV_PATH" ]]; then
+if [[ "$(pwd -P)" != "$DECOMMISSION_REPOSITORY_PATH" ]]; then
+  echo "Return to the captured repository before local cleanup." >&2
+  exit 1
+fi
+if ! azd env remove "$DECOMMISSION_ENV_NAME" \
+  -e "$DECOMMISSION_ENV_NAME" --force --no-prompt; then
+  echo "Could not remove the local AZD environment." >&2
+  exit 1
+fi
+if [[ -e "$DECOMMISSION_LOCAL_ENV_PATH" ]]; then
   echo "The local AZD environment still exists." >&2
   exit 1
 fi
-unset API_CLIENT_ID RESOURCE_GROUP LOCAL_ENV_PATH AZURE_ENV_NAME
-unset TARGET_TENANT_ID TARGET_SUBSCRIPTION_ID
 echo "decommission-local-credentials-removed"
 ```
 

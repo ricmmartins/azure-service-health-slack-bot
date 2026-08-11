@@ -84,6 +84,19 @@ Monitor AzNS AAD Webhook service principal. Flask then checks:
 Public health probes use anonymous ingress. The protected webhook enforces its
 own `401` and `403` responses.
 
+### Slack credential boundary
+
+The supported credential is one static long-lived `xoxb-` bot token from a
+dedicated Slack app with token rotation disabled. Slack's expiring token
+rotation mode requires refresh-token handling and produces `xoxe.xoxb-*` access
+tokens. This runtime has no OAuth refresh flow and does not support that mode.
+
+Shared Slack apps are discouraged because revocation, rotation, and uninstall
+affect every consumer. Decommissioning a shared app removes only this project's
+channel membership and configuration. Any credential replacement requires an
+owner-approved migration of every consumer before the old credential is
+revoked.
+
 ## Event processing contract
 
 1. Validate authentication and Common Alert Schema.
@@ -151,6 +164,10 @@ process. Microsoft recommends secret references instead of plaintext AZD
 environment values. The local environment file must be protected and must not
 be committed, copied, or printed into logs.
 
+On WSL, the repository and `.azure` directory must be in the Linux file system,
+not a mounted Windows drive under `/mnt`. Default DrvFS mounts do not enable the
+Linux metadata that makes `chmod 600` enforce the expected POSIX mode.
+
 The current Bicep contract requires the real token on every provision, does not
 reject an empty value, and writes the supplied value as a new Key Vault secret
 version. The token must therefore remain in the protected local AZD environment
@@ -193,10 +210,17 @@ Cleanup has three separate surfaces:
    resource group.
 2. `azd down` removes the central environment resources according to Azure
    deletion behavior.
-3. The project-created protected API app registration must be deleted
-   separately. The Microsoft-owned AzNS service principal must not be deleted.
-4. The Slack credential or dedicated test app must be revoked, rotated, or
-   deleted through Slack administration.
+3. Before `azd down`, the project-created protected API app object ID, client
+   ID, identifier URI, exact display name, deployed Action Group receiver, and
+   ownership tags must agree. An approved Entra audit or deployment change
+   record, independent of the local environment, must prove that the project
+   created that object ID. The current hook does not persist a creation-only
+   marker. Microsoft Graph must return the same application immediately before
+   deletion. Any mismatch, ambiguity, or missing creation record blocks
+   deletion. The Microsoft-owned AzNS service principal must not be deleted.
+4. A dedicated Slack app must be uninstalled or deleted through Slack
+   administration. A shared app and credential must remain intact unless every
+   consumer has completed an owner-approved coordinated migration.
 5. The local AZD environment must be removed separately after `azd down`, and
    cleanup must verify that no plaintext token remains.
 
