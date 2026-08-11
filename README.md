@@ -552,7 +552,10 @@ azd provision
 ```
 
 This runs `scripts/configure_secure_webhook.py` as a `preprovision` hook
-before touching any Azure resource. The script:
+before touching any Azure resource. Its three Bicep parameters have empty
+defaults so AZD input discovery can reach the hook without prompting; the
+template then fails closed with `fail()` if the hook does not populate all
+three values. The script:
 
 1. Creates an Entra app registration that represents the protected webhook API
    on the first run, or loads the exact persisted object and client IDs on a
