@@ -29,9 +29,11 @@ deployment with scripts/manage_alert_scopes.py.
 ])
 param managementGroupId string = ''
 var resourceToken = toLower(uniqueString(subscription().id, environmentName))
-var resourceGroupName = 'rg-${environmentName}'
-var serviceHealthRoutesJson = base64ToString(serviceHealthRoutesJsonB64)
 var hasSecureWebhookConfiguration = !empty(secureWebhookClientId) && !empty(secureWebhookObjectId) && !empty(secureWebhookIdentifierUri)
+var resourceGroupName = hasSecureWebhookConfiguration
+  ? 'rg-${environmentName}'
+  : fail('Secure Webhook configuration is missing. Run the preprovision hook before deploying.')
+var serviceHealthRoutesJson = base64ToString(serviceHealthRoutesJsonB64)
 var secureWebhookConfiguration = hasSecureWebhookConfiguration ? {
     clientId: secureWebhookClientId
     objectId: secureWebhookObjectId

@@ -23,6 +23,10 @@ def test_secure_webhook_parameters_fail_closed_before_module_use():
     source = MAIN_BICEP.read_text(encoding="utf-8")
     expected_guard = """\
 var hasSecureWebhookConfiguration = !empty(secureWebhookClientId) && !empty(secureWebhookObjectId) && !empty(secureWebhookIdentifierUri)
+var resourceGroupName = hasSecureWebhookConfiguration
+  ? 'rg-${environmentName}'
+  : fail('Secure Webhook configuration is missing. Run the preprovision hook before deploying.')
+var serviceHealthRoutesJson = base64ToString(serviceHealthRoutesJsonB64)
 var secureWebhookConfiguration = hasSecureWebhookConfiguration ? {
     clientId: secureWebhookClientId
     objectId: secureWebhookObjectId
@@ -31,6 +35,9 @@ var secureWebhookConfiguration = hasSecureWebhookConfiguration ? {
   : fail('Secure Webhook configuration is missing. Run the preprovision hook before deploying.')"""
 
     assert expected_guard in source
+    assert """\
+resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+  name: resourceGroupName""" in source
     assert (
         "secureWebhookClientId: secureWebhookConfiguration.clientId"
         in source
@@ -43,3 +50,9 @@ var secureWebhookConfiguration = hasSecureWebhookConfiguration ? {
         "secureWebhookIdentifierUri: "
         "secureWebhookConfiguration.identifierUri"
     ) == 2
+    assert "secureWebhookClientId: secureWebhookClientId" not in source
+    assert "secureWebhookObjectId: secureWebhookObjectId" not in source
+    assert (
+        "secureWebhookIdentifierUri: secureWebhookIdentifierUri"
+        not in source
+    )
