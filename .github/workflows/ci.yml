@@ -8,7 +8,7 @@ on:
 
 jobs:
   python:
-    name: Python ${{ matrix.python-version }} validation (${{ matrix.os }})
+    name: ${{ matrix.check-name }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -16,12 +16,16 @@ jobs:
         include:
           - os: ubuntu-latest
             python-version: "3.12"
+            check-name: Python 3.12 validation (ubuntu-latest)
           - os: ubuntu-latest
             python-version: "3.13"
+            check-name: Python validation (ubuntu-latest)
           - os: macos-latest
             python-version: "3.13"
+            check-name: Python validation (macos-latest)
           - os: windows-latest
             python-version: "3.13"
+            check-name: Python validation (windows-latest)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
