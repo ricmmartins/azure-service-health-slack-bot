@@ -97,6 +97,9 @@ with additional stage values that depend on the incident type. `Updated` in
 this application is a local lifecycle label: a newer accepted nonterminal
 notification for an existing Slack incident is rendered as an update. It is
 not presented as a complete list of Azure Service Health stage values.
+Slack renders `Active` with a red circle, `Updated` with an orange circle, and
+`Resolved` with a green circle. The Slack app avatar is separate from this
+lifecycle indicator.
 
 See the official [Common Alert Schema](https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-common-schema)
 and [Service Health event properties](https://learn.microsoft.com/azure/service-health/service-health-event-properties).
@@ -214,9 +217,10 @@ a sovereign cloud.
 
 For deployment:
 
-- Python 3.13
+- Python 3.12 or 3.13 for local tooling; the production image is pinned to
+  Python 3.13
 - current stable [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
-  with Bicep
+  with Bicep and the `log-analytics` extension
 - current stable [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
 - Docker with a Linux container engine
 - a dedicated Slack app with token rotation disabled, an `xoxb-` bot token, and
@@ -246,7 +250,7 @@ not a general Container Apps prerequisite for this deployment.
 Create a virtual environment and install dependencies:
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
@@ -299,8 +303,9 @@ tokens, or channel IDs to tracked files.
 Prerequisites:
 
 - Bash on Linux, macOS, or Ubuntu on WSL
-- Python 3.13
+- Python 3.12 or 3.13
 - current stable Azure CLI with Bicep
+- Azure CLI `log-analytics` extension
 - current stable Azure Developer CLI
 - Docker with a running Linux container engine
 - Git
@@ -308,9 +313,14 @@ Prerequisites:
 Run:
 
 ```bash
-python --version
+python3 --version
 az version
 az bicep version
+az extension add --name log-analytics --upgrade --yes
+az extension show --name log-analytics \
+  --query '{name:name,version:version}' -o table
+command -v azd
+type -a azd
 azd version
 docker version --format 'client={{.Client.Version}} server={{.Server.Version}}'
 docker info --format 'os={{.OSType}}'
@@ -319,7 +329,12 @@ git --version
 
 Expected state:
 
-- Python reports `3.13.x`.
+- Python reports `3.12.x` or `3.13.x`. The operator hook and CLI were verified
+  with Ubuntu Python 3.12, while CI and the deployed container use Python 3.13.
+- Azure CLI reports the installed `log-analytics` extension and its version.
+- `command -v azd` identifies the binary that the shell will execute. If
+  `type -a azd` lists more than one installation, the first one must be the
+  current stable installation.
 - AZD reports `1.30.0` or a later stable version. The deployment commands in
   this guide were checked against the 1.30 command reference.
 - Every command exits with status `0`.
@@ -332,9 +347,15 @@ version without a server version is not sufficient.
 Recovery:
 
 - Install or update the tool from the links in [Prerequisites](#prerequisites).
+- If an older AZD installation shadows the current one, put the current
+  installation directory before the older directory in `PATH`, start a new
+  shell, and repeat `command -v azd`, `type -a azd`, and `azd version`.
 - On WSL, enable the distribution in Docker Desktop under **WSL integration**,
   then rerun `docker info`.
 - If `az bicep version` fails, run `az bicep install` and repeat the check.
+- If the Log Analytics extension cannot be installed, correct Azure CLI
+  extension policy or network access before deployment; do not rely on an
+  interactive dynamic-install prompt during incident troubleshooting.
 
 ### Stage 1: pin the Azure and AZD deployment target
 
@@ -366,20 +387,28 @@ export TARGET_SUBSCRIPTION_ID="<subscription-id>"
 export AZURE_LOCATION="<azure-region>"
 export AZURE_ENV_NAME="<environment-name>"
 
+azd config set auth.useAzCliAuth true
 az login --tenant "$TARGET_TENANT_ID"
 az account set --subscription "$TARGET_SUBSCRIPTION_ID"
-azd auth login --tenant-id "$TARGET_TENANT_ID"
+azd auth login --check-status --no-prompt
 
-azd env new "$AZURE_ENV_NAME" \
-  --subscription "$TARGET_SUBSCRIPTION_ID" \
-  --location "$AZURE_LOCATION" \
-  --no-prompt
+if [[ -e ".azure/$AZURE_ENV_NAME" ]]; then
+  echo "AZD environment already exists; stop and follow recovery." >&2
+  exit 1
+fi
+if ! azd env new "$AZURE_ENV_NAME" \
+    --subscription "$TARGET_SUBSCRIPTION_ID" \
+    --location "$AZURE_LOCATION" \
+    --no-prompt; then
+  echo "Could not create the isolated AZD environment." >&2
+  exit 1
+fi
 azd env select "$AZURE_ENV_NAME" --no-prompt
 
 az account show \
   --query '{tenant:tenantId,subscription:id,name:name,isDefault:isDefault}' \
   -o table
-azd auth status
+azd auth status --no-prompt
 azd env list -e "$AZURE_ENV_NAME" --no-prompt
 
 OPERATOR_OBJECT_ID="$(az ad signed-in-user show --query id -o tsv)"
@@ -396,7 +425,8 @@ Expected state:
 
 - `tenant` and `subscription` match the values you supplied.
 - `isDefault` is `True`.
-- AZD reports an authenticated user in the same tenant.
+- AZD delegates authentication to the current Azure CLI identity and reports
+  that identity as authenticated in the same tenant.
 - AZD lists `AZURE_ENV_NAME` as the selected environment.
 - The selected AZD environment contains the supplied subscription and location.
 - The role table shows the required active Azure role combination. Microsoft
@@ -448,25 +478,123 @@ echo "azure-context-ready"
 
 Proceed only when the final line is `azure-context-ready`.
 
+Check the regional capacity consumed by this template. These provider usage
+endpoints are used directly because the `az quota` extension can temporarily
+return an empty result or a stale `Microsoft.Quota` registration error even
+after the provider reports `Registered`:
+
+```bash
+check_capacity() {
+  local provider="$1"
+  local api_version="$2"
+  local quota_name="$3"
+  local required="$4"
+  local usage_json
+
+  if ! usage_json="$(
+    az rest --method get --url \
+      "https://management.azure.com/subscriptions/$TARGET_SUBSCRIPTION_ID/providers/$provider/locations/$AZURE_LOCATION/usages?api-version=$api_version" \
+      --query "value[?name.value=='$quota_name'] | [0].{current:currentValue,limit:limit}" \
+      -o json
+  )"; then
+    echo "Could not query $quota_name capacity." >&2
+    return 1
+  fi
+  if ! QUOTA_NAME="$quota_name" REQUIRED="$required" \
+    USAGE_JSON="$usage_json" python3 - <<'PY'
+import json
+import os
+import sys
+
+name = os.environ["QUOTA_NAME"]
+required = float(os.environ["REQUIRED"])
+try:
+    value = json.loads(os.environ["USAGE_JSON"])
+    current = float(value["current"])
+    limit = float(value["limit"])
+except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+    print(f"Could not parse {name} capacity: {error}", file=sys.stderr)
+    raise SystemExit(1)
+if limit - current < required:
+    print(
+        f"{name} has insufficient capacity: "
+        f"current={current:g} limit={limit:g} required={required:g}.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+print(
+    f"{name} current={current:g} limit={limit:g} required={required:g}"
+)
+PY
+  then
+    return 1
+  fi
+}
+
+check_capacity Microsoft.App 2024-03-01 \
+  ManagedEnvironmentCount 1 &&
+check_capacity Microsoft.Storage 2024-01-01 \
+  StorageAccounts 1 &&
+check_capacity Microsoft.Network 2024-05-01 \
+  VirtualNetworks 1 &&
+check_capacity Microsoft.Network 2024-05-01 \
+  PrivateEndpoints 2 &&
+echo "deployment-capacity-ready"
+```
+
+Proceed only when all four usage rows print and the final line is
+`deployment-capacity-ready`. This is a minimum check for the quota-governed
+resources created by the current template; it is not a guarantee that Azure
+has transient regional capacity for every resource at deployment time.
+
+List policy assignments visible from the target subscription boundary,
+including inherited and child-scope assignments:
+
+```bash
+az policy assignment list \
+  --scope "/subscriptions/$TARGET_SUBSCRIPTION_ID" \
+  --disable-scope-strict-match true \
+  --query '[].{name:name,scope:scope,enforcementMode:enforcementMode}' \
+  -o table
+```
+
+Review assignments at the subscription or an ancestor scope for restrictions
+on regions, public ingress, private endpoints, resource names, SKUs, and
+required tags. Child-scope rows matter only if the deployment targets that
+scope. An empty table means no assignment was found by this query; a nonempty
+table is not automatically a blocker, but it must be assessed before the Entra
+hook or provisioning.
+
 Recovery:
 
 - If the account values are wrong, rerun
   `az login --tenant "$TARGET_TENANT_ID"` and
   `az account set --subscription "$TARGET_SUBSCRIPTION_ID"`; do not rely on a
   previous shell context.
-- If `azd env new` reports that the environment already exists, run
-  `azd env select "$AZURE_ENV_NAME" --no-prompt`, then rerun the complete
-  `deployment-target-pinned` checkpoint. Do not assume the existing
-  subscription and location are correct.
-- Correct a wrong unused environment binding before any hook or provisioning
-  command with
-  `azd env set AZURE_SUBSCRIPTION_ID "$TARGET_SUBSCRIPTION_ID" -e "$AZURE_ENV_NAME"`
-  and
-  `azd env set AZURE_LOCATION "$AZURE_LOCATION" -e "$AZURE_ENV_NAME"`.
+- If Azure CLI authentication expires, rerun
+  `az login --tenant "$TARGET_TENANT_ID"`, set the subscription again, and run
+  `azd auth login --check-status --no-prompt`. Azure CLI and a separately
+  authenticated AZD session can expire independently; delegation avoids
+  maintaining two interactive identities.
+- If the environment-name guard reports that the environment already exists,
+  inspect only
+  its nonsecret `AZURE_SUBSCRIPTION_ID`, `AZURE_LOCATION`, and
+  `AZURE_RESOURCE_GROUP` values with separate `azd env get-value` commands.
+  Do not run `azd env get-values`, because it can print the stored Slack token.
+  If the existing environment has deployment outputs or belongs to another
+  target, preserve it and choose a new environment name. Never repin a
+  previously deployed environment to a different subscription.
+  Only when all nonsecret outputs prove that the environment is unused may you
+  remove it with
+  `azd env remove "$AZURE_ENV_NAME" -e "$AZURE_ENV_NAME" --force --no-prompt`,
+  then rerun stage 1 to create it from scratch.
 - If a role is eligible through Privileged Identity Management, activate it and
   rerun the role query.
 - If provider registration is forbidden, ask a subscription administrator to
   register the namespaces. Do not substitute `Microsoft.ContainerService`.
+- If a provider usage request fails, confirm the corresponding
+  `Microsoft.App`, `Microsoft.Storage`, or `Microsoft.Network` namespace is
+  registered, wait for propagation, and repeat the direct usage request.
 - On WSL, if the repository was cloned on a Windows drive, remove any local
   secret data from that copy and clone again under `~/src` before stage 4.
 
@@ -524,7 +652,7 @@ Prerequisites: stages 0 through 2 are complete.
 Run:
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
@@ -764,6 +892,13 @@ the target vault is created by the same provision. Restrict access to the
 workstation and `.azure/<environment>/.env`, never commit or copy the
 environment, and do not run `azd env get-values` in logs.
 
+Paste into the documented hidden prompt when working across Windows and WSL.
+Do not automate the bridge with a host-side `WriteLine` call: it can append
+carriage return plus line feed, leaving a carriage return in the value consumed
+by Bash. If automation is unavoidable, transmit the token bytes followed by
+line feed only and validate that no control character was stored without
+printing the value.
+
 On a later failure, cleanup filters only the exact `SLACK_BOT_TOKEN=` line. It
 does not retrieve or print the stored value, and it preserves every other
 environment entry while holding the same cross-process lock used by AZD.
@@ -867,6 +1002,12 @@ The named AZD environment was created with an explicit subscription and
 location, and preview repeats both values. The first `--no-prompt` preview
 therefore does not depend on cached AZD defaults or an earlier interactive
 selection.
+
+`azd up` runs the hook, provisioning, packaging, and deployment lifecycle. A
+verified deployment used it successfully after the explicit hook and reviewed
+preview. This guide deliberately keeps provisioning and deployment as separate
+stages so their checkpoints remain independent; do not use `azd up` to bypass
+stages 4 and 5.
 
 Checkpoint: proceed only after `entra-mutation-target-confirmed` and
 `entra-hook-ready` appear and a human has reviewed the complete preview. Save
@@ -1132,6 +1273,15 @@ message appears in the configured Slack channel. Microsoft REST examples show
 `Completed`; live project tests have also returned operation state `Complete`
 and receiver state `Succeeded`.
 
+The built-in test sends Azure-owned synthetic values, including its
+subscription and tracking identifiers, and it can render as `Resolved`. Those
+values do not describe a real incident. A later test submission for the same
+synthetic incident can exercise root correlation, `chat.update`, and the thread
+reply, but it is not proof of byte-identical duplicate suppression. Exact
+duplicate handling and the complete Active/Updated/Resolved state machine are
+covered by the automated tests because the Action Group test command does not
+allow custom lifecycle payloads.
+
 Inspect recent application logs:
 
 ```bash
@@ -1221,10 +1371,11 @@ python scripts/manage_alert_scopes.py migrate-to-management-group \
 Always pass `--environment-name`; do not rely on discovery when more than one
 deployment can exist. Use `--json` for machine-readable output.
 
-Add operations support `--what-if`. Remove and migration operations require
-interactive confirmation. `--force` supplies that confirmation only for
-preapproved noninteractive automation; it does not bypass tenant, permission,
-coverage, ownership, or signed-test checks.
+All scope commands support `--what-if` for nonmutating planning. Remove and
+migration operations additionally require interactive confirmation when they
+execute. `--force` supplies that confirmation only for preapproved
+noninteractive automation; it does not bypass tenant, permission, coverage,
+ownership, or signed-test checks.
 
 The command checks the exact Azure operations it needs before mutation. A
 typical assignment is `Contributor` on each target subscription plus
@@ -1236,6 +1387,16 @@ it cannot prove membership or coverage.
 Each new path is deployed disabled, tested through Azure Monitor's signed
 Secure Webhook test, and enabled only after the test succeeds. The AZD-owned
 baseline alert remains outside day-2 ownership.
+
+Scope management creates alert resources; it does not edit the central routing
+document. The required default channel receives a newly added subscription
+until a more specific rule matches. If a subscription or Management Group
+member needs its own destination, update and provision routing first, invite
+the bot to that channel, and then add the scope. The signed Action Group test
+uses a synthetic subscription ID, so it cannot validate a real
+subscription-specific rule. It normally exercises the default route, although
+a service or region rule that matches the synthetic payload can take
+precedence.
 
 ## Operations
 
@@ -1257,9 +1418,32 @@ AppTraces
     threadReplyTs = Properties.thread_reply_ts
 
 AppDependencies
-| where Target has_any ("slack.com", "table.core.windows.net")
+| where Target =~ "slack.com" or Target contains ".table.core.windows.net"
 | summarize count(), failures=countif(Success == false) by Target, ResultCode
 ```
+
+Run these queries against the Log Analytics workspace linked to Application
+Insights. If the Application Insights Logs view appears empty immediately after
+a signed test, query the workspace directly:
+
+```bash
+WORKSPACE_ID="$(az monitor log-analytics workspace list \
+  --resource-group "$RESOURCE_GROUP" \
+  --query '[0].customerId' -o tsv)"
+
+az monitor log-analytics query \
+  --workspace "$WORKSPACE_ID" \
+  --analytics-query \
+  'AppDependencies | where TimeGenerated > ago(1h) | where Target =~ "slack.com" or Target contains ".table.core.windows.net" | project TimeGenerated, Name, Target, ResultCode, Success | order by TimeGenerated desc' \
+  -o table
+```
+
+Correlated repeat processing can emit a failed in-process
+`TableClient.create_entity` span while the external Table request reports an
+accepted `409`, the webhook returns `200`, and processing continues through the
+existing entity. Treat it as the expected reservation collision only when the
+request, external dependency, subsequent checkpoints, and absence of an
+application exception all confirm that handled path.
 
 Alert on sustained webhook `503` responses, dependency failures, and missing
 successful deliveries when an incident is expected.
@@ -1457,7 +1641,9 @@ restore the previous value through the explicit routing or rotation procedure.
 
 | Symptom | Check |
 |---|---|
-| Browser login is blocked | Follow the tenant's Conditional Access policy. Check both explicit sign-ins unless AZD is configured to delegate authentication to Azure CLI. |
+| Browser or device-code login is blocked | Follow the tenant's Conditional Access policy and use an allowed interactive browser flow. This runbook delegates AZD authentication to Azure CLI; rerun `az login`, `az account set`, and `azd auth login --check-status --no-prompt`. |
+| `azd version` is older than expected after an update | Run `command -v azd` and `type -a azd`; put the current installation before the older installation in `PATH` and start a new shell. |
+| `az quota list` is empty or reports stale `Microsoft.Quota` registration | Use the provider-specific usage requests in stage 1 and wait for provider propagation. Registration state alone does not prove available capacity. |
 | Docker is unavailable from WSL | Run `docker context show` and `docker info`; confirm Docker Desktop uses Linux containers and enables WSL integration. |
 | Secure Webhook setup is forbidden | Confirm the Azure CLI identity has the Microsoft Entra `Application Administrator` role. |
 | Signed test returns `401` or `403` | Check Easy Auth audiences, the AzNS allowed application, and the app role assignment. |
@@ -1465,6 +1651,8 @@ restore the previous value through the explicit routing or rotation procedure.
 | Corrected webhook receives no calls | Wait 15 minutes after Azure Monitor exhausts webhook retries. |
 | `/readyz` returns `503` | Check required environment values and Container App logs. |
 | `/readyz` returns `200`, but delivery fails | Test Table access through a signed notification and inspect dependency telemetry. |
+| Application Insights Logs appears empty after a test | Query the linked Log Analytics workspace directly with the command in the operations section. |
+| Noninteractive `az containerapp exec` fails with a TTY or WebSocket error | Do not use administrative exec as proof of webhook delivery. Use probes, the signed Action Group test, Container App logs, Table state, and workspace telemetry. |
 | Day-2 discovery is ambiguous | Pass `--environment-name` and verify the deployment tags. |
 | A new day-2 alert stays disabled | Correct the signed Secure Webhook test failure, observe any retry cooldown, and rerun the idempotent add command. |
 
