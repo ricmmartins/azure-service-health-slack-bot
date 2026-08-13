@@ -58,7 +58,7 @@ resource keyVaultDnsZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLi
 }
 
 resource tableDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
-  name: 'privatelink.table.core.windows.net'
+  name: 'privatelink.table.${environment().suffixes.storage}'
   location: 'global'
   tags: tags
 }

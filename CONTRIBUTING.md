@@ -15,6 +15,7 @@ python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+python -m pip install -r requirements-ops.txt
 python -m pip install -r requirements-test.txt
 ```
 
@@ -31,7 +32,8 @@ Run the checks used by CI before opening a pull request.
 ```bash
 python -m pytest -q
 python -m flake8 .
-python -m pytest -q test/test_manage_alert_scopes.py test/test_configure_secure_webhook.py test/test_cli_subprocess.py
+python -m pytest -q test/test_manage_slack_token.py test/test_operation_lock.py test/test_manage_alert_scopes.py test/test_configure_secure_webhook.py test/test_cli_subprocess.py
+python -m pip_audit -r requirements.txt -r requirements-ops.txt
 az bicep build --file infra/main.bicep --stdout
 az bicep lint --file infra/main.bicep
 az bicep build --file infra/day2/service-health-alert-scope.bicep --stdout
@@ -50,6 +52,20 @@ deployment scripts must preserve least privilege and deployment safety. Do not
 broaden roles, expose protected resources, weaken webhook authentication, or
 introduce destructive deployment defaults without an explicit security and
 operational justification.
+
+Secret lifecycle changes must include canary leak tests covering command
+arguments, process environment, files, exceptions, standard output, and
+standard error. Production token values must never be added to AZD state or ARM
+deployment parameters. Changes to the versionless reference, temporary Key
+Vault access window, cloud operation lock, or emergency version pin require
+failure-path and rollback tests.
+
+Day-2 mutator changes must preserve the nonmutating what-if review gate and bind
+the execution fingerprint to target provenance, command parameters, managed
+scope state, Management Group descendants, expiry, and artifact hashes. Support
+documentation must use allowlisted diagnostics and exclude AZD state, dotenv
+files, journals, lock metadata, firewall snapshots, command transcripts, and
+secret-shaped material.
 
 For security vulnerabilities, do not open an issue or pull request. Follow the
 private reporting process in [SECURITY.md](SECURITY.md).

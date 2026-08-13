@@ -18,6 +18,7 @@ param secureWebhookClientId string
 param secureWebhookIdentifierUri string
 param tenantId string
 param infraSubnetId string
+param containerAppExists bool
 param tags object
 
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
@@ -62,6 +63,15 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: keyVaultName
 }
 
+resource existingContainerApp 'Microsoft.App/containerApps@2024-03-01' existing = if (containerAppExists) {
+  name: 'ca-${environmentName}'
+}
+
+var bootstrapImage = 'mcr.microsoft.com/azuredocs/containerapps-helloworld@sha256:e9b3e7c34664c7cffd7144864b0e4eec369bfde80068f9095dc63b37058bec48'
+var containerImage = containerAppExists
+  ? existingContainerApp!.properties.template.containers[0].image
+  : bootstrapImage
+
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: 'ca-${environmentName}'
   location: location
@@ -102,7 +112,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       containers: [
         {
           name: 'app'
-          image: 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+          image: containerImage
           resources: {
             cpu: json('0.5')
             memory: '1Gi'
