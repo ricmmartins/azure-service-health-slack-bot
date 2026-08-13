@@ -204,6 +204,10 @@ def test_lifecycle_checkpoints_match_status_json_schema_and_invariants():
     expected_keys = status_schema_keys()
     pre = documented_json_contract(readme, "pre-infrastructure")
     post = documented_json_contract(readme, "post-bootstrap")
+    stage1 = normalized_shell(markdown_section(
+        readme,
+        "Stage 1: pin the Azure and AZD deployment target",
+    ))
 
     assert set(pre) == expected_keys
     assert set(post) == expected_keys
@@ -228,6 +232,17 @@ def test_lifecycle_checkpoints_match_status_json_schema_and_invariants():
         "Bootstrapped": True,
     }
     assert "InfrastructureOnly" not in readme
+    assert (
+        'azd env set AZURE_TENANT_ID "$TARGET_TENANT_ID" '
+        '-e "$AZURE_ENV_NAME" --no-prompt'
+        in stage1
+    )
+    assert (
+        readme.index('azd env new "$AZURE_ENV_NAME"')
+        < readme.index("azd env set AZURE_TENANT_ID")
+        < readme.index("status-contract:pre-infrastructure")
+    )
+    assert "azd env get-value AZURE_TENANT_ID" in stage1
 
 
 def test_bootstrap_has_separate_target_and_environment_uniqueness_gate():
