@@ -379,12 +379,14 @@ token-free. Never use vault purge/name reuse as rollback.
 ## Provisioning and quota impact
 
 No new compute, VNet, private endpoint, registry, or Container Apps environment
-is introduced. One Standard LRS lock-only storage account is added because ARM
-management resources do not provide the required atomic mutex semantics.
-Other net-new objects are secret versions, diagnostic settings, a minimal alert
-set, and one availability test. Migration preflight must validate the storage
-account plus alert-rule and diagnostic-setting limits and existing policy
-checks. No Azure query or deployment occurs in planning.
+is introduced. One Standard LRS lock-only storage account is added beside the
+existing application Storage account because ARM management resources do not
+provide the required atomic mutex semantics. Other net-new objects are secret
+versions, diagnostic settings, a minimal alert set, and one availability test.
+Fresh-environment preflight must allow two Storage accounts in total; migration
+preflight must allow the one additional lock account and validate alert-rule,
+diagnostic-setting, and existing policy limits. No Azure query or deployment
+occurs in planning.
 
 ## Compatibility and release
 
@@ -562,7 +564,8 @@ proved no source-binding, validation-binding, or live deployment change. No
 Graph mutation, AZD environment write, ARM deployment, RBAC operation, Key
 Vault/Slack access, token exposure, or `azure-deploy` invocation occurred.
 
-For any future preview, continue to use this fail-closed sequence exactly:
+The following sequence is retained as historical evidence for that named
+validation environment only:
 
 ```bash
 test "$AZURE_ENV_NAME" = "service-health-mgmt-test" || {
@@ -575,3 +578,27 @@ if ! PYTHONPATH=. AZURE_ENV_NAME=service-health-mgmt-test SERVICE_HEALTH_READ_ON
 fi
 SERVICE_HEALTH_READ_ONLY_PREVIEW=true azd provision --preview --no-prompt --environment service-health-mgmt-test
 ```
+
+### Clean-room documentation acceptance for `79c890c8`
+
+The approved fresh-adopter validation identified three documentation-only
+defects without mutating Azure, Entra, Slack, AZD environments, or deployed
+resources:
+
+- the generic README Stage 5 preview command was incorrectly bound to the
+  historical validation environment above;
+- Stage 4 named the independent operations readiness inputs but did not provide
+  a complete create, verify, real-receiver test, freshness, retry, and ownership
+  procedure for a new adopter;
+- Stage 1 checked quota for one Storage account although the transitive central
+  Bicep graph creates the application Storage account and the isolated
+  operation-lock Storage account.
+
+The README now uses the adopter's explicit current environment, verifies that
+it is selected, and passes the same name to both the read-only hook and AZD
+preview. It documents an independent email receiver creation and observed
+synthetic delivery before writing the existing production readiness inputs,
+while preserving the bot Secure Webhook boundary and separate destructive
+approval for operations-receiver decommission. The capacity procedure now
+requires two Storage accounts. Documentation contract tests bind these commands
+and the documented Storage increment to the transitive Bicep resource graph.
