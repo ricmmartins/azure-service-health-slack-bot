@@ -226,7 +226,8 @@ For deployment:
 - Python 3.12 or 3.13 for local tooling; the production image is pinned to
   Python 3.13
 - current stable [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
-  with Bicep and the `log-analytics` extension
+  with its managed Bicep CLI at `0.46.1` or later and the `log-analytics`
+  extension
 - current stable [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
 - Docker with a Linux container engine
 - a dedicated Slack app with token rotation disabled, an `xoxb-` bot token, and
@@ -310,7 +311,7 @@ Prerequisites:
 
 - Bash on Linux, macOS, or Ubuntu on WSL
 - Python 3.12 or 3.13
-- current stable Azure CLI with Bicep
+- current stable Azure CLI with its managed Bicep CLI `0.46.1` or later
 - Azure CLI `log-analytics` extension
 - current stable Azure Developer CLI
 - Docker with a running Linux container engine
@@ -319,9 +320,56 @@ Prerequisites:
 Run:
 
 ```bash
+BICEP_MIN_VERSION="0.46.1"
+BICEP_TESTED_VERSION="0.46.1"
+
 python3 --version
 az version
-az bicep version
+BICEP_FROM_PATH="$(az config get bicep.use_binary_from_path \
+  --query value -o tsv 2>/dev/null)" || {
+  echo "Could not verify the Azure CLI Bicep binary source; stop." >&2
+  exit 1
+}
+test "$(printf '%s\n' "$BICEP_FROM_PATH" | \
+  tr '[:upper:]' '[:lower:]')" = "false" || {
+  echo "Azure CLI is configured to run bicep from PATH; stop." >&2
+  exit 1
+}
+BICEP_VERSION_OUTPUT="$(az bicep version)" || {
+  echo "Azure CLI-managed Bicep is not installed; stop at Stage 0." >&2
+  exit 1
+}
+BICEP_VERSION="$(printf '%s\n' "$BICEP_VERSION_OUTPUT" | \
+  sed -nE 's/^Bicep CLI version ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')"
+test -n "$BICEP_VERSION" || {
+  echo "Could not parse the Azure CLI-managed Bicep version; stop." >&2
+  exit 1
+}
+python3 -c \
+  'import sys; p=lambda value: tuple(map(int, value.split("."))); raise SystemExit(p(sys.argv[1]) < p(sys.argv[2]))' \
+  "$BICEP_VERSION" "$BICEP_MIN_VERSION" || {
+  echo "Bicep $BICEP_VERSION is below required $BICEP_MIN_VERSION; stop." >&2
+  exit 1
+}
+printf 'Azure CLI-managed Bicep %s satisfies minimum %s (tested: %s).\n' \
+  "$BICEP_VERSION" "$BICEP_MIN_VERSION" "$BICEP_TESTED_VERSION"
+az bicep build --file infra/main.bicep --stdout > /dev/null || {
+  echo "Central Bicep build failed; stop." >&2
+  exit 1
+}
+az bicep lint --file infra/main.bicep || {
+  echo "Central Bicep lint failed; stop." >&2
+  exit 1
+}
+az bicep build \
+  --file infra/day2/service-health-alert-scope.bicep --stdout > /dev/null || {
+  echo "Day-2 Bicep build failed; stop." >&2
+  exit 1
+}
+az bicep lint --file infra/day2/service-health-alert-scope.bicep || {
+  echo "Day-2 Bicep lint failed; stop." >&2
+  exit 1
+}
 az extension add --name log-analytics --upgrade --yes
 az extension show --name log-analytics \
   --query '{name:name,version:version}' -o table
@@ -337,6 +385,12 @@ Expected state:
 
 - Python reports `3.12.x` or `3.13.x`. The operator hook and CLI were verified
   with Ubuntu Python 3.12, while CI and the deployed container use Python 3.13.
+- `az bicep version` reports the Azure CLI-managed Bicep CLI at `0.46.1` or
+  later, `bicep.use_binary_from_path` is exactly `false`, and both repository
+  template graphs build and lint with that exact installed version. `0.46.1` is
+  the current repository-tested version. Passing the minimum check does not
+  claim that every later Bicep release is compatible; the four build/lint
+  commands are the compatibility gate for the installed version.
 - Azure CLI reports the installed `log-analytics` extension and its version.
 - `command -v azd` identifies the binary that the shell will execute. If
   `type -a azd` lists more than one installation, the first one must be the
@@ -353,12 +407,36 @@ version without a server version is not sufficient.
 Recovery:
 
 - Install or update the tool from the links in [Prerequisites](#prerequisites).
+- The repository templates use the Bicep null-forgiving operator in
+  `infra/modules/container-app.bicep`. Azure CLI-managed Bicep `0.41.2`
+  reproduced `BCP129` against the current graph; `0.46.1` built and linted both
+  graphs. Treat `0.46.1` as the supported minimum, not merely the last version
+  found on a workstation.
+- If the binary-source check fails or returns anything except `false`, run
+  `az config set bicep.use_binary_from_path=false`, recheck the setting, and
+  rerun the complete Stage 0 block. Do not run a Bicep command before this gate
+  passes.
+- If `az bicep version` fails, install the repository-tested version with
+  `az bicep install --version v0.46.1`, then rerun the complete Stage 0 block.
+- If `az bicep version` reports less than `0.46.1`, run the idempotent
+  `az bicep upgrade`, recheck `az bicep version`, and rerun all four build/lint
+  commands in the Stage 0 block. Stop if the upgrade or any recheck fails.
+- `az bicep` uses Azure CLI's self-contained Bicep installation. A standalone
+  `bicep --version`, a VS Code extension version, or another deployment host's
+  Bicep installation does not satisfy this checkpoint.
+- `az bicep install` and `az bicep upgrade` require network access. For an
+  offline or air-gapped workstation, follow Microsoft's
+  [air-gapped installation procedure](https://learn.microsoft.com/azure/azure-resource-manager/bicep/install#install-on-air-gapped-cloud)
+  to obtain the exact platform asset from the official `0.46.1` release, verify
+  its SHA-256 digest against the digest published with that release asset, and
+  place it in Azure CLI's `.azure/bin` location. Then rerun the complete Stage 0
+  block. If the reviewed binary or its published digest cannot be obtained,
+  remain stopped; do not substitute an unrelated standalone executable.
 - If an older AZD installation shadows the current one, put the current
   installation directory before the older directory in `PATH`, start a new
   shell, and repeat `command -v azd`, `type -a azd`, and `azd version`.
 - On WSL, enable the distribution in Docker Desktop under **WSL integration**,
   then rerun `docker info`.
-- If `az bicep version` fails, run `az bicep install` and repeat the check.
 - If the Log Analytics extension cannot be installed, correct Azure CLI
   extension policy or network access before deployment; do not rely on an
   interactive dynamic-install prompt during incident troubleshooting.
@@ -1103,9 +1181,34 @@ python scripts/manage_slack_token.py status \
   --environment-name "$AZURE_ENV_NAME" --json
 ```
 
-For a new environment, `InfrastructureOnly` is the expected pre-bootstrap
-state. For an existing legacy environment, stop ordinary preview/provision and
-follow [Migrate an existing deployment](#migrate-an-existing-deployment).
+For a new environment before the phase-one infrastructure provision, the
+command returns the following structured invariants. It does not emit a
+lifecycle-state string:
+
+<!-- status-contract:pre-infrastructure -->
+```json
+{
+  "Environment": "<selected AZD environment>",
+  "KeyVaultName": null,
+  "SecretVersion": "",
+  "LatestSecretVersion": "",
+  "PreviousSecretVersion": "",
+  "LegacyTokenPresent": false,
+  "MigrationMarkerSet": false,
+  "Bootstrapped": false
+}
+```
+
+`Environment` must name the selected environment. Before resources exist,
+`KeyVaultName` is `null`; all three version fields are empty; and all four
+boolean fields are `false`. For an existing legacy environment,
+`LegacyTokenPresent` is `true` and `Bootstrapped` is `false`; stop ordinary
+preview/provision and follow
+[Migrate an existing deployment](#migrate-an-existing-deployment).
+The status object is diagnostic and does not contain tenant, subscription, or
+resource-group identity, so it must never authorize a mutating lifecycle
+command. Stage 6 performs a separate target and uniqueness gate before
+bootstrap.
 
 ### Stage 5: reconcile Microsoft Entra and preview Azure changes
 
@@ -1265,6 +1368,81 @@ azd provision \
   --location "$AZURE_LOCATION" \
   --no-prompt
 
+EXPECTED_RESOURCE_GROUP="$(azd env get-value AZURE_RESOURCE_GROUP \
+  -e "$AZURE_ENV_NAME" --no-prompt)" || {
+  echo "Could not read the provisioned resource group; bootstrap is blocked." >&2
+  exit 1
+}
+if ! (
+  test "$(az account show --query tenantId -o tsv | \
+    tr '[:upper:]' '[:lower:]')" = \
+    "$(printf '%s\n' "$TARGET_TENANT_ID" | tr '[:upper:]' '[:lower:]')" &&
+  test "$(az account show --query id -o tsv | \
+    tr '[:upper:]' '[:lower:]')" = \
+    "$(printf '%s\n' "$TARGET_SUBSCRIPTION_ID" | \
+      tr '[:upper:]' '[:lower:]')" &&
+  test "$(azd env get-value AZURE_ENV_NAME \
+    -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_ENV_NAME" &&
+  test "$(azd env get-value AZURE_TENANT_ID \
+    -e "$AZURE_ENV_NAME" --no-prompt | \
+      tr '[:upper:]' '[:lower:]')" = \
+    "$(printf '%s\n' "$TARGET_TENANT_ID" | tr '[:upper:]' '[:lower:]')" &&
+  test "$(azd env get-value AZURE_SUBSCRIPTION_ID \
+    -e "$AZURE_ENV_NAME" --no-prompt | \
+      tr '[:upper:]' '[:lower:]')" = \
+    "$(printf '%s\n' "$TARGET_SUBSCRIPTION_ID" | \
+      tr '[:upper:]' '[:lower:]')" &&
+  test -n "$EXPECTED_RESOURCE_GROUP"
+); then
+  echo "Bootstrap target confirmation failed." >&2
+  exit 1
+fi
+
+TARGET_TENANT_ID_LC="$(printf '%s\n' "$TARGET_TENANT_ID" | \
+  tr '[:upper:]' '[:lower:]')"
+if ! ENABLED_SUBSCRIPTIONS="$(
+  az account list \
+    --query "[?state=='Enabled' && tenantId=='$TARGET_TENANT_ID_LC'].id" \
+    -o tsv
+)"; then
+  echo "Could not enumerate enabled subscriptions; bootstrap is blocked." >&2
+  exit 1
+fi
+MATCHED_CENTRAL_TARGETS=""
+for subscription_id in $ENABLED_SUBSCRIPTIONS; do
+  if ! groups_json="$(
+    az group list \
+      --subscription "$subscription_id" \
+      --tag workload=azure-service-health-slack-bot \
+      -o json
+  )"; then
+    echo "Could not inspect subscription $subscription_id; bootstrap is blocked." >&2
+    exit 1
+  fi
+  if ! matching_groups="$(
+    printf '%s' "$groups_json" | python3 -c \
+      'import json,sys; expected=sys.argv[1].casefold(); print("\n".join(item["name"] for item in json.load(sys.stdin) if str(item.get("tags", {}).get("azd-env-name", "")).casefold() == expected))' \
+      "$AZURE_ENV_NAME"
+  )"; then
+    echo "Could not validate environment tags; bootstrap is blocked." >&2
+    exit 1
+  fi
+  for resource_group in $matching_groups; do
+    MATCHED_CENTRAL_TARGETS="${MATCHED_CENTRAL_TARGETS}${subscription_id}|${resource_group}
+"
+  done
+done
+NORMALIZED_MATCHES="$(printf '%s' "$MATCHED_CENTRAL_TARGETS" | \
+  sed '/^$/d' | tr '[:upper:]' '[:lower:]')"
+EXPECTED_MATCH="$(printf '%s|%s' \
+  "$TARGET_SUBSCRIPTION_ID" "$EXPECTED_RESOURCE_GROUP" | \
+  tr '[:upper:]' '[:lower:]')"
+test "$NORMALIZED_MATCHES" = "$EXPECTED_MATCH" || {
+  echo "The environment name is absent or ambiguous across subscriptions; bootstrap is blocked." >&2
+  exit 1
+}
+echo "bootstrap-target-confirmed"
+
 python scripts/manage_slack_token.py bootstrap \
   --environment-name "$AZURE_ENV_NAME"
 ```
@@ -1272,7 +1450,12 @@ python scripts/manage_slack_token.py bootstrap \
 The first command creates only the network, private endpoints, Log Analytics,
 Application Insights, Key Vault, application Storage account/table, isolated
 operation-lock Storage account/container, registry, and managed identity. The
-bootstrap command then:
+read-only gate then proves the active account and selected AZD environment have
+the approved tenant, subscription, and resource group, and that no other
+enabled subscription in that tenant has a central resource group tagged with
+the same environment name, using the same case-insensitive comparison as the
+lifecycle CLI. Stop unless `bootstrap-target-confirmed` is the final line before
+the lifecycle CLI. The bootstrap command then:
 
 1. validates the selected environment, then collects the hidden `xoxb-`
    credential and explicit operator IPv4 before holding the distributed lock;
@@ -1366,10 +1549,36 @@ Checkpoint: do not deploy application code until all expected values are
 present and the machine checkpoint prints `azure-resources-ready`. Provisioning
 success alone is not enough if the Action Group contract is wrong.
 
-Run `manage_slack_token.py status` again. Acceptance requires no local legacy
-token, an enabled latest Key Vault version, `SERVICE_HEALTH_SECRET_VERSION`
-empty, the versionless Container Apps reference, and no temporary firewall,
-RBAC, lock, or journal residue.
+Run the structured status checkpoint again:
+
+```bash
+python scripts/manage_slack_token.py status \
+  --environment-name "$AZURE_ENV_NAME" --json
+```
+
+For the new environment after infrastructure provision and successful
+bootstrap, the JSON must have these invariants:
+
+<!-- status-contract:post-bootstrap -->
+```json
+{
+  "Environment": "<selected AZD environment>",
+  "KeyVaultName": "<deployed vault name>",
+  "SecretVersion": "",
+  "LatestSecretVersion": "<enabled version id>",
+  "PreviousSecretVersion": "",
+  "LegacyTokenPresent": false,
+  "MigrationMarkerSet": true,
+  "Bootstrapped": true
+}
+```
+
+`Environment`, `KeyVaultName`, and `LatestSecretVersion` must be nonempty;
+`SecretVersion` and `PreviousSecretVersion` are empty for a first bootstrap.
+The bootstrap command separately validates the enabled latest Key Vault
+version, versionless Container Apps reference, and absence of temporary
+firewall, RBAC, lock, or journal residue; those details are not additional
+fields in the status JSON.
 
 Recovery:
 

@@ -602,3 +602,33 @@ while preserving the bot Secure Webhook boundary and separate destructive
 approval for operations-receiver decommission. The capacity procedure now
 requires two Storage accounts. Documentation contract tests bind these commands
 and the documented Storage increment to the transitive Bicep resource graph.
+
+### Second clean-room documentation follow-up for `a8d1dc2`
+
+The second fresh-adopter run preserved all proof above and reproduced two more
+documentation-only defects without Azure, Entra, Slack, AZD, deployment,
+release, or cost mutation:
+
+- Stage 0 accepted any installed Azure CLI-managed Bicep. Version `0.41.2`
+  emitted `BCP129` for the current templates; an idempotent `az bicep upgrade`
+  installed `0.46.1`, after which both central and day-2 build/lint pairs
+  passed.
+- The pre-provision lifecycle checkpoint expected the literal
+  `InfrastructureOnly`, although `manage_slack_token.py status --json` returns
+  an eight-key structured object and correctly reports `Bootstrapped:false`
+  with empty version values and no vault before infrastructure exists.
+
+The README now fails closed below Azure CLI-managed Bicep `0.46.1`, distinguishes
+that installation from standalone tools, documents online and air-gapped
+recovery, and compiles/lints both graphs as the installed-version compatibility
+gate. The lifecycle checkpoints now state the exact pre-infrastructure and
+post-bootstrap status invariants. Because that status schema is intentionally
+token-free and target-light, a separate read-only pre-bootstrap gate binds the
+environment to the approved tenant, subscription, and resource group and
+rejects a same-named central group in another enabled subscription. Focused
+tests bind the version flow to the template syntax, the bootstrap target gate,
+and both documented JSON objects to the keys returned by the real `status()`
+implementation.
+
+A new fresh-clone clean-room rerun remains required to accept these corrections;
+this source-only follow-up does not replace or overwrite the earlier proof.
