@@ -1,6 +1,6 @@
 # Production hardening plan
 
-> **Status:** Validated
+> **Status:** Ready for Validation
 >
 > **Canonical implementation base:**
 > `fa8b5213296607088d56ecc42513e1402951967a`
@@ -632,3 +632,25 @@ implementation.
 
 A new fresh-clone clean-room rerun remains required to accept these corrections;
 this source-only follow-up does not replace or overwrite the earlier proof.
+
+### Third clean-room validation finding for `518c90e`
+
+The third Linux-native fresh-clone run passed post-merge CI, Stage 0, target
+binding, provider/capacity/policy checks, 347 tests, Flake8, dependency audit,
+Docker build, and AZD packaging. It then stopped at the documented
+pre-infrastructure lifecycle checkpoint before any preview or cloud mutation.
+
+`azd env new` persisted `AZURE_ENV_NAME`, `AZURE_SUBSCRIPTION_ID`, and
+`AZURE_LOCATION`, but not `AZURE_TENANT_ID`. The status command correctly
+failed closed with `The selected AZD environment is missing nonsecret target
+metadata.` because its fallback target validation requires the environment,
+subscription, and tenant before querying Azure. Stage 1 now writes the approved
+tenant ID explicitly, verifies it with the same case-insensitive target gate,
+and documents it in the recovery allowlist. A documentation contract test binds
+that write between environment creation and the first status checkpoint.
+
+The plan remains Ready for Validation. A corrected fresh-binding rerun must
+pass the pre-infrastructure status, read-only hook, exact AZD preview, and
+post-preview absence checks before this clean-room installation is accepted.
+No Azure, Entra, Slack, remote AZD state, deployed resource, or secret was
+mutated, and `azure-deploy` was not invoked.

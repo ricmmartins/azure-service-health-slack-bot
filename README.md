@@ -487,6 +487,9 @@ if ! azd env new "$AZURE_ENV_NAME" \
   echo "Could not create the isolated AZD environment." >&2
   exit 1
 fi
+azd env set AZURE_TENANT_ID "$TARGET_TENANT_ID" \
+  -e "$AZURE_ENV_NAME" \
+  --no-prompt
 azd env select "$AZURE_ENV_NAME" --no-prompt
 
 az account show \
@@ -512,7 +515,10 @@ Expected state:
 - AZD delegates authentication to the current Azure CLI identity and reports
   that identity as authenticated in the same tenant.
 - AZD lists `AZURE_ENV_NAME` as the selected environment.
-- The selected AZD environment contains the supplied subscription and location.
+- The selected AZD environment contains the supplied tenant, subscription, and
+  location. `azd env new` does not persist `AZURE_TENANT_ID`; the explicit
+  nonsecret `azd env set` is required before the pre-infrastructure lifecycle
+  status checkpoint.
 - The role table shows the required active Azure role combination. Microsoft
   Entra directory roles do not appear in this Azure RBAC table, so confirm the
   active `Application Administrator` role separately in the Entra admin center.
@@ -528,6 +534,9 @@ if ! (
     tr '[:upper:]' '[:lower:]')" = "${TARGET_SUBSCRIPTION_ID,,}" &&
   test "$(azd env get-value AZURE_ENV_NAME \
     -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_ENV_NAME" &&
+  test "$(azd env get-value AZURE_TENANT_ID \
+    -e "$AZURE_ENV_NAME" --no-prompt | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_TENANT_ID,,}" &&
   test "$(azd env get-value AZURE_SUBSCRIPTION_ID \
     -e "$AZURE_ENV_NAME" --no-prompt | \
     tr '[:upper:]' '[:lower:]')" = "${TARGET_SUBSCRIPTION_ID,,}" &&
@@ -667,8 +676,8 @@ Recovery:
   maintaining two interactive identities.
 - If the environment-name guard reports that the environment already exists,
   inspect only
-  its nonsecret `AZURE_SUBSCRIPTION_ID`, `AZURE_LOCATION`, and
-  `AZURE_RESOURCE_GROUP` values with separate `azd env get-value` commands.
+  its nonsecret `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_LOCATION`,
+  and `AZURE_RESOURCE_GROUP` values with separate `azd env get-value` commands.
   Do not run `azd env get-values`, because it can print the stored Slack token.
   If the existing environment has deployment outputs or belongs to another
   target, preserve it and choose a new environment name. Never repin a
