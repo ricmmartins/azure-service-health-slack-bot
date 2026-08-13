@@ -52,14 +52,14 @@ Group, and private DNS zones use the Azure `Global` location.
 | Action Group | Sends a Microsoft Entra authenticated Secure Webhook request using Common Alert Schema. |
 | Activity Log Alert | Matches `category = ServiceHealth` for one subscription. |
 | User-assigned managed identity | Pulls the image and accesses Key Vault and Table Storage without application credentials. |
-| Key Vault | Stores the Slack bot token and exposes it to Container Apps through a Key Vault secret reference. |
+| Key Vault | Stores the Slack bot token and exposes the latest enabled version to Container Apps through a versionless reference. |
 | Storage account and table | Stores incident state, Slack timestamps, ETags, and processing leases. |
 | Private endpoints and DNS zones | Provide private Key Vault and Table Storage data paths. |
 | Container Registry | Stores the application image. Registry admin access and anonymous pull are disabled. |
-| Application Insights and Log Analytics | Receive application telemetry and Container Apps logs. |
+| Application Insights and Log Analytics | Receive application telemetry, Container Apps logs, and Key Vault/Table diagnostics. |
 
-Application Insights can also create a platform-managed Failure Anomalies smart
-detection rule. That rule is not part of the Service Health delivery path.
+An independent operations Action Group receives webhook, dependency,
+availability, and replica alerts. It must not depend only on this Slack bot.
 
 ## HTTP routes
 
@@ -187,6 +187,12 @@ a private endpoint and private DNS zone linked to the Container Apps VNet. The
 Container Registry and Application Insights ingestion endpoints remain public
 Azure endpoints.
 
+When bootstrap runs outside the VNet, the secret lifecycle CLI opens only a
+default-deny operator IPv4 `/32`, grants a temporary vault-scoped secret role,
+writes through the Key Vault data plane, and restores both controls before
+workload provisioning. An approved private operator path skips this temporary
+window.
+
 The Bicep private DNS suffixes and the documented Service Health Secure Webhook
 flow target Azure public cloud. Do not assume this template works unchanged in
 a sovereign cloud.
@@ -199,15 +205,13 @@ a sovereign cloud.
 - Slack does not provide a downstream idempotency key for these message calls,
   so the service cannot guarantee exactly-once delivery across Slack and Table
   Storage.
-- The deployment pins a versioned Key Vault secret URI. Rotate the token through
-  AZD and run provisioning so the Container App reference moves to the new
-  secret version.
-- The bootstrap workflow stores `SLACK_BOT_TOKEN` as plaintext in
-  `.azure/<environment>/.env` because the target Key Vault does not exist before
-  the first provision. The current template requires that local value for every
-  later provision and can overwrite a direct Key Vault rotation. This plaintext
-  dependency is a production deployment blocker until the infrastructure
-  supports an external vault or a two-phase flow.
+- Normal deployments use a versionless Key Vault secret URI. The secret
+  lifecycle CLI validates a replacement before writing a new version and can
+  temporarily pin a captured prior version for emergency rollback.
+- New environments use an infrastructure-only provision followed by one hidden
+  Key Vault data-plane transfer. The token is removed from local AZD state
+  before workload provisioning; later preview, provision, routing, and rollback
+  operations are token-free.
 - The day-2 command implements a Management Group as one managed subscription
   alert path per accessible descendant. It does not deploy one native
   Management Group Activity Log Alert.
@@ -691,246 +695,82 @@ Recovery:
 - If the placeholder scan stops the command before the final line, replace the
   remaining example value.
 
-### Stage 4: load inputs into the pinned AZD environment
+### Stage 4: load nonsecret inputs
 
 Prerequisites:
 
 - the shell variables from stage 1 are still set;
 - the terminal is in the repository root;
 - the validated routing file from stage 3 exists;
-- the Slack bot token is available from the approved password manager.
+- `requirements-ops.txt` is installed in the active virtual environment.
 
-Reselect and verify the deployment target, then load the two deployment inputs:
+Load only routing and operational settings into AZD:
 
 ```bash
-az account set --subscription "$TARGET_SUBSCRIPTION_ID"
-azd env select "$AZURE_ENV_NAME" --no-prompt
-if ! (
-  test "$(az account show --query tenantId -o tsv)" = "$TARGET_TENANT_ID" &&
-  test "$(az account show --query id -o tsv)" = "$TARGET_SUBSCRIPTION_ID" &&
-  test "$(azd env get-value AZURE_SUBSCRIPTION_ID \
-    -e "$AZURE_ENV_NAME" --no-prompt)" = \
-    "$TARGET_SUBSCRIPTION_ID" &&
-  test "$(azd env get-value AZURE_LOCATION \
-    -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_LOCATION"
-); then
-  echo "Azure CLI and AZD do not target the same deployment." >&2
-  exit 1
-fi
-echo "deployment-target-reconfirmed"
-
-AZD_ENV_FILE=".azure/$AZURE_ENV_NAME/.env"
-
-check_wsl_secret_path() {
-  local target="$1"
-  local mount_info
-  if ! mount_info="$(
-    findmnt --target "$target" --raw --noheadings \
-      --output FSTYPE,SOURCE,FS-OPTIONS
-  )"; then
-    echo "Could not resolve mount metadata for $target." >&2
-    return 1
-  fi
-  if [[ "$mount_info" == drvfs* ]] ||
-     [[ "$mount_info" == 9p* && "$mount_info" == *aname=drvfs* ]] ||
-     [[ "$mount_info" == virtiofs* ]]; then
-    echo "$target is on DrvFS; use the WSL Linux file system." >&2
-    return 1
-  fi
-}
-
-if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
-  command -v findmnt >/dev/null ||
-    { echo "findmnt is required to verify the WSL secret path." >&2; exit 1; }
-  test -f "$AZD_ENV_FILE" ||
-    { echo "The selected AZD environment file does not exist." >&2; exit 1; }
-  check_wsl_secret_path "$PWD" || exit 1
-  check_wsl_secret_path "$AZD_ENV_FILE" || exit 1
-fi
-echo "local-secret-path-confirmed"
-
-(
-SECRET_STAGE_ARMED=0
-remove_local_slack_token() {
-  python - "$AZD_ENV_FILE" <<'PY'
-import fcntl
-import os
-from pathlib import Path
-import sys
-import tempfile
-
-path = Path(sys.argv[1])
-lock_fd = os.open(f"{path}.lock", os.O_CREAT | os.O_RDWR, 0o600)
-with os.fdopen(lock_fd, "r+") as lock_stream:
-    fcntl.flock(lock_stream, fcntl.LOCK_EX)
-    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    fd, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=".env.cleanup.", text=True
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
-            stream.writelines(
-                line for line in lines if not line.startswith("SLACK_BOT_TOKEN=")
-            )
-        os.chmod(temporary_name, 0o600)
-        os.replace(temporary_name, path)
-    except BaseException:
-        try:
-            os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
-        raise
-PY
-}
-cleanup_secret_stage() {
-  local status=$?
-  unset SLACK_BOT_TOKEN ROUTES_B64
-  if [[ "$SECRET_STAGE_ARMED" == 1 ]]; then
-    if ! remove_local_slack_token; then
-      echo "Could not remove the stored Slack token after stage failure." >&2
-      status=1
-    fi
-  fi
-  return "$status"
-}
-trap cleanup_secret_stage EXIT
-trap 'exit 130' HUP INT TERM
-
-set +x
-read -rsp "Slack bot token (input hidden): " SLACK_BOT_TOKEN; printf '\n'
-while [[ "$SLACK_BOT_TOKEN" != xoxb-* ]]; do
-  unset SLACK_BOT_TOKEN
-  echo "Expected an xoxb token; try again." >&2
-  read -rsp "Slack bot token (input hidden): " SLACK_BOT_TOKEN; printf '\n'
-done
-SECRET_STAGE_ARMED=1
-if ! azd env set SLACK_BOT_TOKEN "$SLACK_BOT_TOKEN" \
-  -e "$AZURE_ENV_NAME" --no-prompt; then
-  unset SLACK_BOT_TOKEN
-  echo "Could not store the Slack token in the selected AZD environment." >&2
-  exit 1
-fi
-unset SLACK_BOT_TOKEN
-
-if ! ROUTES_B64="$(
+ROUTES_B64="$(
   python -c 'import base64, pathlib; print(base64.b64encode(pathlib.Path("config/service_health_routes.json").read_bytes()).decode())'
-)"; then
-  echo "Could not encode the routing file." >&2
-  exit 1
-fi
-if ! azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64" \
-  -e "$AZURE_ENV_NAME" --no-prompt; then
-  unset ROUTES_B64
-  echo "Could not store routing in the selected AZD environment." >&2
-  exit 1
-fi
+)"
+azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64" \
+  -e "$AZURE_ENV_NAME" --no-prompt
 unset ROUTES_B64
-if ! chmod 600 "$AZD_ENV_FILE"; then
-  echo "Could not restrict the local AZD environment file." >&2
-  exit 1
-fi
-if ! ENV_FILE_MODE="$(
-  python -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' \
-    "$AZD_ENV_FILE"
-)"; then
-  echo "Could not verify the local AZD environment file mode." >&2
-  exit 1
-fi
-if [[ "$ENV_FILE_MODE" != "600" ]]; then
-  echo "The local AZD environment file mode is not 600." >&2
-  exit 1
-fi
-unset ENV_FILE_MODE
-if ! (
-  test "$(azd env get-value AZURE_ENV_NAME \
-    -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_ENV_NAME" &&
-  test "$(azd env get-value AZURE_SUBSCRIPTION_ID \
-    -e "$AZURE_ENV_NAME" --no-prompt)" = \
-    "$TARGET_SUBSCRIPTION_ID" &&
-  test "$(azd env get-value AZURE_LOCATION \
-    -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_LOCATION" &&
-  grep -q '^SLACK_BOT_TOKEN=' "$AZD_ENV_FILE" &&
-  grep -q '^SERVICE_HEALTH_ROUTES_JSON_B64=' "$AZD_ENV_FILE"
-); then
-  echo "The secret-stage checkpoint failed." >&2
-  exit 1
-fi
-trap '' HUP INT TERM
-if ! printf '%s\n' "azd-environment-ready"; then
-  exit 1
-fi
-SECRET_STAGE_ARMED=0
-trap - EXIT
-)
+
+azd env set SERVICE_HEALTH_DEPLOY_WORKLOAD false \
+  -e "$AZURE_ENV_NAME" --no-prompt
+azd env set SERVICE_HEALTH_BASELINE_ALERT_ENABLED false \
+  -e "$AZURE_ENV_NAME" --no-prompt
+azd env set SERVICE_HEALTH_SECRET_VERSION "" \
+  -e "$AZURE_ENV_NAME" --no-prompt
+azd env set SERVICE_HEALTH_OPERATIONS_ACTION_GROUP_ID \
+  "<independent-operations-action-group-resource-id>" \
+  -e "$AZURE_ENV_NAME" --no-prompt
 ```
 
-Expected state:
+For production, set `SERVICE_HEALTH_ENVIRONMENT_CLASS=production` and configure
+all readiness metadata before bootstrap can enable the workload:
 
-- `.azure/<environment-name>/.env` exists.
-- the command prints `deployment-target-reconfirmed`,
-  `local-secret-path-confirmed`, and `azd-environment-ready`;
-- the local environment contains the two required keys without printing their
-  values.
+```bash
+azd env set SERVICE_HEALTH_ENVIRONMENT_CLASS production -e "$AZURE_ENV_NAME" --no-prompt
+azd env set SERVICE_HEALTH_OPERATIONS_PRIMARY_OWNER "<primary-owner>" -e "$AZURE_ENV_NAME" --no-prompt
+azd env set SERVICE_HEALTH_OPERATIONS_BACKUP_OWNER "<different-backup-owner>" -e "$AZURE_ENV_NAME" --no-prompt
+azd env set SERVICE_HEALTH_OPERATIONS_ON_CALL_DESTINATION "<independent-on-call-destination>" -e "$AZURE_ENV_NAME" --no-prompt
+azd env set SERVICE_HEALTH_OPERATIONS_RUNBOOK_URI "https://<approved-runbook>" -e "$AZURE_ENV_NAME" --no-prompt
+azd env set SERVICE_HEALTH_OPERATIONS_RECEIVER_TEST_EVIDENCE \
+  '{"status":"Succeeded","testedAt":"<UTC-ISO-8601>","actionGroupId":"<independent-operations-action-group-resource-id>"}' \
+  -e "$AZURE_ENV_NAME" --no-prompt
+```
 
-Proceed only when the final line is `azd-environment-ready`.
+Record receiver evidence only after a real test reaches the independent
+destination. Evidence is rejected when it targets another Action Group, is
+future-dated, or is older than 90 days. These readiness values are operational
+gates, not globally required Bicep parameters, so existing nonproduction
+environments remain backward compatible.
 
-The secret stage runs in a subshell, so its traps do not replace traps in the
-operator's shell. Shell tracing is disabled before token input and remains
-disabled in that subshell. After the token storage attempt begins, an exit or
-interruption before the final line removes the `SLACK_BOT_TOKEN` entry from the
-local environment without reading it back through AZD or printing it. Cleanup
-holds AZD's `.env.lock` file across the atomic rewrite. The cleanup also applies
-when token or routing storage, file-mode enforcement, or the final checkpoint
-fails. Do not run another AZD command for this environment concurrently with
-stage 4.
-
-Hidden input prevents terminal echo, and the command history contains only the
-variable name. The expanded token is still passed to the local `azd` process
-and stored as plaintext in the selected AZD environment file. This bootstrap
-design does not meet Microsoft's preferred AZD secret-reference pattern because
-the target vault is created by the same provision. Restrict access to the
-workstation and `.azure/<environment>/.env`, never commit or copy the
-environment, and do not run `azd env get-values` in logs.
-
-Paste into the documented hidden prompt when working across Windows and WSL.
-Do not automate the bridge with a host-side `WriteLine` call: it can append
-carriage return plus line feed, leaving a carriage return in the value consumed
-by Bash. If automation is unavoidable, transmit the token bytes followed by
-line feed only and validate that no control character was stored without
-printing the value.
-
-On a later failure, cleanup filters only the exact `SLACK_BOT_TOKEN=` line. It
-does not retrieve or print the stored value, and it preserves every other
-environment entry while holding the same cross-process lock used by AZD.
+Do not set `SLACK_BOT_TOKEN` with `azd env set`, a process environment variable,
+or a template parameter. `scripts/manage_slack_token.py` is the only supported
+production secret-transfer path. It reads new credentials through a hidden
+prompt and talks directly to the Key Vault data plane.
 
 The routing document is base64 encoded because AZD substitutes parameter values
 into `infra/main.parameters.json` before JSON parsing. Bicep decodes the value
 before setting the container's plain JSON
 `SERVICE_HEALTH_ROUTES_JSON` environment variable.
 
-Recovery:
+Checkpoint:
 
-- Stop before entering the token if `deployment-target-reconfirmed` does not
-  print. Repeat the stage 1 account and environment recovery.
-- On WSL, stop if `local-secret-path-confirmed` does not print. The check reads
-  the mount type and options for both the repository and selected AZD
-  environment file, so it also detects DrvFS when its automount root is not
-  `/mnt`.
-  Clone a clean copy under `~/src` and repeat from stage 1.
-- If a command fails after the token is stored, confirm only that
-  `grep -q '^SLACK_BOT_TOKEN=' ".azure/$AZURE_ENV_NAME/.env"` returns nonzero.
-  Do not display the file or value. Fix the reported failure and repeat stage 4.
-- Repeat the hidden token input if the wrong token was stored.
-- If the wrong environment name was used and no hook or provisioning command
-  has run, create a new environment with the correct name and remove the unused
-  local environment with
-  `azd env remove "<wrong-environment-name>" -e "<wrong-environment-name>" --force --no-prompt`.
+```bash
+python scripts/manage_slack_token.py status \
+  --environment-name "$AZURE_ENV_NAME" --json
+```
+
+For a new environment, `InfrastructureOnly` is the expected pre-bootstrap
+state. For an existing legacy environment, stop ordinary preview/provision and
+follow [Migrate an existing deployment](#migrate-an-existing-deployment).
 
 ### Stage 5: reconcile Microsoft Entra and preview Azure changes
 
 Prerequisites:
 
-- the stage 4 checkpoint passed;
+- the stage 4 nonsecret-input checkpoint passed;
 - `Application Administrator` is active for the Azure CLI user;
 - the operator can create enterprise applications in the target tenant.
 
@@ -987,21 +827,39 @@ echo "entra-hook-ready"
 Preview the Azure Resource Manager changes:
 
 ```bash
-azd provision --preview \
-  -e "$AZURE_ENV_NAME" \
-  --subscription "$TARGET_SUBSCRIPTION_ID" \
-  --location "$AZURE_LOCATION" \
-  --no-prompt
+test "$AZURE_ENV_NAME" = "service-health-mgmt-test" || {
+  echo "This reviewed command is only for service-health-mgmt-test." >&2
+  exit 1
+}
+if ! SERVICE_HEALTH_READ_ONLY_PREVIEW=true azd hooks run preprovision --no-prompt --environment service-health-mgmt-test; then
+  echo "Read-only hook validation failed; preview is blocked." >&2
+  exit 1
+fi
+SERVICE_HEALTH_READ_ONLY_PREVIEW=true azd provision --preview --no-prompt --environment service-health-mgmt-test
 ```
 
-Expected state: preview exits with status `0`, shows planned creates for the
-central resources, and shows no unexpected deletes or changes outside the
-selected subscription.
+This literal command is the approved validation path for the designated
+`service-health-mgmt-test` migration target; do not reuse it to preview one
+environment before provisioning another.
+
+The explicit hook command guarantees the validation runs even on an AZD version
+that does not invoke lifecycle hooks for preview. The same opt-in on the exact
+preview command guarantees any preview-triggered hook invocation remains
+nonmutating. The hook reads only the exact
+`.azure/service-health-mgmt-test/.env` file, refuses any Slack-token entry,
+validates the persisted nonsecret deployment and Secure Webhook identifiers,
+and permits only `az account show` to confirm the exact tenant and subscription.
+It exits before AZD environment writes, Microsoft Graph changes, ARM/RBAC,
+Key Vault, or Slack access. Any value other than the explicit `true` opt-in is
+rejected; omitting the variable preserves normal provision behavior.
+
+Expected state: the nonmutating hook validation and IaC preview exit with status
+`0`, show planned creates for the central resources, and show no unexpected
+deletes or changes outside the selected subscription.
 
 The named AZD environment was created with an explicit subscription and
-location, and preview repeats both values. The first `--no-prompt` preview
-therefore does not depend on cached AZD defaults or an earlier interactive
-selection.
+location. The hook proves those persisted local values match the active
+read-only account result before the preview continues.
 
 `azd up` runs the hook, provisioning, packaging, and deployment lifecycle. A
 verified deployment used it successfully after the explicit hook and reviewed
@@ -1010,14 +868,15 @@ stages so their checkpoints remain independent; do not use `azd up` to bypass
 stages 4 and 5.
 
 Checkpoint: proceed only after `entra-mutation-target-confirmed` and
-`entra-hook-ready` appear and a human has reviewed the complete preview. Save
+`entra-hook-ready` appear and a human has reviewed the complete preview. The
+preview for a new environment must show infrastructure only: no Container App,
+Action Group, or baseline alert. Save
 the preview in an approved operational record if your change process requires
 it, but redact local paths and IDs before sharing.
 
 Microsoft documents the preview flag and independent hook execution. It does
-not document a guarantee about whether preview invokes lifecycle hooks. The
-explicit hook command is therefore a project requirement, not a general AZD
-platform claim.
+not document a guarantee about whether preview invokes lifecycle hooks, so the
+explicit nonmutating hook command immediately before preview is mandatory.
 
 Recovery:
 
@@ -1030,9 +889,10 @@ Recovery:
 - If preview shows a delete or the wrong subscription, stop, correct the AZD
   environment binding, and rerun preview.
 
-### Stage 6: provision the Azure resources
+### Stage 6: provision infrastructure and transfer the Slack token
 
-Prerequisites: the stage 5 preview was reviewed and approved.
+Prerequisites: the infrastructure-only stage 5 preview was reviewed and
+approved.
 
 Run:
 
@@ -1042,14 +902,40 @@ azd provision \
   --subscription "$TARGET_SUBSCRIPTION_ID" \
   --location "$AZURE_LOCATION" \
   --no-prompt
+
+python scripts/manage_slack_token.py bootstrap \
+  --environment-name "$AZURE_ENV_NAME"
 ```
 
-Expected state: AZD reports successful provisioning and writes nonsecret Bicep
-outputs to the selected environment. The resource group contains the network,
-private endpoints, Log Analytics, Application Insights, Key Vault, token
-secret, Storage account and table, Container Registry, managed identity,
-Container Apps environment and app, Action Group, and baseline Activity Log
-Alert.
+The first command creates only the network, private endpoints, Log Analytics,
+Application Insights, Key Vault, Storage account/table, registry, and managed
+identity. The bootstrap command then:
+
+1. validates the selected environment, then collects the hidden `xoxb-`
+   credential and explicit operator IPv4 before holding the distributed lock;
+2. acquires the local and central operation locks;
+3. validates the credential with Slack `auth.test`;
+4. writes it through the Key Vault data plane and verifies nonsecret metadata;
+5. restores temporary vault network/RBAC access exactly;
+6. proves no local AZD token remains;
+7. clears the emergency version pin and performs a token-free workload
+   provision using the versionless secret URI.
+
+AZD's `SERVICE_APP_RESOURCE_EXISTS` signal makes that provision an image-safe
+upsert: an existing Container App keeps its currently deployed image, while a
+new app starts from a digest-pinned bootstrap image until `azd deploy` publishes
+the application image. This prevents migration, rotation, rollback, and routing
+provisions from replacing the active workload with a mutable placeholder.
+
+If the operator is outside approved private network access, supply the exact
+operator IPv4 `/32` when prompted by the hardened command. Never use an
+automatically discovered third-party address. Any failure to restore Key Vault
+networking or temporary RBAC blocks workload provisioning.
+
+Expected state: the resource group additionally contains the Container Apps
+environment/app, Action Group, disabled baseline Activity Log Alert, monitoring
+diagnostics, availability test, and actionable alerts when an independent
+operations Action Group ID was supplied.
 
 Capture outputs and inspect the central resources:
 
@@ -1117,23 +1003,10 @@ Checkpoint: do not deploy application code until all expected values are
 present and the machine checkpoint prints `azure-resources-ready`. Provisioning
 success alone is not enough if the Action Group contract is wrong.
 
-Keep `SLACK_BOT_TOKEN` in the protected local AZD environment after provision.
-The current Bicep contract requires it on every `azd provision` and writes the
-supplied value as a new versioned Key Vault secret. Removing the local value
-would make the next provision incomplete, while setting it to an empty string
-could create an empty secret version.
-
-Do not rotate `slack-bot-token` directly in Key Vault. A later provision can
-overwrite that rotation with the token retained by AZD. Use the
-[token rotation procedure](#rotate-the-slack-token), which updates the selected
-AZD environment and provisions that same environment.
-
-Keep `.azure/$AZURE_ENV_NAME/.env` at mode `600`. Do not copy it, commit it,
-include it in support bundles, or run an AZD command that prints the token.
-Removing plaintext persistence requires an infrastructure design change, such
-as a preexisting external vault or a two-phase deployment. Complete that
-hardening before production use; documentation alone cannot remove the current
-bootstrap dependency.
+Run `manage_slack_token.py status` again. Acceptance requires no local legacy
+token, an enabled latest Key Vault version, `SERVICE_HEALTH_SECRET_VERSION`
+empty, the versionless Container Apps reference, and no temporary firewall,
+RBAC, lock, or journal residue.
 
 Recovery:
 
@@ -1143,6 +1016,9 @@ Recovery:
   and allow for propagation before retrying.
 - For a regional capacity or policy error, do not change regions without a new
   preview. Update `AZURE_LOCATION`, rerun preview, and obtain approval again.
+- If bootstrap fails after the secret write, do not restore plaintext. Correct
+  the reported nonsecret cleanup state and rerun the idempotent token-free
+  recovery path.
 
 ### Stage 7: build and deploy the application
 
@@ -1349,7 +1225,11 @@ python scripts/manage_alert_scopes.py list \
   --environment-name "$AZURE_ENV_NAME"
 python scripts/manage_alert_scopes.py add-subscription \
   --subscription-id "00000000-0000-0000-0000-000000000000" \
-  --environment-name "$AZURE_ENV_NAME"
+  --environment-name "$AZURE_ENV_NAME" --what-if --json
+python scripts/manage_alert_scopes.py add-subscription \
+  --subscription-id "00000000-0000-0000-0000-000000000000" \
+  --environment-name "$AZURE_ENV_NAME" \
+  --execution-fingerprint "<fingerprint-from-reviewed-what-if>"
 ```
 
 Management Group commands expand accessible descendants into managed
@@ -1358,24 +1238,34 @@ subscription alert paths:
 ```bash
 python scripts/manage_alert_scopes.py add-management-group \
   --management-group-id "platform" \
-  --environment-name "$AZURE_ENV_NAME"
+  --environment-name "$AZURE_ENV_NAME" --what-if --json
+python scripts/manage_alert_scopes.py add-management-group \
+  --management-group-id "platform" \
+  --environment-name "$AZURE_ENV_NAME" \
+  --execution-fingerprint "<fingerprint-from-reviewed-what-if>"
 python scripts/manage_alert_scopes.py migrate-to-management-group \
   --management-group-id "platform" \
   --environment-name "$AZURE_ENV_NAME" \
-  --what-if
+  --what-if --json
 python scripts/manage_alert_scopes.py migrate-to-management-group \
   --management-group-id "platform" \
-  --environment-name "$AZURE_ENV_NAME"
+  --environment-name "$AZURE_ENV_NAME" \
+  --execution-fingerprint "<fingerprint-from-reviewed-what-if>"
 ```
 
 Always pass `--environment-name`; do not rely on discovery when more than one
 deployment can exist. Use `--json` for machine-readable output.
 
-All scope commands support `--what-if` for nonmutating planning. Remove and
-migration operations additionally require interactive confirmation when they
-execute. `--force` supplies that confirmation only for preapproved
-noninteractive automation; it does not bypass tenant, permission, coverage,
-ownership, or signed-test checks.
+All mutating scope commands require the exact `ExecutionFingerprint` from a
+reviewed `--what-if --json` result. The fingerprint expires after 15 minutes and
+binds the tenant, subscription, environment, command parameters, Management
+Group descendants, current managed scopes, and the manager/Bicep artifact
+hashes. The command rechecks those bindings before every serial deploy, enable,
+or delete and stops on drift. `--what-if` never acquires the lock or writes a
+journal. Remove and migration operations additionally require interactive
+confirmation when they execute. `--force` supplies that confirmation only for
+preapproved noninteractive automation; it does not bypass review, tenant,
+permission, coverage, ownership, or signed-test checks.
 
 The command checks the exact Azure operations it needs before mutation. A
 typical assignment is `Contributor` on each target subscription plus
@@ -1512,9 +1402,9 @@ azd provision \
   --no-prompt
 ```
 
-Stop unless `routing-target-confirmed` prints. Reprovisioning uses the current
-Slack token retained in this AZD environment. Review preview before running the
-second command.
+Stop unless `routing-target-confirmed` prints. Routing preview and provision are
+token-free. Review preview before running the second command, and reject any
+change to the Key Vault secret value, a version pin, or the deployed image.
 
 ### Rotate the Slack token
 
@@ -1522,73 +1412,90 @@ This procedure replaces a long-lived static `xoxb-` credential. It is not
 Slack's expiring token rotation mode, which this runtime does not support. Keep
 that Slack setting disabled.
 
-Do not replace the token directly in Key Vault. Confirm the complete target,
-update the selected AZD environment intentionally, then preview and provision
-that same environment:
+Confirm the complete target, then use the lifecycle CLI. It receives the token
+only through a hidden prompt, validates the expected Slack identity, creates a
+Key Vault version through the data plane, clears the emergency pin, performs a
+token-free provision/restart, and runs the configured acceptance checks:
 
 ```bash
 export AZURE_ENV_NAME="<environment-name>"
-TARGET_TENANT_ID="$(
-  azd env get-value AZURE_TENANT_ID \
-    -e "$AZURE_ENV_NAME" --no-prompt
-)"
-TARGET_SUBSCRIPTION_ID="$(
-  azd env get-value AZURE_SUBSCRIPTION_ID \
-    -e "$AZURE_ENV_NAME" --no-prompt
-)"
-AZURE_LOCATION="$(
-  azd env get-value AZURE_LOCATION \
-    -e "$AZURE_ENV_NAME" --no-prompt
-)"
-az account set --subscription "$TARGET_SUBSCRIPTION_ID"
-if ! (
-  test "$(az account show --query tenantId -o tsv)" = "$TARGET_TENANT_ID" &&
-  test "$(az account show --query id -o tsv)" = "$TARGET_SUBSCRIPTION_ID" &&
-  test "$(azd env get-value AZURE_ENV_NAME \
-    -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_ENV_NAME" &&
-  test -n "$AZURE_LOCATION"
-); then
-  echo "Token rotation target confirmation failed." >&2
-  exit 1
-fi
-echo "token-rotation-target-confirmed"
-
-read -rsp "Replacement Slack bot token (input hidden): " SLACK_BOT_TOKEN
-printf '\n'
-if [[ "$SLACK_BOT_TOKEN" != xoxb-* ]]; then
-  unset SLACK_BOT_TOKEN
-  echo "Expected a nonempty xoxb token; stopping." >&2
-  exit 1
-fi
-if ! azd env set SLACK_BOT_TOKEN "$SLACK_BOT_TOKEN" \
-  -e "$AZURE_ENV_NAME" --no-prompt; then
-  unset SLACK_BOT_TOKEN
-  echo "Could not store the replacement token." >&2
-  exit 1
-fi
-unset SLACK_BOT_TOKEN
-
-azd provision --preview \
-  -e "$AZURE_ENV_NAME" \
-  --subscription "$TARGET_SUBSCRIPTION_ID" \
-  --location "$AZURE_LOCATION" \
-  --no-prompt
+python scripts/manage_slack_token.py status \
+  --environment-name "$AZURE_ENV_NAME" --json
+python scripts/manage_slack_token.py rotate \
+  --environment-name "$AZURE_ENV_NAME"
 ```
 
-Proceed only when preview succeeds and contains the intended secret-reference
-change. Provision the same explicit environment:
+Do not revoke the prior Slack credential until the primary and backup owners
+confirm `/healthz`, `/readyz`, unauthenticated `401`, signed Service Health
+delivery, intended Slack message, Table dependency success, and independent
+monitoring. On failure, the CLI records the previous version for rollback; do
+not paste either credential into AZD.
+
+Roll back the secret reference with the recorded nonsecret version:
 
 ```bash
-azd provision \
-  -e "$AZURE_ENV_NAME" \
-  --subscription "$TARGET_SUBSCRIPTION_ID" \
-  --location "$AZURE_LOCATION" \
-  --no-prompt
+python scripts/manage_slack_token.py rollback \
+  --environment-name "$AZURE_ENV_NAME"
 ```
 
-Stop unless `token-rotation-target-confirmed` prints. Bicep creates a Key Vault
-secret version and updates the versioned Container Apps secret reference.
-Confirm the active revision and a successful signed test.
+This sets only `SERVICE_HEALTH_SECRET_VERSION`, performs a token-free provision,
+and enters the deliberate `ROLLBACK_PINNED` state. After repair and complete
+acceptance, rotate again to return to the versionless reference.
+
+### Migrate an existing deployment
+
+Existing environments that retain `SLACK_BOT_TOKEN` are blocked from ordinary
+preview and provision. For `service-health-mgmt-test`, first capture the current
+revision, versioned secret URI, Secure Webhook receiver, baseline/day-2 alert
+states, vault network/RBAC state, and independent operations receiver. Review a
+what-if showing no deletions, replacements, or unintended alert changes.
+
+Freeze AZD, routing, token, and day-2 mutations, then run:
+
+```bash
+python scripts/manage_slack_token.py status \
+  --environment-name service-health-mgmt-test --json
+python scripts/manage_slack_token.py migrate \
+  --environment-name service-health-mgmt-test
+```
+
+Migration reads the exact local legacy entry directly under a private file lock;
+it never asks AZD or a child process to return the value. The active workload
+remains pinned while the same credential is staged. Only after secret metadata,
+temporary-access cleanup, and atomic local removal succeed does it perform the
+token-free versionless provision.
+
+Acceptance requires the original alert and Secure Webhook lifecycle to remain
+intact, one healthy active revision, successful signed Slack/Table delivery, an
+empty emergency pin, no local token line, and no temporary RBAC/firewall/lock/
+journal residue. A failure after local cleanup must be retried from Key Vault;
+never restore plaintext.
+
+### Recover an abandoned operation lock
+
+Locks never expire into automatic deletion. The central mutex is an atomically
+created private blob with a renewable 60-second Azure Blob lease in a dedicated
+lock-only storage account. The account contains no application/customer data;
+shared-key access is used only in Python memory because the operator already has
+management-plane access to retrieve that isolated account key. No key enters
+arguments, environment variables, journals, or logs. Active commands renew the
+lease and revalidate the operation nonce before each mutation phase. Before
+recovery, prove the recorded environment and target IDs match, the 15-minute
+metadata expiry has passed, the finite Blob lease has expired, and no relevant
+ARM deployment or lifecycle/day-2 command is active. Then run the explicit
+recovery:
+
+```bash
+python scripts/manage_slack_token.py lock-status \
+  --environment-name "$AZURE_ENV_NAME" --json
+python scripts/manage_slack_token.py recover-lock \
+  --environment-name "$AZURE_ENV_NAME" --force
+```
+
+Recovery performs its own read-only status check and refuses an active lease.
+Stop unless the status is `StaleBlocking` and every active operation can be
+ruled out. Preserve a failed operation journal until the primary and backup
+owners reconcile every partial resource.
 
 ### Roll back application code
 
@@ -1655,6 +1562,32 @@ restore the previous value through the explicit routing or rotation procedure.
 | Noninteractive `az containerapp exec` fails with a TTY or WebSocket error | Do not use administrative exec as proof of webhook delivery. Use probes, the signed Action Group test, Container App logs, Table state, and workspace telemetry. |
 | Day-2 discovery is ambiguous | Pass `--environment-name` and verify the deployment tags. |
 | A new day-2 alert stays disabled | Correct the signed Secure Webhook test failure, observe any retry cooldown, and rerun the idempotent add command. |
+| Ordinary provision reports a legacy token | Stop. Run lifecycle `status`, then the migration procedure; do not delete or display the value manually. |
+| A lifecycle operation reports cleanup residue | Do not provision. Restore the exact prior vault network/RBAC state and reconcile the preserved journal. |
+| The central operation lock is expired | Prove no ARM deployment or tool operation is active, then use the explicit `recover-lock --force` procedure. |
+
+### Production ownership and retention
+
+Production acceptance requires named primary and backup owners for Azure,
+Slack, routing, secret rotation, and rollback. The independent operations
+Action Group must have an on-call destination outside this bot and a tested
+receiver. Record these owners, the HTTPS runbook, Action Group resource ID, and
+the successful receiver-test evidence in the approved change record and the
+nonsecret readiness values, not in repository defaults.
+
+Run a signed canary and verify Slack plus Table dependency telemetry weekly.
+Review Slack scopes, app owners, installation, and channel membership quarterly.
+Review dependency pins and container scan results on every release.
+
+Table Storage contains operational/customer incident communications,
+subscription IDs, channel IDs, and Slack timestamps. The recommended production
+retention is 90 days after the last resolved update. If automated pruning is not
+implemented, the data owner must document and perform the equivalent manual
+review and deletion. Never place payloads, tokens, tenant data, or unredacted
+journals in support bundles. Build support bundles from an explicit allowlist;
+exclude `.azure/`, `.env*`, operation journals, lock metadata, Key Vault
+firewall snapshots, command transcripts, crash dumps, container layers, and
+any file containing Slack token prefixes or authorization headers.
 
 ### Decommission
 
@@ -1919,9 +1852,10 @@ approve revocation of the old credential. Treat that as a separate coordinated
 change.
 
 `azd down` deletes Azure resources. It does not delete local application files
-or the AZD environment that may contain plaintext credentials. Remove the local
-environment separately with the current AZD command, then verify the directory
-is absent without reading or printing the secret:
+or the AZD environment. Hardened environments contain only nonsecret lifecycle
+metadata, but legacy environments may still contain plaintext credentials.
+Remove the local environment separately, then verify the directory is absent
+without reading or printing any value:
 
 ```bash
 if [[ "$(pwd -P)" != "$DECOMMISSION_REPOSITORY_PATH" ]]; then
@@ -1965,7 +1899,9 @@ az bicep lint --file infra/day2/service-health-alert-scope.bicep
 
 The test suite covers payload parsing, routing, authorization, Table Storage
 coordination, Slack rendering and error classification, Flask routes, runtime
-configuration, Secure Webhook setup, and day-2 scope management.
+configuration, Secure Webhook setup, token lifecycle secrecy/failure states,
+distributed operation locks, infrastructure contracts, and day-2 scope
+management.
 
 ## Community and support
 

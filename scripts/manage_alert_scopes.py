@@ -7,6 +7,7 @@ import argparse
 import fnmatch
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -35,10 +36,79 @@ READ_RETRY_MARKERS = (
     "timed out",
     "timeout",
 )
+REVIEW_FINGERPRINT_VERSION = "v1"
+REVIEW_FINGERPRINT_TTL_SECONDS = 15 * 60
+SLACK_TOKEN_ENV_ALIASES = frozenset(
+    {
+        "SLACK_TOKEN",
+        "SLACK_BOT_TOKEN",
+        "SLACK_APP_TOKEN",
+        "SLACK_ACCESS_TOKEN",
+        "SLACK_REFRESH_TOKEN",
+        "SERVICE_HEALTH_SLACK_TOKEN",
+        "SERVICE_HEALTH_SLACK_BOT_TOKEN",
+    }
+)
+SLACK_TOKEN_VALUE_PATTERN = re.compile(
+    r"(?i)(?:xox[baprs]-|xoxe(?:\.[A-Za-z0-9_-]+)?-)[A-Za-z0-9_-]+"
+)
 
 
 class ScopeManagerError(RuntimeError):
     """A fail-closed operational error."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_code = error_code
+
+
+def sanitized_child_environment(
+    environment: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Remove only Slack credential variables/material from child processes."""
+    source = dict(os.environ if environment is None else environment)
+    return {
+        key: value
+        for key, value in source.items()
+        if key.upper() not in SLACK_TOKEN_ENV_ALIASES
+        and not SLACK_TOKEN_VALUE_PATTERN.search(str(value))
+    }
+
+
+def assert_no_slack_secret_material(values: Iterable[Any]) -> None:
+    if any(SLACK_TOKEN_VALUE_PATTERN.search(str(value)) for value in values):
+        raise ScopeManagerError(
+            "Slack credential material is forbidden at a child-process boundary."
+        )
+
+
+def _azure_error_metadata(detail: str) -> tuple[int | None, str | None]:
+    """Extract Azure's structured status/code without text-marker matching."""
+    try:
+        payload = json.loads(detail)
+    except json.JSONDecodeError:
+        match = re.match(r"^\s*ERROR:\s*\(([^)]+)\)", detail)
+        return (None, match.group(1)) if match else (None, None)
+    if not isinstance(payload, dict):
+        return None, None
+    error = payload.get("error", payload)
+    if not isinstance(error, dict):
+        return None, None
+    raw_status = error.get("statusCode", payload.get("statusCode"))
+    try:
+        status_code = int(raw_status) if raw_status is not None else None
+    except (TypeError, ValueError):
+        status_code = None
+    raw_code = error.get("code")
+    error_code = str(raw_code) if raw_code else None
+    return status_code, error_code
 
 
 class AzureCli:
@@ -104,9 +174,11 @@ class AzureCli:
             "--output",
             "json",
         ]
+        assert_no_slack_secret_material(command)
         for attempt in range(1, attempts + 1):
             result = self.runner(
                 command,
+                env=sanitized_child_environment(),
                 capture_output=True,
                 text=True,
                 check=False,
@@ -126,8 +198,11 @@ class AzureCli:
             )
             retryable = any(marker.lower() in detail.lower() for marker in READ_RETRY_MARKERS)
             if not retryable or attempt == attempts:
+                status_code, error_code = _azure_error_metadata(detail)
                 raise ScopeManagerError(
-                    f"Azure CLI command failed: az {' '.join(args)}\n{detail}"
+                    f"Azure CLI command failed: az {' '.join(args)}\n{detail}",
+                    status_code=status_code,
+                    error_code=error_code,
                 )
             self.sleep(float(2 ** (attempt - 1)))
         raise AssertionError("unreachable")
@@ -221,6 +296,22 @@ def is_active(scope: dict[str, Any]) -> bool:
     return bool(scope.get("Enabled")) and bool(scope.get("ActionGroupEnabled"))
 
 
+try:
+    from scripts.operation_lock import (
+        OperationJournal,
+        OperationLock,
+        OperationLockError,
+        membership_fingerprint,
+    )
+except ModuleNotFoundError:  # pragma: no cover - exercised via direct script execution
+    from operation_lock import (  # type: ignore[no-redef]
+        OperationJournal,
+        OperationLock,
+        OperationLockError,
+        membership_fingerprint,
+    )
+
+
 class ScopeManager:
     """Business logic for tenant-bound day-2 scope management."""
 
@@ -231,19 +322,354 @@ class ScopeManager:
         should_process: Callable[[str, str], bool] | None = None,
         confirm_destructive: Callable[[str], bool] | None = None,
         warning: Callable[[str], None] | None = None,
+        enforce_review_gate: bool = False,
+        approved_execution_fingerprint: str | None = None,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         self.azure = azure
         self.environment_name = environment_name
         self.should_process = should_process or (lambda _target, _operation: True)
         self.confirm_destructive = confirm_destructive or (lambda _question: False)
         self.warning = warning or (lambda text: print(f"WARNING: {text}", file=sys.stderr))
+        self.enforce_review_gate = enforce_review_gate
+        self.approved_execution_fingerprint = approved_execution_fingerprint
+        self.clock = clock
         self.central: dict[str, Any] = {}
         self.scopes: list[dict[str, Any]] = []
         self.management_group_cache: dict[str, dict[str, Any]] = {}
+        self.operation_target: tuple[str, str, str] | None = None
+        self.operation_lock_context: tuple[OperationLock, Any] | None = None
+        self._review_context: dict[str, Any] | None = None
 
     def initialize(self) -> None:
         self.central = self.get_central_deployment()
         self.scopes = self.get_managed_scopes()
+
+    @staticmethod
+    def _canonical_hash(value: Any) -> str:
+        encoded = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        assert_no_slack_secret_material([encoded])
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _bicep_graph_identity(root: Path) -> dict[str, str]:
+        repository = Path(__file__).resolve().parent.parent
+        pending = [root.resolve()]
+        visited: set[Path] = set()
+        result: dict[str, str] = {}
+        while pending:
+            path = pending.pop()
+            if path in visited:
+                continue
+            try:
+                relative = path.relative_to(repository)
+            except ValueError as exc:
+                raise ScopeManagerError(
+                    "The day-2 Bicep dependency graph escapes the repository."
+                ) from exc
+            if not path.is_file():
+                raise ScopeManagerError(
+                    f"Reviewed Bicep artifact is missing: {relative}."
+                )
+            visited.add(path)
+            content = path.read_text(encoding="utf-8")
+            result[relative.as_posix()] = hashlib.sha256(
+                content.encode("utf-8")
+            ).hexdigest()
+            for module_path in re.findall(
+                r"\bmodule\s+[A-Za-z_][A-Za-z0-9_]*\s+'([^']+\.bicep)'",
+                content,
+            ):
+                pending.append((path.parent / module_path).resolve())
+        return dict(sorted(result.items()))
+
+    @staticmethod
+    def _artifact_identity() -> dict[str, Any]:
+        script_path = Path(__file__).resolve()
+        return {
+            "manager": hashlib.sha256(script_path.read_bytes()).hexdigest(),
+            "templateGraph": ScopeManager._bicep_graph_identity(
+                ALERT_TEMPLATE_PATH
+            ),
+        }
+
+    def _managed_scope_snapshot(
+        self, scopes: list[dict[str, Any]] | None = None
+    ) -> list[dict[str, Any]]:
+        snapshot = []
+        for scope in scopes if scopes is not None else self.scopes:
+            for item in self.scope_members(
+                scope, include_orphans=True
+            ):
+                snapshot.append({
+                    "scopeKind": str(scope.get("ScopeKind") or ""),
+                    "scopeId": normalized_id(scope.get("ScopeId")),
+                    "subscriptionId": normalized_id(
+                        item.get("MemberSubscriptionId") or ""
+                    ),
+                    "alertId": normalized_id(
+                        item.get("AlertId") or ""
+                    ),
+                    "actionGroupId": normalized_id(
+                        item.get("ActionGroupId") or ""
+                    ),
+                    "enabled": bool(item.get("Enabled")),
+                    "actionGroupEnabled": bool(
+                        item.get("ActionGroupEnabled")
+                    ),
+                    "orphaned": bool(
+                        item.get("OrphanedActionGroup")
+                    ),
+                })
+        return sorted(
+            snapshot,
+            key=lambda item: (
+                item["scopeKind"],
+                item["scopeId"],
+                item["subscriptionId"],
+            ),
+        )
+
+    def _management_group_snapshot(
+        self, management_group_id: str | None
+    ) -> dict[str, Any] | None:
+        if not management_group_id:
+            return None
+        self.management_group_cache = {}
+        coverage = self.get_management_group_coverage(management_group_id)
+        return {
+            "managementGroupId": normalized_id(
+                coverage["ManagementGroupId"]
+            ),
+            "tenantId": normalized_id(coverage["TenantId"]),
+            "subscriptionIds": sorted(
+                normalized_id(value)
+                for value in coverage["SubscriptionIds"]
+            ),
+            "descendantManagementGroupIds": sorted(
+                normalized_id(value)
+                for value in coverage["DescendantManagementGroupIds"]
+            ),
+        }
+
+    def _review_payload(
+        self,
+        command: str,
+        subscription_id: str | None,
+        management_group_id: str | None,
+        expires_at: int,
+    ) -> dict[str, Any]:
+        return {
+            "schema": 1,
+            "expiresAt": expires_at,
+            "target": {
+                "tenantId": normalized_id(self.central["TenantId"]),
+                "subscriptionId": normalized_id(
+                    self.central["SubscriptionId"]
+                ),
+                "environment": str(
+                    self.central["EnvironmentName"]
+                ).casefold(),
+                "resourceGroup": str(
+                    self.central["ResourceGroup"]
+                ).casefold(),
+            },
+            "command": {
+                "name": command,
+                "subscriptionId": normalized_id(subscription_id or ""),
+                "managementGroupId": normalized_id(
+                    management_group_id or ""
+                ),
+            },
+            "managementGroup": self._management_group_snapshot(
+                management_group_id
+            ),
+            "managedScopes": self._managed_scope_snapshot(),
+            "artifacts": self._artifact_identity(),
+        }
+
+    def _encode_review_fingerprint(
+        self, payload: dict[str, Any]
+    ) -> str:
+        return (
+            f"{REVIEW_FINGERPRINT_VERSION}:"
+            f"{payload['expiresAt']}:{self._canonical_hash(payload)}"
+        )
+
+    @staticmethod
+    def _parse_review_fingerprint(value: str) -> tuple[int, str]:
+        try:
+            version, raw_expiry, digest = value.split(":", 2)
+            expiry = int(raw_expiry)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ScopeManagerError(
+                "The reviewed execution fingerprint is malformed."
+            ) from exc
+        if (
+            version != REVIEW_FINGERPRINT_VERSION
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        ):
+            raise ScopeManagerError(
+                "The reviewed execution fingerprint is malformed."
+            )
+        return expiry, digest
+
+    def _validate_review_fingerprint(
+        self,
+        command: str,
+        subscription_id: str | None,
+        management_group_id: str | None,
+    ) -> str:
+        if not self.approved_execution_fingerprint:
+            raise ScopeManagerError(
+                "Mutation requires --execution-fingerprint from a current "
+                "--what-if run."
+            )
+        expires_at, digest = self._parse_review_fingerprint(
+            self.approved_execution_fingerprint
+        )
+        if expires_at <= int(self.clock()):
+            raise ScopeManagerError(
+                "The reviewed execution fingerprint has expired; run "
+                "--what-if again."
+            )
+        payload = self._review_payload(
+            command,
+            subscription_id,
+            management_group_id,
+            expires_at,
+        )
+        if self._canonical_hash(payload) != digest:
+            raise ScopeManagerError(
+                "The reviewed execution fingerprint does not match the "
+                "current target, command parameters, managed scopes, "
+                "Management Group membership, or artifacts."
+            )
+        self._review_context = {
+            "expiresAt": expires_at,
+            "target": payload["target"],
+            "command": payload["command"],
+            "managementGroup": payload["managementGroup"],
+            "managedScopes": payload["managedScopes"],
+            "artifacts": payload["artifacts"],
+        }
+        return self.approved_execution_fingerprint
+
+    def _assert_review_context_unchanged(self) -> None:
+        if self._review_context is None:
+            return
+        if self._review_context["expiresAt"] <= int(self.clock()):
+            raise ScopeManagerError(
+                "The reviewed execution fingerprint expired during the "
+                "operation; no further mutation was attempted."
+            )
+        account = self.azure.invoke("account", "show")
+        current_target = {
+            "tenantId": normalized_id(member(account, "tenantId")),
+            "subscriptionId": normalized_id(member(account, "id")),
+            "environment": str(
+                self.central["EnvironmentName"]
+            ).casefold(),
+            "resourceGroup": str(self.central["ResourceGroup"]).casefold(),
+        }
+        if current_target != self._review_context["target"]:
+            raise ScopeManagerError(
+                "The Azure target changed after review; no further mutation "
+                "was attempted."
+            )
+        if self._artifact_identity() != self._review_context["artifacts"]:
+            raise ScopeManagerError(
+                "The reviewed command or Bicep artifact changed during "
+                "execution; no further mutation was attempted."
+            )
+        management_group_id = self._review_context["command"][
+            "managementGroupId"
+        ]
+        current_group = self._management_group_snapshot(
+            management_group_id or None
+        )
+        if current_group != self._review_context["managementGroup"]:
+            raise ScopeManagerError(
+                "Management Group descendant membership changed after review; "
+                "no further mutation was attempted."
+            )
+        current_scopes = self.get_managed_scopes()
+        if (
+            self._managed_scope_snapshot(current_scopes)
+            != self._review_context["managedScopes"]
+        ):
+            raise ScopeManagerError(
+                "Managed alert scope state changed after review; no further "
+                "mutation was attempted."
+            )
+
+    @staticmethod
+    def _snapshot_member_key(
+        item: dict[str, Any],
+    ) -> tuple[str, str, str]:
+        return (
+            item["scopeKind"],
+            item["scopeId"],
+            item["subscriptionId"],
+        )
+
+    def _expected_member_record(
+        self, item: dict[str, Any]
+    ) -> dict[str, Any]:
+        return {
+            "scopeKind": str(item.get("ScopeKind") or ""),
+            "scopeId": normalized_id(item.get("ScopeId")),
+            "subscriptionId": normalized_id(
+                item.get("MemberSubscriptionId") or ""
+            ),
+            "alertId": normalized_id(item.get("AlertId") or ""),
+            "actionGroupId": normalized_id(
+                item.get("ActionGroupId") or ""
+            ),
+            "enabled": bool(item.get("Enabled")),
+            "actionGroupEnabled": bool(
+                item.get("ActionGroupEnabled")
+            ),
+            "orphaned": bool(item.get("OrphanedActionGroup")),
+        }
+
+    def _accept_expected_managed_scope_transition(
+        self,
+        item: dict[str, Any],
+        *,
+        removed: bool = False,
+    ) -> None:
+        if self._review_context is None:
+            return
+        expected = {
+            self._snapshot_member_key(record): record
+            for record in self._review_context["managedScopes"]
+        }
+        record = self._expected_member_record(item)
+        key = self._snapshot_member_key(record)
+        if removed:
+            expected.pop(key, None)
+        else:
+            expected[key] = record
+        current = self._managed_scope_snapshot(
+            self.get_managed_scopes()
+        )
+        current_by_key = {
+            self._snapshot_member_key(value): value
+            for value in current
+        }
+        if current_by_key != expected:
+            raise ScopeManagerError(
+                "Managed alert scope post-mutation state differs from the "
+                "reviewed state plus the exact intended change; no further "
+                "mutation was attempted."
+            )
+        self._review_context["managedScopes"] = current
 
     def get_central_deployment(self) -> dict[str, Any]:
         current = self.azure.invoke("account", "show")
@@ -473,6 +899,9 @@ class ScopeManager:
                         ),
                         "AnchorActionGroupId": anchor_id,
                         "ProtectedAlertId": str(member(baseline[0], "id", "")),
+                        "ProtectedAlertEnabled": bool(
+                            azure_property(baseline[0], "enabled")
+                        ),
                         "ProtectedScopeKind": protected_kind,
                         "ProtectedScopeId": protected_id,
                         "ProtectedScopeResourceId": scope_resource_id,
@@ -1121,10 +1550,15 @@ class ScopeManager:
         state_key: str,
         api_version: str,
         label: str,
+        compensating_restore: bool = False,
     ) -> None:
         attempted: list[tuple[dict[str, Any], bool]] = []
         try:
             for item in self.scope_members(scope):
+                if compensating_restore:
+                    self._revalidate_operation_lock()
+                else:
+                    self.assert_operation_membership_unchanged()
                 original = bool(item[state_key])
                 attempted.append((item, original))
                 updated = self.azure.invoke(
@@ -1142,6 +1576,8 @@ class ScopeManager:
                         f"Azure did not confirm enabled={enabled} for '{item[resource_key]}'."
                     )
                 item[state_key] = enabled
+                if not compensating_restore:
+                    self._accept_expected_managed_scope_transition(item)
         except ScopeManagerError as update_error:
             rollback_errors = []
             for item, original in reversed(attempted):
@@ -1159,6 +1595,8 @@ class ScopeManager:
                     if azure_property(rolled_back, "enabled") is not original:
                         raise ScopeManagerError("Azure did not confirm the rollback.")
                     item[state_key] = original
+                    if not compensating_restore:
+                        self._accept_expected_managed_scope_transition(item)
                 except ScopeManagerError as rollback_error:
                     rollback_errors.append(
                         f"{item[resource_key]}: {rollback_error}"
@@ -1175,7 +1613,13 @@ class ScopeManager:
             ) from update_error
         scope[state_key] = enabled
 
-    def set_alert_enabled(self, scope: dict[str, Any], enabled: bool) -> None:
+    def set_alert_enabled(
+        self,
+        scope: dict[str, Any],
+        enabled: bool,
+        *,
+        compensating_restore: bool = False,
+    ) -> None:
         self._set_enabled(
             scope,
             enabled,
@@ -1183,6 +1627,7 @@ class ScopeManager:
             "Enabled",
             "2020-10-01",
             "Alert",
+            compensating_restore,
         )
 
     def set_action_group_enabled(
@@ -1219,6 +1664,7 @@ class ScopeManager:
     def new_scope_member(
         self, scope_kind: str, scope_id: str, target_subscription_id: str
     ) -> dict[str, Any]:
+        self.assert_operation_membership_unchanged()
         suffix = resource_suffix(scope_kind, scope_id)
         deployment = self.azure.invoke(
             "deployment",
@@ -1269,6 +1715,7 @@ class ScopeManager:
             "OrphanedActionGroup": False,
         }
         self.assert_deployed_scope_state(state)
+        self._accept_expected_managed_scope_transition(state)
         return state
 
     def new_management_group_state(
@@ -1442,6 +1889,132 @@ class ScopeManager:
             )
         )
 
+    def _unexpected_action_group_references(
+        self,
+        action_group_id: str,
+        allowed_alert_ids: Iterable[str] = (),
+    ) -> list[str]:
+        allowed = id_set(allowed_alert_ids)
+        unexpected = []
+        for account in self.central["Accounts"]:
+            if (
+                member(account, "state") != "Enabled"
+                or not same_id(
+                    member(account, "tenantId"),
+                    self.central["TenantId"],
+                )
+            ):
+                continue
+            account_id = str(member(account, "id", ""))
+            alerts = as_list(
+                self.azure.invoke(
+                    "monitor",
+                    "activity-log",
+                    "alert",
+                    "list",
+                    "--subscription",
+                    account_id,
+                )
+            )
+            for alert in alerts:
+                actions = as_list(
+                    nested(alert, "actions", "actionGroups")
+                    or nested(
+                        alert,
+                        "properties",
+                        "actions",
+                        "actionGroups",
+                    )
+                )
+                if not any(
+                    same_id(
+                        member(action, "actionGroupId"),
+                        action_group_id,
+                    )
+                    for action in actions
+                ):
+                    continue
+                alert_id = str(member(alert, "id", ""))
+                if normalized_id(alert_id) not in allowed:
+                    unexpected.append(alert_id or "<unknown>")
+            for resource_type, api_version in (
+                (
+                    "Microsoft.Insights/metricAlerts",
+                    "2018-03-01",
+                ),
+                (
+                    "Microsoft.Insights/scheduledQueryRules",
+                    "2023-12-01",
+                ),
+                (
+                    "Microsoft.AlertsManagement/smartDetectorAlertRules",
+                    "2021-04-01",
+                ),
+                (
+                    "Microsoft.AlertsManagement/actionRules",
+                    "2021-08-08",
+                ),
+            ):
+                summaries = as_list(
+                    self.azure.invoke(
+                        "resource",
+                        "list",
+                        "--subscription",
+                        account_id,
+                        "--resource-type",
+                        resource_type,
+                    )
+                )
+                for summary in summaries:
+                    resource_id = str(member(summary, "id", "") or "")
+                    if not resource_id:
+                        raise ScopeManagerError(
+                            f"Azure returned a {resource_type} resource "
+                            "without an id during Action Group reference "
+                            "validation."
+                        )
+                    rule = self.azure.invoke(
+                        "resource",
+                        "show",
+                        "--ids",
+                        resource_id,
+                        "--api-version",
+                        api_version,
+                    )
+                    if self._contains_action_group_reference(
+                        rule, action_group_id
+                    ) and normalized_id(resource_id) not in allowed:
+                        unexpected.append(resource_id)
+        return unique_ids(unexpected)
+
+    @staticmethod
+    def _contains_action_group_reference(
+        value: Any,
+        action_group_id: str,
+        parent_key: str = "",
+    ) -> bool:
+        if isinstance(value, dict):
+            return any(
+                ScopeManager._contains_action_group_reference(
+                    child, action_group_id, str(key)
+                )
+                for key, child in value.items()
+            )
+        if isinstance(value, list):
+            return any(
+                ScopeManager._contains_action_group_reference(
+                    child, action_group_id, parent_key
+                )
+                for child in value
+            )
+        return (
+            (
+                "actiongroup" in parent_key.casefold()
+                or parent_key.casefold() == "groupids"
+            )
+            and same_id(value, action_group_id)
+        )
+
     def remove_scope_resources(self, scope: dict[str, Any]) -> None:
         items = self.scope_members(scope, include_orphans=True)
         for item in items:
@@ -1488,56 +2061,29 @@ class ScopeManager:
                 "2023-01-01",
             )
             self.assert_action_group_ownership(action_group, item)
-            unexpected_references = []
-            for account in self.central["Accounts"]:
-                if (
-                    member(account, "state") != "Enabled"
-                    or not same_id(
-                        member(account, "tenantId"),
-                        self.central["TenantId"],
-                    )
-                ):
-                    continue
-                account_id = str(member(account, "id", ""))
-                alerts = as_list(
-                    self.azure.invoke(
-                        "monitor",
-                        "activity-log",
-                        "alert",
-                        "list",
-                        "--subscription",
-                        account_id,
-                    )
+            unexpected_references = (
+                self._unexpected_action_group_references(
+                    item["ActionGroupId"], expected_alert_ids
                 )
-                for alert in alerts:
-                    actions = as_list(
-                        nested(alert, "actions", "actionGroups")
-                        or nested(
-                            alert,
-                            "properties",
-                            "actions",
-                            "actionGroups",
-                        )
-                    )
-                    if not any(
-                        same_id(
-                            member(action, "actionGroupId"),
-                            item["ActionGroupId"],
-                        )
-                        for action in actions
-                    ):
-                        continue
-                    alert_id = str(member(alert, "id", ""))
-                    if normalized_id(alert_id) not in expected_alert_ids:
-                        unexpected_references.append(alert_id or "<unknown>")
+            )
             if unexpected_references:
                 raise ScopeManagerError(
                     f"Refusing to delete Action Group '{item['ActionGroupId']}' because other "
                     f"Activity Log Alerts still reference it: {', '.join(unique_ids(unexpected_references))}."
                 )
         for item in items:
+            self.assert_operation_membership_unchanged()
             if item.get("AlertId"):
                 self.azure.invoke("resource", "delete", "--ids", item["AlertId"])
+                expected_orphan = {
+                    **item,
+                    "AlertId": None,
+                    "Enabled": False,
+                    "OrphanedActionGroup": True,
+                }
+                self._accept_expected_managed_scope_transition(
+                    expected_orphan
+                )
             referenced = any(
                 same_id(other.get("ActionGroupId"), item["ActionGroupId"])
                 for other in other_members
@@ -1549,8 +2095,48 @@ class ScopeManager:
                 )
                 and not referenced
             ):
+                self.assert_operation_membership_unchanged()
+                action_group = self.azure.invoke(
+                    "resource",
+                    "show",
+                    "--ids",
+                    item["ActionGroupId"],
+                    "--api-version",
+                    "2023-01-01",
+                )
+                self.assert_action_group_ownership(action_group, item)
+                current_references = (
+                    self._unexpected_action_group_references(
+                        item["ActionGroupId"]
+                    )
+                )
+                if current_references:
+                    raise ScopeManagerError(
+                        "Refusing to delete Action Group "
+                        f"'{item['ActionGroupId']}' because current Activity "
+                        "Log Alert references appeared after review: "
+                        f"{', '.join(current_references)}."
+                    )
+                action_group = self.azure.invoke(
+                    "resource",
+                    "show",
+                    "--ids",
+                    item["ActionGroupId"],
+                    "--api-version",
+                    "2023-01-01",
+                )
+                self.assert_action_group_ownership(action_group, item)
+                # Action Groups do not expose a documented ETag/CAS delete.
+                # Delete only the exact ID immediately after the second
+                # ownership read and the complete reference scan.
                 self.azure.invoke(
-                    "resource", "delete", "--ids", item["ActionGroupId"]
+                    "resource",
+                    "delete",
+                    "--ids",
+                    item["ActionGroupId"],
+                )
+                self._accept_expected_managed_scope_transition(
+                    item, removed=True
                 )
         self.scopes = [
             item
@@ -2012,7 +2598,9 @@ class ScopeManager:
                         f"preserving one active path. Manual review is required. {enable_error}"
                     ) from enable_error
                 try:
-                    self.set_alert_enabled(original, True)
+                    self.set_alert_enabled(
+                        original, True, compensating_restore=True
+                    )
                 except ScopeManagerError as rollback_error:
                     raise ScopeManagerError(
                         f"Replacement alert failed for subscription '{subscription_id}', and its "
@@ -2054,7 +2642,9 @@ class ScopeManager:
                         "The orphaned Action Group was retained; no original alert exists to restore."
                     )
                 try:
-                    self.set_alert_enabled(original, True)
+                    self.set_alert_enabled(
+                        original, True, compensating_restore=True
+                    )
                 except ScopeManagerError as restore_error:
                     raise ScopeManagerError(
                         f"Replacement coverage became inactive for subscription '{subscription_id}', "
@@ -2231,11 +2821,137 @@ class ScopeManager:
             )
         return report
 
+    def _target_member_ids(
+        self, scope_kind: str, scope_id: str
+    ) -> list[str]:
+        matches = [
+            item
+            for item in self.scopes
+            if item["ScopeKind"] == scope_kind and same_id(item["ScopeId"], scope_id)
+        ]
+        if not matches:
+            return []
+        return [
+            str(item.get("MemberSubscriptionId") or "")
+            for item in self.scope_members(matches[0], include_orphans=True)
+        ]
+
+    def assert_operation_membership_unchanged(self) -> None:
+        self._assert_review_context_unchanged()
+        self._revalidate_operation_lock()
+        if self.operation_target is None:
+            return
+        scope_kind, scope_id, expected = self.operation_target
+        if scope_kind != "managementGroup":
+            return
+        self.management_group_cache = {}
+        current = membership_fingerprint(
+            scope_kind,
+            scope_id,
+            self.get_management_group_coverage(scope_id)["SubscriptionIds"],
+        )
+        if current != expected:
+            raise ScopeManagerError(
+                f"Management Group '{scope_id}' membership changed during "
+                "the operation. No further mutation was attempted; inspect "
+                "the preserved journal and rerun from a fresh what-if."
+            )
+
+    def _revalidate_operation_lock(self) -> None:
+        if self.operation_lock_context is not None:
+            lock, handle = self.operation_lock_context
+            lock.renew(handle)
+
+    def _caller_identity(self) -> str:
+        account = self.azure.invoke("account", "show")
+        user = member(account, "user", {})
+        user_type = str(member(user, "type", "user") or "user").casefold()
+        if user_type == "serviceprincipal":
+            principal = self.azure.invoke(
+                "ad",
+                "sp",
+                "show",
+                "--id",
+                str(member(user, "name", "") or ""),
+            )
+        else:
+            principal = self.azure.invoke(
+                "ad", "signed-in-user", "show"
+            )
+        caller_id = str(member(principal, "id", "") or "")
+        if not caller_id:
+            raise ScopeManagerError(
+                "Could not resolve the caller object id for the distributed "
+                "operation lock."
+            )
+        return caller_id
+
+    def _clear_completed_journal(
+        self,
+        lock: OperationLock,
+        journal: OperationJournal,
+        operation_id: str,
+        completed_handle: Any,
+        command: str,
+        target: str,
+    ) -> None:
+        try:
+            cleanup_handle = lock.acquire(
+                environment=self.central["EnvironmentName"],
+                command=f"{command}-journal-cleanup",
+                target=target,
+                caller=self._caller_identity(),
+            )
+        except OperationLockError:
+            return
+        try:
+            state = journal.read(operation_id)
+            if (
+                state
+                and state.get("LockNonce") == completed_handle.nonce
+                and state.get("State") == "Completed"
+            ):
+                journal.clear(operation_id)
+        finally:
+            try:
+                lock.release(cleanup_handle)
+            except Exception as release_exc:
+                journal.record(
+                    operation_id,
+                    {
+                        "Command": command,
+                        "Target": target,
+                        "LockNonce": cleanup_handle.nonce,
+                        "State": (
+                            "CompletedJournalCleanupLockReleaseFailed"
+                        ),
+                        "Error": str(release_exc),
+                    },
+                )
+                raise
+
+    def _mutating_dispatch(
+        self,
+        command: str,
+        subscription_id: str | None,
+        management_group_id: str | None,
+    ) -> Any:
+        if command == "add-subscription":
+            return self.add_scope("subscription", subscription_id)
+        if command == "remove-subscription":
+            return self.remove_subscription(subscription_id)
+        if command == "add-management-group":
+            return self.add_scope("managementGroup", management_group_id)
+        if command == "remove-management-group":
+            return self.remove_management_group(management_group_id)
+        return self.migrate_management_group(management_group_id)
+
     def execute(
         self,
         command: str,
         subscription_id: str | None = None,
         management_group_id: str | None = None,
+        what_if: bool = False,
     ) -> Any:
         self.initialize()
         if command == "list":
@@ -2245,18 +2961,181 @@ class ScopeManager:
                 raise ScopeManagerError(
                     f"--subscription-id is required for {command}."
                 )
-            if command == "add-subscription":
-                return self.add_scope("subscription", subscription_id)
-            return self.remove_subscription(subscription_id)
-        if not management_group_id:
-            raise ScopeManagerError(
-                f"--management-group-id is required for {command}."
+            target_kind, target_id = "subscription", subscription_id
+        else:
+            if not management_group_id:
+                raise ScopeManagerError(
+                    f"--management-group-id is required for {command}."
+                )
+            target_kind, target_id = "managementGroup", management_group_id
+
+        # --what-if never mutates the Azure Service Health scopes, and it must
+        # not mutate anything else either (including the distributed lock and
+        # journal), so it is dispatched directly without acquiring either.
+        if what_if:
+            expires_at = int(self.clock()) + REVIEW_FINGERPRINT_TTL_SECONDS
+            review_fingerprint = self._encode_review_fingerprint(
+                self._review_payload(
+                    command,
+                    subscription_id,
+                    management_group_id,
+                    expires_at,
+                )
             )
-        if command == "add-management-group":
-            return self.add_scope("managementGroup", management_group_id)
-        if command == "remove-management-group":
-            return self.remove_management_group(management_group_id)
-        return self.migrate_management_group(management_group_id)
+            original_should_process = self.should_process
+
+            def report_without_mutating(target: str, operation: str) -> bool:
+                original_should_process(target, operation)
+                return False
+
+            self.should_process = report_without_mutating
+            try:
+                result = self._mutating_dispatch(
+                    command, subscription_id, management_group_id
+                )
+                if not isinstance(result, dict):
+                    result = {"Plan": result}
+                result["ExecutionFingerprint"] = review_fingerprint
+                result["ExecutionExpiresAt"] = expires_at
+                return result
+            finally:
+                self.should_process = original_should_process
+
+        target = f"{target_kind} \'{target_id}\'"
+        reviewed_fingerprint = ""
+        if self.enforce_review_gate:
+            reviewed_fingerprint = self._validate_review_fingerprint(
+                command,
+                subscription_id,
+                management_group_id,
+            )
+        lock = OperationLock(
+            self.azure,
+            self.central["SubscriptionId"],
+            self.central["ResourceGroup"],
+        )
+        journal = OperationJournal(
+            self.azure,
+            self.central["SubscriptionId"],
+            self.central["ResourceGroup"],
+        )
+        operation_id = f"{command}-{target_kind}-{normalized_id(target_id)}"
+        target_members = (
+            self.get_management_group_coverage(target_id)[
+                "SubscriptionIds"
+            ]
+            if target_kind == "managementGroup"
+            else self._target_member_ids(target_kind, target_id)
+        )
+        fingerprint = membership_fingerprint(
+            target_kind, target_id, target_members
+        )
+        self.operation_target = (target_kind, target_id, fingerprint)
+        try:
+            handle = lock.acquire(
+                environment=self.central["EnvironmentName"],
+                command=command,
+                target=target,
+                caller=self._caller_identity(),
+            )
+            self.operation_lock_context = (lock, handle)
+            journal.record(
+                operation_id,
+                {
+                    "Command": command,
+                    "Target": target,
+                    "Fingerprint": fingerprint,
+                    "ReviewedExecutionFingerprint": reviewed_fingerprint,
+                    "StartedAt": handle.metadata["startedAt"],
+                    "LockNonce": handle.nonce,
+                    "State": "Started",
+                },
+            )
+            try:
+                lock.renew(handle)
+                result = self._mutating_dispatch(
+                    command, subscription_id, management_group_id
+                )
+            except Exception as exc:
+                journal.record(
+                    operation_id,
+                    {
+                        "Command": command,
+                        "Target": target,
+                        "Fingerprint": fingerprint,
+                        "ReviewedExecutionFingerprint": reviewed_fingerprint,
+                        "StartedAt": handle.metadata["startedAt"],
+                        "LockNonce": handle.nonce,
+                        "State": "Failed",
+                        "Error": str(exc),
+                    },
+                )
+                # A release failure here must not mask the original mutation
+                # error; record it while preserving the mutation exception.
+                try:
+                    lock.release(handle)
+                except Exception as release_exc:
+                    journal.record(
+                        operation_id,
+                        {
+                            "Command": command,
+                            "Target": target,
+                            "Fingerprint": fingerprint,
+                            "ReviewedExecutionFingerprint": reviewed_fingerprint,
+                            "StartedAt": handle.metadata["startedAt"],
+                            "LockNonce": handle.nonce,
+                            "State": "FailedLockReleaseFailed",
+                            "Error": (
+                                f"{exc}; lock release also failed: "
+                                f"{release_exc}"
+                            ),
+                        },
+                    )
+                raise
+            journal.record(
+                operation_id,
+                {
+                    "Command": command,
+                    "Target": target,
+                    "Fingerprint": fingerprint,
+                    "ReviewedExecutionFingerprint": reviewed_fingerprint,
+                    "StartedAt": handle.metadata["startedAt"],
+                    "LockNonce": handle.nonce,
+                    "State": "Completed",
+                    "Result": result,
+                },
+            )
+            # Clear the journal only after the lock is genuinely released.
+            try:
+                lock.release(handle)
+            except Exception as release_exc:
+                journal.record(
+                    operation_id,
+                    {
+                        "Command": command,
+                        "Target": target,
+                        "Fingerprint": fingerprint,
+                        "ReviewedExecutionFingerprint": reviewed_fingerprint,
+                        "StartedAt": handle.metadata["startedAt"],
+                        "LockNonce": handle.nonce,
+                        "State": "CompletedLockReleaseFailed",
+                        "Error": str(release_exc),
+                    },
+                )
+                raise
+            self._clear_completed_journal(
+                lock,
+                journal,
+                operation_id,
+                handle,
+                command,
+                target,
+            )
+            return result
+        finally:
+            self.operation_lock_context = None
+            self.operation_target = None
+            self._review_context = None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2289,6 +3168,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--what-if",
         action="store_true",
         help="Validate and report the planned operation without mutation.",
+    )
+    parser.add_argument(
+        "--execution-fingerprint",
+        help=(
+            "Exact expiring fingerprint emitted by the reviewed --what-if "
+            "run; required for mutation."
+        ),
     )
     parser.add_argument(
         "--json",
@@ -2362,12 +3248,15 @@ def main(argv: list[str] | None = None) -> int:
             environment_name=args.environment_name,
             should_process=should_process,
             confirm_destructive=confirm,
+            enforce_review_gate=True,
+            approved_execution_fingerprint=args.execution_fingerprint,
         ).execute(
             args.command,
             subscription_id=args.subscription_id,
             management_group_id=args.management_group_id,
+            what_if=args.what_if,
         )
-    except (ScopeManagerError, KeyboardInterrupt) as exc:
+    except (ScopeManagerError, OperationLockError, KeyboardInterrupt) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(result, indent=2) if args.json else format_text(result))

@@ -4,14 +4,26 @@ targetScope = 'subscription'
 param environmentName string
 param location string
 
-@secure()
-param slackBotToken string
-
 param serviceHealthRoutesJsonB64 string
 param secureWebhookClientId string
 param secureWebhookObjectId string
 param secureWebhookIdentifierUri string
 param tenantId string = tenant().tenantId
+
+@description('Deploy the Container App and Service Health alert path. Set false only for phase-one bootstrap.')
+param deployWorkload bool = true
+
+@description('Set automatically by azd so reprovisioning preserves the latest deployed application image.')
+param appResourceExists bool = false
+
+@description('Enabled state for the central baseline alert. New environments keep this false until acceptance.')
+param baselineAlertEnabled bool = false
+
+@description('Optional Key Vault secret version used only for emergency rollback. Empty selects the latest version.')
+param slackBotTokenSecretVersion string = ''
+
+@description('Existing independent operations Action Group resource ID. Empty skips production alert rules.')
+param operationsActionGroupId string = ''
 
 @allowed([
   'Basic'
@@ -83,7 +95,7 @@ module security 'modules/security.bicep' = {
     environmentName: environmentName
     location: location
     resourceToken: resourceToken
-    slackBotToken: slackBotToken
+    slackBotTokenSecretVersion: slackBotTokenSecretVersion
     peSubnetId: network.outputs.peSubnetId
     keyVaultPrivateDnsZoneId: network.outputs.keyVaultPrivateDnsZoneId
     tags: tags
@@ -103,7 +115,17 @@ module storage 'modules/storage.bicep' = {
   }
 }
 
-module app 'modules/container-app.bicep' = {
+module operationsLock 'modules/operations-lock.bicep' = {
+  scope: resourceGroup
+  name: 'operations-lock'
+  params: {
+    location: location
+    resourceToken: resourceToken
+    tags: tags
+  }
+}
+
+module app 'modules/container-app.bicep' = if (deployWorkload) {
   scope: resourceGroup
   name: 'container-app'
   params: {
@@ -124,26 +146,50 @@ module app 'modules/container-app.bicep' = {
     secureWebhookIdentifierUri: secureWebhookIdentifierUri
     tenantId: tenantId
     infraSubnetId: network.outputs.infraSubnetId
+    containerAppExists: appResourceExists
     tags: tags
   }
 }
 
-module serviceHealthAlert 'modules/service-health-alert.bicep' = {
+module serviceHealthAlert 'modules/service-health-alert.bicep' = if (deployWorkload) {
   scope: resourceGroup
   name: 'service-health-alert'
   params: {
     environmentName: environmentName
-    webhookUri: 'https://${app.outputs.fqdn}/api/service-health'
+    webhookUri: deployWorkload ? 'https://${app!.outputs.fqdn}/api/service-health' : ''
     secureWebhookObjectId: secureWebhookObjectId
     secureWebhookIdentifierUri: secureWebhookIdentifierUri
     tenantId: tenantId
     targetSubscriptionId: centralAlertSubscriptionId
+    alertEnabled: baselineAlertEnabled
+    tags: tags
+  }
+}
+
+module operationsMonitoring 'modules/operations-monitoring.bicep' = {
+  scope: resourceGroup
+  name: 'operations-monitoring'
+  params: {
+    environmentName: environmentName
+    location: location
+    keyVaultName: security.outputs.keyVaultName
+    storageAccountName: storage.outputs.name
+    logAnalyticsId: observability.outputs.logAnalyticsId
+    applicationInsightsId: observability.outputs.applicationInsightsId
+    containerAppName: deployWorkload ? app!.outputs.name : ''
+    containerAppFqdn: deployWorkload ? app!.outputs.fqdn : ''
+    deployWorkload: deployWorkload
+    operationsActionGroupId: operationsActionGroupId
     tags: tags
   }
 }
 
 output AZURE_LOCATION string = location
 output AZURE_RESOURCE_GROUP string = resourceGroupName
-output SERVICE_APP_NAME string = app.outputs.name
-output SERVICE_APP_URI string = 'https://${app.outputs.fqdn}'
+output SERVICE_APP_NAME string = deployWorkload ? app!.outputs.name : ''
+output SERVICE_APP_URI string = deployWorkload ? 'https://${app!.outputs.fqdn}' : ''
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = registry.outputs.loginServer
+output SERVICE_HEALTH_KEY_VAULT_NAME string = security.outputs.keyVaultName
+output SERVICE_HEALTH_SLACK_SECRET_URI string = security.outputs.slackBotTokenSecretUri
+output SERVICE_HEALTH_MONITORING_ENABLED bool = deployWorkload && !empty(operationsActionGroupId)
+output SERVICE_HEALTH_LOCK_STORAGE_ACCOUNT_NAME string = operationsLock.outputs.storageAccountName
