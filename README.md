@@ -226,7 +226,8 @@ For deployment:
 - Python 3.12 or 3.13 for local tooling; the production image is pinned to
   Python 3.13
 - current stable [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
-  with Bicep and the `log-analytics` extension
+  with its self-contained Bicep CLI at `0.46.1` or later and the
+  `log-analytics` extension
 - current stable [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
 - Docker with a Linux container engine
 - a dedicated Slack app with token rotation disabled, an `xoxb-` bot token, and
@@ -310,7 +311,8 @@ Prerequisites:
 
 - Bash on Linux, macOS, or Ubuntu on WSL
 - Python 3.12 or 3.13
-- current stable Azure CLI with Bicep
+- current stable Azure CLI with its self-contained Bicep CLI at version `0.46.1`
+  or later
 - Azure CLI `log-analytics` extension
 - current stable Azure Developer CLI
 - Docker with a running Linux container engine
@@ -321,7 +323,86 @@ Run:
 ```bash
 python3 --version
 az version
-az bicep version
+
+MIN_AZ_BICEP_VERSION="0.46.1"
+
+version_at_least() {
+  local current="$1"
+  local required="$2"
+  local index
+  local -a current_parts required_parts
+  IFS=. read -r -a current_parts <<<"$current"
+  IFS=. read -r -a required_parts <<<"$required"
+  for index in 0 1 2; do
+    if ((10#${current_parts[index]:-0} > 10#${required_parts[index]:-0})); then
+      return 0
+    fi
+    if ((10#${current_parts[index]:-0} < 10#${required_parts[index]:-0})); then
+      return 1
+    fi
+  done
+  return 0
+}
+
+if ! AZ_BICEP_PATH_MODE="$(
+  az config get bicep.use_binary_from_path --query value -o tsv
+)"; then
+  echo "Could not determine which Bicep binary Azure CLI will use." >&2
+  exit 1
+fi
+if [[ "${AZ_BICEP_PATH_MODE,,}" != "false" ]]; then
+  echo "Azure CLI is configured to use a Bicep binary from PATH; stop." >&2
+  exit 1
+fi
+
+if ! AZ_BICEP_VERSION_OUTPUT="$(az bicep version 2>&1)"; then
+  printf '%s\n' "$AZ_BICEP_VERSION_OUTPUT" >&2
+  if ! az bicep install; then
+    echo "Azure CLI-managed Bicep installation failed; stop." >&2
+    exit 1
+  fi
+  if ! AZ_BICEP_VERSION_OUTPUT="$(az bicep version 2>&1)"; then
+    printf '%s\n' "$AZ_BICEP_VERSION_OUTPUT" >&2
+    echo "Azure CLI-managed Bicep could not be verified after install." >&2
+    exit 1
+  fi
+fi
+if [[ ! "$AZ_BICEP_VERSION_OUTPUT" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+  printf '%s\n' "$AZ_BICEP_VERSION_OUTPUT" >&2
+  echo "Could not parse the Azure CLI-managed Bicep version." >&2
+  exit 1
+fi
+AZ_BICEP_VERSION="${BASH_REMATCH[1]}"
+
+if ! version_at_least "$AZ_BICEP_VERSION" "$MIN_AZ_BICEP_VERSION"; then
+  if ! az bicep upgrade; then
+    echo "Azure CLI-managed Bicep upgrade failed; stop." >&2
+    exit 1
+  fi
+  if ! AZ_BICEP_VERSION_OUTPUT="$(az bicep version 2>&1)"; then
+    printf '%s\n' "$AZ_BICEP_VERSION_OUTPUT" >&2
+    echo "Azure CLI-managed Bicep could not be rechecked after upgrade." >&2
+    exit 1
+  fi
+  if [[ ! "$AZ_BICEP_VERSION_OUTPUT" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+    printf '%s\n' "$AZ_BICEP_VERSION_OUTPUT" >&2
+    echo "Could not parse the upgraded Azure CLI-managed Bicep version." >&2
+    exit 1
+  fi
+  AZ_BICEP_VERSION="${BASH_REMATCH[1]}"
+  if ! version_at_least "$AZ_BICEP_VERSION" "$MIN_AZ_BICEP_VERSION"; then
+    echo "Azure CLI-managed Bicep is still below the required version." >&2
+    exit 1
+  fi
+fi
+printf 'Azure CLI-managed Bicep %s is ready.\n' "$AZ_BICEP_VERSION"
+
+if command -v bicep >/dev/null 2>&1; then
+  printf 'Standalone Bicep at %s: ' "$(command -v bicep)"
+  bicep --version
+  echo "The standalone binary does not satisfy the az bicep requirement."
+fi
+
 az extension add --name log-analytics --upgrade --yes
 az extension show --name log-analytics \
   --query '{name:name,version:version}' -o table
@@ -337,6 +418,12 @@ Expected state:
 
 - Python reports `3.12.x` or `3.13.x`. The operator hook and CLI were verified
   with Ubuntu Python 3.12, while CI and the deployed container use Python 3.13.
+- Azure CLI reports its self-contained Bicep CLI at `0.46.1` or later. Version
+  `0.41.2` reproduced `BCP129` with the current templates; `0.46.1` built and
+  linted both `infra/main.bicep` and
+  `infra/day2/service-health-alert-scope.bicep`.
+- `bicep --version`, when present, describes a separate standalone installation.
+  It does not prove the version used by this guide's `az bicep` commands.
 - Azure CLI reports the installed `log-analytics` extension and its version.
 - `command -v azd` identifies the binary that the shell will execute. If
   `type -a azd` lists more than one installation, the first one must be the
@@ -358,7 +445,13 @@ Recovery:
   shell, and repeat `command -v azd`, `type -a azd`, and `azd version`.
 - On WSL, enable the distribution in Docker Desktop under **WSL integration**,
   then rerun `docker info`.
-- If `az bicep version` fails, run `az bicep install` and repeat the check.
+- If Azure CLI is configured with `bicep.use_binary_from_path`, remove that
+  override before continuing so `az bicep` uses its self-contained installation.
+- If the initial `az bicep version` check cannot run, the guarded command tries
+  `az bicep install` and rechecks it. An installed version below `0.46.1` is
+  upgraded with `az bicep upgrade` and rechecked. Installation, upgrade, network,
+  parse, or post-upgrade version failures stop the procedure; a standalone
+  `bicep` executable is not a fallback.
 - If the Log Analytics extension cannot be installed, correct Azure CLI
   extension policy or network access before deployment; do not rely on an
   interactive dynamic-install prompt during incident troubleshooting.
@@ -1103,9 +1196,28 @@ python scripts/manage_slack_token.py status \
   --environment-name "$AZURE_ENV_NAME" --json
 ```
 
-For a new environment, `InfrastructureOnly` is the expected pre-bootstrap
-state. For an existing legacy environment, stop ordinary preview/provision and
-follow [Migrate an existing deployment](#migrate-an-existing-deployment).
+For a new environment before infrastructure exists, the structured result must
+have this shape:
+
+```json
+{
+  "Environment": "<environment-name>",
+  "KeyVaultName": null,
+  "SecretVersion": "",
+  "LatestSecretVersion": "",
+  "PreviousSecretVersion": "",
+  "LegacyTokenPresent": false,
+  "MigrationMarkerSet": false,
+  "Bootstrapped": false
+}
+```
+
+`status` does not emit a literal lifecycle state such as
+`InfrastructureOnly`. Before infrastructure, acceptance requires
+`Bootstrapped` to be `false`, all three version fields to be empty, and
+`KeyVaultName` to be `null`. For an existing legacy environment,
+`LegacyTokenPresent` is `true`; stop ordinary preview/provision and follow
+[Migrate an existing deployment](#migrate-an-existing-deployment).
 
 ### Stage 5: reconcile Microsoft Entra and preview Azure changes
 
@@ -1265,6 +1377,31 @@ azd provision \
   --location "$AZURE_LOCATION" \
   --no-prompt
 
+python scripts/manage_slack_token.py status \
+  --environment-name "$AZURE_ENV_NAME" --json
+```
+
+Immediately after infrastructure provisioning and before token transfer, the
+structured result must have this shape:
+
+```json
+{
+  "Environment": "<environment-name>",
+  "KeyVaultName": "<key-vault-name>",
+  "SecretVersion": "",
+  "LatestSecretVersion": "",
+  "PreviousSecretVersion": "",
+  "LegacyTokenPresent": false,
+  "MigrationMarkerSet": false,
+  "Bootstrapped": false
+}
+```
+
+Stop unless `KeyVaultName` is nonempty, `Bootstrapped` is `false`, all three
+version fields are empty, and both boolean legacy/migration fields are `false`.
+Then transfer the token:
+
+```bash
 python scripts/manage_slack_token.py bootstrap \
   --environment-name "$AZURE_ENV_NAME"
 ```
@@ -1366,10 +1503,31 @@ Checkpoint: do not deploy application code until all expected values are
 present and the machine checkpoint prints `azure-resources-ready`. Provisioning
 success alone is not enough if the Action Group contract is wrong.
 
-Run `manage_slack_token.py status` again. Acceptance requires no local legacy
-token, an enabled latest Key Vault version, `SERVICE_HEALTH_SECRET_VERSION`
-empty, the versionless Container Apps reference, and no temporary firewall,
-RBAC, lock, or journal residue.
+Run `manage_slack_token.py status` again. A first successful bootstrap has this
+structured shape:
+
+```json
+{
+  "Environment": "<environment-name>",
+  "KeyVaultName": "<key-vault-name>",
+  "SecretVersion": "",
+  "LatestSecretVersion": "<recorded-latest-version>",
+  "PreviousSecretVersion": "",
+  "LegacyTokenPresent": false,
+  "MigrationMarkerSet": true,
+  "Bootstrapped": true
+}
+```
+
+Acceptance requires a nonempty `KeyVaultName` and `LatestSecretVersion`, an
+empty `SecretVersion` emergency pin, no local legacy token, and
+`Bootstrapped` and `MigrationMarkerSet` both `true`. `PreviousSecretVersion` is
+empty after the first bootstrap and can become nonempty after rotation.
+`status` emits only these nonsecret fields; it does not report the live enabled
+state of the Key Vault version, the rendered Container Apps secret reference,
+or temporary firewall, RBAC, lock, and journal state. The bootstrap command's
+acceptance checks must succeed and exit `0`; do not infer those additional
+conditions from this JSON.
 
 Recovery:
 

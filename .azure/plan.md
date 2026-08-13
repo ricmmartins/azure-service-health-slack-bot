@@ -602,3 +602,30 @@ while preserving the bot Secure Webhook boundary and separate destructive
 approval for operations-receiver decommission. The capacity procedure now
 requires two Storage accounts. Documentation contract tests bind these commands
 and the documented Storage increment to the transitive Bicep resource graph.
+
+### Additive clean-room documentation acceptance for `a8d1dc2`
+
+Two further documentation-only defects were reproduced without mutating Azure,
+Entra, Slack, AZD environments, or deployed resources:
+
+- Azure CLI-managed Bicep `0.41.2` emitted `BCP129` for the current templates.
+  After the local Azure CLI-managed tool was upgraded, `0.46.1` built and linted
+  both `infra/main.bicep` and
+  `infra/day2/service-health-alert-scope.bicep`. A standalone `bicep` binary is
+  a separate installation and cannot prove the version used by `az bicep`.
+- The README described the pre-infrastructure lifecycle checkpoint as
+  `InfrastructureOnly`, but `manage_slack_token.py status --json` has no named
+  state field. Its actual pre-infrastructure contract is `Bootstrapped: false`,
+  `KeyVaultName: null`, and empty secret-version fields. After infrastructure,
+  the vault name becomes nonempty while the version fields remain empty until
+  bootstrap.
+
+The Stage 0 procedure now verifies the Azure CLI self-contained Bicep source and
+tested minimum, upgrades only an installed stale version, rechecks the result,
+and fails closed when install, upgrade, network, parsing, or minimum-version
+validation fails. It reports any standalone binary separately. Lifecycle
+checkpoints now show complete JSON examples before infrastructure, after
+infrastructure, and after first bootstrap, without claiming that `status`
+reports cleanup fields it does not emit. Regression tests bind the README to the
+Stage 0 fail-closed flow and to the literal status return schema in
+`scripts/manage_slack_token.py`. The proof above remains unchanged.

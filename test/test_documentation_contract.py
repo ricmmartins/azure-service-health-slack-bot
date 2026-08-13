@@ -1,3 +1,5 @@
+import ast
+import json
 import re
 from pathlib import Path
 
@@ -35,6 +37,141 @@ def normalized_shell(section: str) -> str:
     shell = fenced_bash(section)
     shell = re.sub(r"\\\n\s*", " ", shell)
     return re.sub(r"\s+", " ", shell)
+
+
+def fenced_json_after(section: str, marker: str) -> dict[str, object]:
+    tail = section[section.index(marker) + len(marker):]
+    match = re.search(r"```json\n(.*?)```", tail, re.DOTALL)
+    assert match is not None
+    return json.loads(match.group(1))
+
+
+def status_json_schema() -> set[str]:
+    module = ast.parse(read("scripts/manage_slack_token.py"))
+    manager = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.ClassDef) and node.name == "SlackTokenManager"
+    )
+    status = next(
+        node
+        for node in manager.body
+        if isinstance(node, ast.FunctionDef) and node.name == "status"
+    )
+    returns = [
+        node
+        for node in ast.walk(status)
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict)
+    ]
+    assert len(returns) == 1
+    return {
+        key.value
+        for key in returns[0].value.keys
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    }
+
+
+def test_stage0_requires_and_rechecks_azure_cli_managed_bicep():
+    stage = markdown_section(read("README.md"), "Stage 0: verify the workstation")
+    shell = normalized_shell(stage)
+
+    assert 'MIN_AZ_BICEP_VERSION="0.46.1"' in shell
+    assert "version_at_least()" in shell
+    assert (
+        "az config get bicep.use_binary_from_path --query value -o tsv"
+        in shell
+    )
+    assert '"${AZ_BICEP_PATH_MODE,,}" != "false"' in shell
+    assert shell.count("AZ_BICEP_VERSION_OUTPUT=\"$(az bicep version 2>&1)\"") >= 3
+    assert "if ! az bicep install" in shell
+    assert "if ! az bicep upgrade" in shell
+    assert shell.count(
+        'version_at_least "$AZ_BICEP_VERSION" "$MIN_AZ_BICEP_VERSION"'
+    ) == 2
+    assert shell.index("if ! az bicep upgrade") < shell.rindex(
+        "AZ_BICEP_VERSION_OUTPUT=\"$(az bicep version 2>&1)\""
+    )
+    assert "command -v bicep" in shell
+    assert "bicep --version" in shell
+    assert (
+        "The standalone binary does not satisfy the az bicep requirement."
+        in shell
+    )
+    for failure in (
+        "installation failed; stop.",
+        "upgrade failed; stop.",
+        "could not be rechecked after upgrade.",
+        "still below the required version.",
+    ):
+        assert failure in shell
+
+
+def test_lifecycle_checkpoint_examples_match_status_json_schema():
+    readme = read("README.md")
+    stage4 = markdown_section(readme, "Stage 4: load nonsecret inputs")
+    stage6 = markdown_section(
+        readme,
+        "Stage 6: provision infrastructure and transfer the Slack token",
+    )
+    schema = status_json_schema()
+    assert schema == {
+        "Environment",
+        "KeyVaultName",
+        "SecretVersion",
+        "LatestSecretVersion",
+        "PreviousSecretVersion",
+        "LegacyTokenPresent",
+        "MigrationMarkerSet",
+        "Bootstrapped",
+    }
+
+    before = fenced_json_after(
+        stage4,
+        "For a new environment before infrastructure exists",
+    )
+    after_infrastructure = fenced_json_after(
+        stage6,
+        "Immediately after infrastructure provisioning and before token transfer",
+    )
+    after_bootstrap = fenced_json_after(
+        stage6,
+        "A first successful bootstrap has this",
+    )
+    assert set(before) == schema
+    assert set(after_infrastructure) == schema
+    assert set(after_bootstrap) == schema
+
+    assert before == {
+        "Environment": "<environment-name>",
+        "KeyVaultName": None,
+        "SecretVersion": "",
+        "LatestSecretVersion": "",
+        "PreviousSecretVersion": "",
+        "LegacyTokenPresent": False,
+        "MigrationMarkerSet": False,
+        "Bootstrapped": False,
+    }
+    assert after_infrastructure["KeyVaultName"] == "<key-vault-name>"
+    assert after_infrastructure["Bootstrapped"] is False
+    assert all(
+        after_infrastructure[field] == ""
+        for field in (
+            "SecretVersion",
+            "LatestSecretVersion",
+            "PreviousSecretVersion",
+        )
+    )
+    assert after_bootstrap["KeyVaultName"] == "<key-vault-name>"
+    assert after_bootstrap["SecretVersion"] == ""
+    assert (
+        after_bootstrap["LatestSecretVersion"]
+        == "<recorded-latest-version>"
+    )
+    assert after_bootstrap["PreviousSecretVersion"] == ""
+    assert after_bootstrap["LegacyTokenPresent"] is False
+    assert after_bootstrap["MigrationMarkerSet"] is True
+    assert after_bootstrap["Bootstrapped"] is True
+    assert "`InfrastructureOnly` is the expected" not in stage4
 
 
 def central_bicep_instances(
