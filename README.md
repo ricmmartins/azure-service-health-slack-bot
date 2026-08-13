@@ -23,8 +23,9 @@ requests, receive Slack events, or replace an incident management system.
 ## Architecture
 
 The deployment uses Azure Container Apps, Azure Container Registry, a
-user-assigned managed identity, Key Vault, Azure Table Storage, Log Analytics,
-and workspace-based Application Insights.
+user-assigned managed identity, Key Vault, an application Azure Table Storage
+account, an isolated Blob Storage operation lock, Log Analytics, and
+workspace-based Application Insights.
 
 Azure Monitor matches Service Health events in a subscription Activity Log and
 sends the Common Alert Schema payload to the public Container Apps endpoint.
@@ -53,7 +54,8 @@ Group, and private DNS zones use the Azure `Global` location.
 | Activity Log Alert | Matches `category = ServiceHealth` for one subscription. |
 | User-assigned managed identity | Pulls the image and accesses Key Vault and Table Storage without application credentials. |
 | Key Vault | Stores the Slack bot token and exposes the latest enabled version to Container Apps through a versionless reference. |
-| Storage account and table | Stores incident state, Slack timestamps, ETags, and processing leases. |
+| Application Storage account and table | Stores incident state, Slack timestamps, ETags, and processing leases. |
+| Isolated operation-lock Storage account and blob container | Serializes deployment and day-2 operations without mixing lock metadata with application data. |
 | Private endpoints and DNS zones | Provide private Key Vault and Table Storage data paths. |
 | Container Registry | Stores the application image. Registry admin access and anonymous pull are disabled. |
 | Application Insights and Log Analytics | Receive application telemetry, Container Apps logs, and Key Vault/Table diagnostics. |
@@ -174,7 +176,7 @@ managed identity:
 |---|---|---|
 | Container Registry | `AcrPull` | Pull the application image. |
 | Key Vault | `Key Vault Secrets User` | Resolve the Slack token reference. |
-| Storage account | `Storage Table Data Contributor` | Read and write incident entities. |
+| Application Storage account | `Storage Table Data Contributor` | Read and write incident entities. |
 
 The application uses `ManagedIdentityCredential` with `AZURE_CLIENT_ID` in
 production and staging. It uses `DefaultAzureCredential` for local development.
@@ -442,13 +444,15 @@ directory change:
 
 ```bash
 if ! (
-  test "$(az account show --query tenantId -o tsv)" = "$TARGET_TENANT_ID" &&
-  test "$(az account show --query id -o tsv)" = "$TARGET_SUBSCRIPTION_ID" &&
+  test "$(az account show --query tenantId -o tsv | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_TENANT_ID,,}" &&
+  test "$(az account show --query id -o tsv | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_SUBSCRIPTION_ID,,}" &&
   test "$(azd env get-value AZURE_ENV_NAME \
     -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_ENV_NAME" &&
   test "$(azd env get-value AZURE_SUBSCRIPTION_ID \
-    -e "$AZURE_ENV_NAME" --no-prompt)" = \
-    "$TARGET_SUBSCRIPTION_ID" &&
+    -e "$AZURE_ENV_NAME" --no-prompt | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_SUBSCRIPTION_ID,,}" &&
   test "$(azd env get-value AZURE_LOCATION \
     -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_LOCATION"
 ); then
@@ -538,7 +542,7 @@ PY
 check_capacity Microsoft.App 2024-03-01 \
   ManagedEnvironmentCount 1 &&
 check_capacity Microsoft.Storage 2024-01-01 \
-  StorageAccounts 1 &&
+  StorageAccounts 2 &&
 check_capacity Microsoft.Network 2024-05-01 \
   VirtualNetworks 1 &&
 check_capacity Microsoft.Network 2024-05-01 \
@@ -548,8 +552,11 @@ echo "deployment-capacity-ready"
 
 Proceed only when all four usage rows print and the final line is
 `deployment-capacity-ready`. This is a minimum check for the quota-governed
-resources created by the current template; it is not a guarantee that Azure
-has transient regional capacity for every resource at deployment time.
+resources created by the current template: one application Storage account and
+one isolated operation-lock Storage account, one virtual network, two private
+endpoints, and one Container Apps managed environment. It is not a guarantee
+that Azure has transient regional capacity for every resource at deployment
+time.
 
 List policy assignments visible from the target subscription boundary,
 including inherited and child-scope assignments:
@@ -704,6 +711,335 @@ Prerequisites:
 - the validated routing file from stage 3 exists;
 - `requirements-ops.txt` is installed in the active virtual environment.
 
+Production also requires an independent operations Action Group. Prefer a
+dedicated operations resource group that has its own lifecycle and owners. It
+must not be the bot Secure Webhook Action Group
+`ag-${AZURE_ENV_NAME}-service-health`, because that path is one of the
+components the operations alerts must monitor.
+
+The minimum new-adopter receiver below is an approved on-call email mailbox.
+Replace every placeholder in the current shell only. Use a role mailbox rather
+than a personal address when policy permits, do not enable shell tracing, and
+do not paste the real address into the repository or shared command output:
+
+```bash
+export OPERATIONS_RESOURCE_GROUP="<separate-operations-resource-group>"
+export OPERATIONS_LOCATION="<azure-region>"
+export OPERATIONS_ACTION_GROUP_NAME="<operations-action-group-name>"
+export OPERATIONS_ACTION_GROUP_SHORT_NAME="<short-display-name>"
+export OPERATIONS_EMAIL_ADDRESS="<approved-on-call-email-address>"
+readonly OPERATIONS_EMAIL_RECEIVER_NAME="primary-on-call-email"
+
+export OPERATIONS_PRIMARY_OWNER="<primary-owner-role-or-alias>"
+export OPERATIONS_BACKUP_OWNER="<different-backup-owner-role-or-alias>"
+export OPERATIONS_ON_CALL_DESTINATION="email-receiver:primary-on-call-email"
+export OPERATIONS_RUNBOOK_URI="https://<approved-runbook>"
+```
+
+Fail closed before creating anything. The selected AZD environment, its
+explicit name, Azure CLI tenant/subscription, and the proposed independent
+resource group must all match the intended target:
+
+```bash
+: "${AZURE_ENV_NAME:?Set the explicit AZD environment name from stage 1.}"
+: "${TARGET_TENANT_ID:?Set the target tenant from stage 1.}"
+: "${TARGET_SUBSCRIPTION_ID:?Set the target subscription from stage 1.}"
+: "${OPERATIONS_RESOURCE_GROUP:?Set a separate operations resource group.}"
+: "${OPERATIONS_LOCATION:?Set the operations resource-group region.}"
+: "${OPERATIONS_ACTION_GROUP_NAME:?Set the operations Action Group name.}"
+: "${OPERATIONS_ACTION_GROUP_SHORT_NAME:?Set the short display name.}"
+: "${OPERATIONS_EMAIL_ADDRESS:?Set the approved receiver address.}"
+: "${OPERATIONS_PRIMARY_OWNER:?Set the primary owner evidence.}"
+: "${OPERATIONS_BACKUP_OWNER:?Set the backup owner evidence.}"
+: "${OPERATIONS_ON_CALL_DESTINATION:?Set the on-call receiver alias.}"
+: "${OPERATIONS_RUNBOOK_URI:?Set the HTTPS runbook URI.}"
+
+if [[ "$OPERATIONS_RESOURCE_GROUP" == *'<'* ||
+      "$OPERATIONS_LOCATION" == *'<'* ||
+      "$OPERATIONS_ACTION_GROUP_NAME" == *'<'* ||
+      "$OPERATIONS_ACTION_GROUP_SHORT_NAME" == *'<'* ||
+      "$OPERATIONS_EMAIL_ADDRESS" == *'<'* ||
+      "$OPERATIONS_PRIMARY_OWNER" == *'<'* ||
+      "$OPERATIONS_BACKUP_OWNER" == *'<'* ||
+      "$OPERATIONS_RUNBOOK_URI" == *'<'* ]]; then
+  echo "Replace every operations placeholder before continuing." >&2
+  exit 1
+fi
+if ! (
+  [[ "$OPERATIONS_RESOURCE_GROUP" =~ ^[A-Za-z0-9._-]+$ ]] &&
+  [[ "$OPERATIONS_ACTION_GROUP_NAME" =~ ^[A-Za-z0-9._-]+$ ]] &&
+  [[ "$OPERATIONS_ACTION_GROUP_SHORT_NAME" =~ ^[A-Za-z0-9_-]{1,12}$ ]]
+); then
+  echo "Operations resource names contain unsupported characters or length." >&2
+  exit 1
+fi
+
+SELECTED_AZD_ENV_NAME="$(
+  azd env get-value AZURE_ENV_NAME --no-prompt
+)"
+BOT_RESOURCE_GROUP="rg-$AZURE_ENV_NAME"
+if ! (
+  test "$(az account show --query tenantId -o tsv | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_TENANT_ID,,}" &&
+  test "$(az account show --query id -o tsv | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_SUBSCRIPTION_ID,,}" &&
+  test "$SELECTED_AZD_ENV_NAME" = "$AZURE_ENV_NAME" &&
+  test "$(azd env get-value AZURE_ENV_NAME \
+    -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_ENV_NAME" &&
+  test "${OPERATIONS_RESOURCE_GROUP,,}" != "${BOT_RESOURCE_GROUP,,}" &&
+  test "$OPERATIONS_PRIMARY_OWNER" != "$OPERATIONS_BACKUP_OWNER" &&
+  [[ "$OPERATIONS_RUNBOOK_URI" == https://* ]]
+); then
+  echo "Independent operations target confirmation failed." >&2
+  exit 1
+fi
+echo "operations-action-group-target-confirmed"
+```
+
+Stop unless the final line is
+`operations-action-group-target-confirmed`. Reusing the central bot resource
+group is rejected so a later bot decommission does not silently remove the
+independent receiver. An existing operations resource group is acceptable, but
+the Action Group name must be new; this procedure refuses to overwrite an
+existing receiver configuration. Hold an exclusive approved change window for
+this exact resource group and Action Group name until post-create verification
+finishes:
+
+```bash
+if ! OPERATIONS_GROUP_EXISTS="$(
+  az group exists \
+    --name "$OPERATIONS_RESOURCE_GROUP" \
+    --subscription "$TARGET_SUBSCRIPTION_ID"
+)"; then
+  echo "Could not verify the operations resource group." >&2
+  exit 1
+fi
+case "$OPERATIONS_GROUP_EXISTS" in
+  true)
+    ;;
+  false)
+    az group create \
+      --name "$OPERATIONS_RESOURCE_GROUP" \
+      --location "$OPERATIONS_LOCATION" \
+      --subscription "$TARGET_SUBSCRIPTION_ID" \
+      --only-show-errors \
+      --output none
+    ;;
+  *)
+    echo "Unexpected resource-group existence result." >&2
+    exit 1
+    ;;
+esac
+
+if ! EXISTING_OPERATIONS_ACTION_GROUPS_JSON="$(
+  az monitor action-group list \
+    --resource-group "$OPERATIONS_RESOURCE_GROUP" \
+    --subscription "$TARGET_SUBSCRIPTION_ID" \
+    --only-show-errors \
+    -o json
+)"; then
+  echo "Could not inspect existing operations Action Groups." >&2
+  exit 1
+fi
+if ! EXISTING_OPERATIONS_ACTION_GROUPS_JSON="$EXISTING_OPERATIONS_ACTION_GROUPS_JSON" \
+    OPERATIONS_ACTION_GROUP_NAME="$OPERATIONS_ACTION_GROUP_NAME" \
+    python3 - <<'PY'
+import json
+import os
+
+expected = os.environ["OPERATIONS_ACTION_GROUP_NAME"].casefold()
+groups = json.loads(os.environ["EXISTING_OPERATIONS_ACTION_GROUPS_JSON"])
+raise SystemExit(
+    1 if any(str(group.get("name", "")).casefold() == expected
+             for group in groups) else 0
+)
+PY
+then
+  echo "Action Group already exists; inspect it and choose a new name." >&2
+  exit 1
+fi
+
+az monitor action-group create \
+  --resource-group "$OPERATIONS_RESOURCE_GROUP" \
+  --name "$OPERATIONS_ACTION_GROUP_NAME" \
+  --short-name "$OPERATIONS_ACTION_GROUP_SHORT_NAME" \
+  --subscription "$TARGET_SUBSCRIPTION_ID" \
+  --location Global \
+  --enabled true \
+  --action email "$OPERATIONS_EMAIL_RECEIVER_NAME" \
+    "$OPERATIONS_EMAIL_ADDRESS" usecommonalertschema \
+  --only-show-errors \
+  --output none
+
+OPERATIONS_ACTION_GROUP_ID="$(
+  az monitor action-group show \
+    --resource-group "$OPERATIONS_RESOURCE_GROUP" \
+    --name "$OPERATIONS_ACTION_GROUP_NAME" \
+    --subscription "$TARGET_SUBSCRIPTION_ID" \
+    --query id -o tsv
+)"
+BOT_ACTION_GROUP_ID="/subscriptions/$TARGET_SUBSCRIPTION_ID/resourceGroups/rg-$AZURE_ENV_NAME/providers/Microsoft.Insights/actionGroups/ag-$AZURE_ENV_NAME-service-health"
+
+verify_operations_action_group() {
+  local action_group_json
+  if ! action_group_json="$(
+    az monitor action-group show \
+    --resource-group "$OPERATIONS_RESOURCE_GROUP" \
+    --name "$OPERATIONS_ACTION_GROUP_NAME" \
+    --subscription "$TARGET_SUBSCRIPTION_ID" \
+    --only-show-errors \
+    -o json
+  )"; then
+    return 1
+  fi
+  ACTION_GROUP_JSON="$action_group_json" \
+  EXPECTED_ACTION_GROUP_ID="$OPERATIONS_ACTION_GROUP_ID" \
+  EXPECTED_EMAIL_ADDRESS="$OPERATIONS_EMAIL_ADDRESS" \
+  EXPECTED_EMAIL_RECEIVER_NAME="$OPERATIONS_EMAIL_RECEIVER_NAME" \
+  python3 - <<'PY'
+import json
+import os
+
+data = json.loads(os.environ["ACTION_GROUP_JSON"])
+receivers = data.get("emailReceivers") or []
+other_receiver_keys = (
+    "armRoleReceivers",
+    "automationRunbookReceivers",
+    "azureAppPushReceivers",
+    "azureFunctionReceivers",
+    "eventHubReceivers",
+    "incidentReceivers",
+    "itsmReceivers",
+    "logicAppReceivers",
+    "smsReceivers",
+    "voiceReceivers",
+    "webhookReceivers",
+)
+valid_receivers = [
+    receiver for receiver in receivers
+    if str(receiver.get("name", "")).casefold()
+       == os.environ["EXPECTED_EMAIL_RECEIVER_NAME"].casefold()
+    and str(receiver.get("emailAddress", "")).casefold()
+       == os.environ["EXPECTED_EMAIL_ADDRESS"].casefold()
+    and receiver.get("useCommonAlertSchema") is True
+]
+valid = (
+    str(data.get("id", "")).casefold()
+    == os.environ["EXPECTED_ACTION_GROUP_ID"].casefold()
+    and str(data.get("location", "")).casefold() == "global"
+    and data.get("enabled") is True
+    and len(receivers) == 1
+    and len(valid_receivers) == 1
+    and all(not (data.get(key) or []) for key in other_receiver_keys)
+)
+raise SystemExit(0 if valid else 1)
+PY
+}
+
+if ! (
+  test -n "$OPERATIONS_ACTION_GROUP_ID" &&
+  test "${OPERATIONS_ACTION_GROUP_ID,,}" != "${BOT_ACTION_GROUP_ID,,}" &&
+  verify_operations_action_group
+); then
+  echo "Independent operations Action Group verification failed." >&2
+  exit 1
+fi
+echo "operations-action-group-created"
+```
+
+Azure sends a one-time-passcode request for a new email receiver. Microsoft
+documents that an unverified receiver cannot receive alerts or test
+notifications after enforcement is active. Have the receiver owner complete
+that verification, then send a real Action Group test to the configured
+receiver. The CLI requires the receiver definition even though the saved Action
+Group already contains it:
+
+```bash
+if ! az monitor action-group test-notifications create \
+    --resource-group "$OPERATIONS_RESOURCE_GROUP" \
+    --action-group-name "$OPERATIONS_ACTION_GROUP_NAME" \
+    --subscription "$TARGET_SUBSCRIPTION_ID" \
+    --alert-type servicehealth \
+    --add-action email "$OPERATIONS_EMAIL_RECEIVER_NAME" \
+      "$OPERATIONS_EMAIL_ADDRESS" usecommonalertschema \
+    --only-show-errors \
+    --output none; then
+  echo "Operations receiver test failed; do not record readiness evidence." >&2
+  exit 1
+fi
+OPERATIONS_RECEIVER_TEST_SENT_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+read -r -p \
+  "Type RECEIVED only after the intended on-call receiver confirms the test: " \
+  OPERATIONS_RECEIVER_CONFIRMATION
+if [[ "$OPERATIONS_RECEIVER_CONFIRMATION" != "RECEIVED" ]]; then
+  echo "Receiver delivery is unconfirmed; production readiness is blocked." >&2
+  exit 1
+fi
+if ! verify_operations_action_group; then
+  echo "Saved receiver changed or failed verification after the test." >&2
+  exit 1
+fi
+
+OPERATIONS_RECEIVER_TESTED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+if ! OPERATIONS_RECEIVER_TEST_SENT_AT="$OPERATIONS_RECEIVER_TEST_SENT_AT" \
+    OPERATIONS_RECEIVER_TESTED_AT="$OPERATIONS_RECEIVER_TESTED_AT" \
+    python3 - <<'PY'
+import os
+from datetime import datetime
+
+sent = datetime.fromisoformat(
+    os.environ["OPERATIONS_RECEIVER_TEST_SENT_AT"].replace("Z", "+00:00")
+)
+confirmed = datetime.fromisoformat(
+    os.environ["OPERATIONS_RECEIVER_TESTED_AT"].replace("Z", "+00:00")
+)
+elapsed = (confirmed - sent).total_seconds()
+raise SystemExit(0 if 0 <= elapsed <= 900 else 1)
+PY
+then
+  echo "Receiver confirmation exceeded 15 minutes; run a fresh test." >&2
+  exit 1
+fi
+OPERATIONS_RECEIVER_TEST_EVIDENCE="$(
+  OPERATIONS_ACTION_GROUP_ID="$OPERATIONS_ACTION_GROUP_ID" \
+  OPERATIONS_RECEIVER_TESTED_AT="$OPERATIONS_RECEIVER_TESTED_AT" \
+  python3 - <<'PY'
+import json
+import os
+
+print(json.dumps({
+    "status": "Succeeded",
+    "testedAt": os.environ["OPERATIONS_RECEIVER_TESTED_AT"],
+    "actionGroupId": os.environ["OPERATIONS_ACTION_GROUP_ID"],
+}, separators=(",", ":")))
+PY
+)"
+```
+
+This synthetic test proves that Azure Monitor dispatched the selected sample
+through this Action Group and that the intended receiver observed it. It does
+not prove that the bot, Slack, application alerts, or a real Azure incident work
+end to end. Keep the successful CLI result, UTC confirmation timestamp, receiver
+alias, owners, and runbook in the approved operational record; do not store the
+mailbox address in repository defaults.
+
+Email is the minimum procedure, not the only supported receiver. Azure Monitor
+also supports SMS, voice, Azure app push, ARM-role email, Logic Apps, Azure
+Functions, ITSM, and webhooks subject to receiver-specific prerequisites and
+regional/service limits. Use an independently operated destination, enable
+Common Alert Schema separately on each receiver type that supports it, and
+perform an actual delivery test for every receiver relied on for on-call
+coverage.
+
+If the receiver does not observe the test, do not create evidence. Verify email
+OTP status, the documented Azure Monitor sender allowlist, spam filtering,
+receiver configuration, and Action Group enabled state; save any correction,
+then rerun one test. Do not retry in a tight loop because Action Group tests are
+rate limited. Evidence must describe the configured Action Group, must not be future-dated,
+must follow the test by no more than 15 minutes, and must be refreshed after
+receiver changes and at least every 90 days.
+
 Load only routing and operational settings into AZD:
 
 ```bash
@@ -720,23 +1056,28 @@ azd env set SERVICE_HEALTH_BASELINE_ALERT_ENABLED false \
   -e "$AZURE_ENV_NAME" --no-prompt
 azd env set SERVICE_HEALTH_SECRET_VERSION "" \
   -e "$AZURE_ENV_NAME" --no-prompt
-azd env set SERVICE_HEALTH_OPERATIONS_ACTION_GROUP_ID \
-  "<independent-operations-action-group-resource-id>" \
-  -e "$AZURE_ENV_NAME" --no-prompt
 ```
 
 For production, set `SERVICE_HEALTH_ENVIRONMENT_CLASS=production` and configure
-all readiness metadata before bootstrap can enable the workload:
+all readiness metadata from the confirmed test before bootstrap can enable the
+workload:
 
 ```bash
 azd env set SERVICE_HEALTH_ENVIRONMENT_CLASS production -e "$AZURE_ENV_NAME" --no-prompt
-azd env set SERVICE_HEALTH_OPERATIONS_PRIMARY_OWNER "<primary-owner>" -e "$AZURE_ENV_NAME" --no-prompt
-azd env set SERVICE_HEALTH_OPERATIONS_BACKUP_OWNER "<different-backup-owner>" -e "$AZURE_ENV_NAME" --no-prompt
-azd env set SERVICE_HEALTH_OPERATIONS_ON_CALL_DESTINATION "<independent-on-call-destination>" -e "$AZURE_ENV_NAME" --no-prompt
-azd env set SERVICE_HEALTH_OPERATIONS_RUNBOOK_URI "https://<approved-runbook>" -e "$AZURE_ENV_NAME" --no-prompt
+azd env set SERVICE_HEALTH_OPERATIONS_ACTION_GROUP_ID \
+  "$OPERATIONS_ACTION_GROUP_ID" -e "$AZURE_ENV_NAME" --no-prompt
+azd env set SERVICE_HEALTH_OPERATIONS_PRIMARY_OWNER \
+  "$OPERATIONS_PRIMARY_OWNER" -e "$AZURE_ENV_NAME" --no-prompt
+azd env set SERVICE_HEALTH_OPERATIONS_BACKUP_OWNER \
+  "$OPERATIONS_BACKUP_OWNER" -e "$AZURE_ENV_NAME" --no-prompt
+azd env set SERVICE_HEALTH_OPERATIONS_ON_CALL_DESTINATION \
+  "$OPERATIONS_ON_CALL_DESTINATION" -e "$AZURE_ENV_NAME" --no-prompt
+azd env set SERVICE_HEALTH_OPERATIONS_RUNBOOK_URI \
+  "$OPERATIONS_RUNBOOK_URI" -e "$AZURE_ENV_NAME" --no-prompt
 azd env set SERVICE_HEALTH_OPERATIONS_RECEIVER_TEST_EVIDENCE \
-  '{"status":"Succeeded","testedAt":"<UTC-ISO-8601>","actionGroupId":"<independent-operations-action-group-resource-id>"}' \
-  -e "$AZURE_ENV_NAME" --no-prompt
+  "$OPERATIONS_RECEIVER_TEST_EVIDENCE" -e "$AZURE_ENV_NAME" --no-prompt
+
+unset OPERATIONS_EMAIL_ADDRESS OPERATIONS_RECEIVER_CONFIRMATION
 ```
 
 Record receiver evidence only after a real test reaches the independent
@@ -782,13 +1123,15 @@ reselect the AZD environment before running it:
 az account set --subscription "$TARGET_SUBSCRIPTION_ID"
 azd env select "$AZURE_ENV_NAME" --no-prompt
 if ! (
-  test "$(az account show --query tenantId -o tsv)" = "$TARGET_TENANT_ID" &&
-  test "$(az account show --query id -o tsv)" = "$TARGET_SUBSCRIPTION_ID" &&
+  test "$(az account show --query tenantId -o tsv | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_TENANT_ID,,}" &&
+  test "$(az account show --query id -o tsv | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_SUBSCRIPTION_ID,,}" &&
   test "$(azd env get-value AZURE_ENV_NAME \
     -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_ENV_NAME" &&
   test "$(azd env get-value AZURE_SUBSCRIPTION_ID \
-    -e "$AZURE_ENV_NAME" --no-prompt)" = \
-    "$TARGET_SUBSCRIPTION_ID" &&
+    -e "$AZURE_ENV_NAME" --no-prompt | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_SUBSCRIPTION_ID,,}" &&
   test "$(azd env get-value AZURE_LOCATION \
     -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_LOCATION"
 ); then
@@ -827,26 +1170,45 @@ echo "entra-hook-ready"
 Preview the Azure Resource Manager changes:
 
 ```bash
-test "$AZURE_ENV_NAME" = "service-health-mgmt-test" || {
-  echo "This reviewed command is only for service-health-mgmt-test." >&2
+: "${AZURE_ENV_NAME:?Set the explicit AZD environment name from stage 1.}"
+SELECTED_AZD_ENV_NAME="$(
+  azd env get-value AZURE_ENV_NAME --no-prompt
+)"
+if ! (
+  test "$SELECTED_AZD_ENV_NAME" = "$AZURE_ENV_NAME" &&
+  test "$(azd env get-value AZURE_ENV_NAME \
+    -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_ENV_NAME"
+); then
+  echo "Selected AZD environment does not match AZURE_ENV_NAME." >&2
   exit 1
-}
-if ! SERVICE_HEALTH_READ_ONLY_PREVIEW=true azd hooks run preprovision --no-prompt --environment service-health-mgmt-test; then
+fi
+echo "preview-environment-confirmed"
+
+if ! SERVICE_HEALTH_READ_ONLY_PREVIEW=true \
+    azd hooks run preprovision \
+      --no-prompt \
+      --environment "$AZURE_ENV_NAME"; then
   echo "Read-only hook validation failed; preview is blocked." >&2
   exit 1
 fi
-SERVICE_HEALTH_READ_ONLY_PREVIEW=true azd provision --preview --no-prompt --environment service-health-mgmt-test
+SERVICE_HEALTH_READ_ONLY_PREVIEW=true \
+  azd provision \
+    --preview \
+    --no-prompt \
+    --subscription "$TARGET_SUBSCRIPTION_ID" \
+    --location "$AZURE_LOCATION" \
+    --environment "$AZURE_ENV_NAME"
 ```
 
-This literal command is the approved validation path for the designated
-`service-health-mgmt-test` migration target; do not reuse it to preview one
-environment before provisioning another.
+This procedure requires the adopter to name the current environment explicitly
+and proves that the selected AZD environment is the same environment before
+either command runs. Never preview one environment before provisioning another.
 
 The explicit hook command guarantees the validation runs even on an AZD version
 that does not invoke lifecycle hooks for preview. The same opt-in on the exact
 preview command guarantees any preview-triggered hook invocation remains
-nonmutating. The hook reads only the exact
-`.azure/service-health-mgmt-test/.env` file, refuses any Slack-token entry,
+nonmutating. The hook reads only
+`.azure/$AZURE_ENV_NAME/.env`, refuses any Slack-token entry,
 validates the persisted nonsecret deployment and Secure Webhook identifiers,
 and permits only `az account show` to confirm the exact tenant and subscription.
 It exits before AZD environment writes, Microsoft Graph changes, ARM/RBAC,
@@ -908,8 +1270,9 @@ python scripts/manage_slack_token.py bootstrap \
 ```
 
 The first command creates only the network, private endpoints, Log Analytics,
-Application Insights, Key Vault, Storage account/table, registry, and managed
-identity. The bootstrap command then:
+Application Insights, Key Vault, application Storage account/table, isolated
+operation-lock Storage account/container, registry, and managed identity. The
+bootstrap command then:
 
 1. validates the selected environment, then collects the hidden `xoxb-`
    credential and explicit operator IPv4 before holding the distributed lock;
@@ -1203,8 +1566,10 @@ TARGET_SUBSCRIPTION_ID="$(
 )"
 az account set --subscription "$TARGET_SUBSCRIPTION_ID"
 if ! (
-  test "$(az account show --query tenantId -o tsv)" = "$TARGET_TENANT_ID" &&
-  test "$(az account show --query id -o tsv)" = "$TARGET_SUBSCRIPTION_ID" &&
+  test "$(az account show --query tenantId -o tsv | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_TENANT_ID,,}" &&
+  test "$(az account show --query id -o tsv | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_SUBSCRIPTION_ID,,}" &&
   test "$(azd env get-value AZURE_ENV_NAME \
     -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_ENV_NAME"
 ); then
@@ -1359,8 +1724,10 @@ AZURE_LOCATION="$(
 )"
 az account set --subscription "$TARGET_SUBSCRIPTION_ID"
 if ! (
-  test "$(az account show --query tenantId -o tsv)" = "$TARGET_TENANT_ID" &&
-  test "$(az account show --query id -o tsv)" = "$TARGET_SUBSCRIPTION_ID" &&
+  test "$(az account show --query tenantId -o tsv | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_TENANT_ID,,}" &&
+  test "$(az account show --query id -o tsv | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_SUBSCRIPTION_ID,,}" &&
   test "$(azd env get-value AZURE_ENV_NAME \
     -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_ENV_NAME" &&
   test -n "$AZURE_LOCATION"
@@ -1519,8 +1886,10 @@ RESOURCE_GROUP="$(azd env get-value AZURE_RESOURCE_GROUP \
 APP_NAME="$(azd env get-value SERVICE_APP_NAME \
   -e "$AZURE_ENV_NAME" --no-prompt)"
 if ! (
-  test "$(az account show --query tenantId -o tsv)" = "$TARGET_TENANT_ID" &&
-  test "$(az account show --query id -o tsv)" = "$TARGET_SUBSCRIPTION_ID" &&
+  test "$(az account show --query tenantId -o tsv | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_TENANT_ID,,}" &&
+  test "$(az account show --query id -o tsv | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_SUBSCRIPTION_ID,,}" &&
   test "$(azd env get-value AZURE_ENV_NAME \
     -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_ENV_NAME" &&
   test -n "$RESOURCE_GROUP" &&
@@ -1575,6 +1944,13 @@ receiver. Record these owners, the HTTPS runbook, Action Group resource ID, and
 the successful receiver-test evidence in the approved change record and the
 nonsecret readiness values, not in repository defaults.
 
+The independent operations Action Group is not owned by the bot deployment and
+must not be deleted by the bot decommission procedure. Cleanup or replacement
+requires a separate destructive approval: inventory every alert that references
+its exact resource ID, obtain primary and backup owner approval, preserve on-call
+coverage during migration, verify the replacement receiver, and only then
+remove the old Action Group or its resource group.
+
 Run a signed canary and verify Slack plus Table dependency telemetry weekly.
 Review Slack scopes, app owners, installation, and channel membership quarterly.
 Review dependency pins and container scan results on every release.
@@ -1607,8 +1983,10 @@ DEPLOYMENT_LOCATION="$(azd env get-value AZURE_LOCATION \
 az login --tenant "$TARGET_TENANT_ID"
 az account set --subscription "$TARGET_SUBSCRIPTION_ID"
 if ! (
-  test "$(az account show --query tenantId -o tsv)" = "$TARGET_TENANT_ID" &&
-  test "$(az account show --query id -o tsv)" = "$TARGET_SUBSCRIPTION_ID" &&
+  test "$(az account show --query tenantId -o tsv | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_TENANT_ID,,}" &&
+  test "$(az account show --query id -o tsv | \
+    tr '[:upper:]' '[:lower:]')" = "${TARGET_SUBSCRIPTION_ID,,}" &&
   test "$(azd env get-value AZURE_ENV_NAME \
     -e "$AZURE_ENV_NAME" --no-prompt)" = "$AZURE_ENV_NAME"
 ); then
