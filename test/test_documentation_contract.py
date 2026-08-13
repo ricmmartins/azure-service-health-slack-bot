@@ -1,6 +1,11 @@
+import ast
+import inspect
+import json
 import re
+import textwrap
 from pathlib import Path
 
+from scripts.manage_slack_token import SlackTokenManager
 from scripts.configure_secure_webhook import (
     OPERATIONS_ACTION_GROUP_ENV_NAME,
     OPERATIONS_BACKUP_OWNER_ENV_NAME,
@@ -35,6 +40,34 @@ def normalized_shell(section: str) -> str:
     shell = fenced_bash(section)
     shell = re.sub(r"\\\n\s*", " ", shell)
     return re.sub(r"\s+", " ", shell)
+
+
+def documented_json_contract(markdown: str, name: str) -> dict:
+    match = re.search(
+        rf"<!-- status-contract:{re.escape(name)} -->\s*"
+        r"```json\n(?P<payload>.*?)```",
+        markdown,
+        re.DOTALL,
+    )
+    assert match is not None
+    return json.loads(match.group("payload"))
+
+
+def status_schema_keys() -> set[str]:
+    tree = ast.parse(textwrap.dedent(
+        inspect.getsource(SlackTokenManager.status)
+    ))
+    returns = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict)
+    ]
+    assert len(returns) == 1
+    return {
+        key.value
+        for key in returns[0].keys
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    }
 
 
 def central_bicep_instances(
@@ -84,6 +117,146 @@ def created_resource_count(resource_type: str) -> int:
                 )
             count += 1
     return count
+
+
+def test_stage0_fails_closed_for_stale_azure_cli_managed_bicep():
+    readme = read("README.md")
+    stage = markdown_section(readme, "Stage 0: verify the workstation")
+    shell = normalized_shell(stage)
+    versions = {
+        name: value
+        for name, value in re.findall(
+            r'(BICEP_(?:MIN|TESTED)_VERSION)="(\d+\.\d+\.\d+)"',
+            fenced_bash(stage),
+        )
+    }
+
+    assert versions == {
+        "BICEP_MIN_VERSION": "0.46.1",
+        "BICEP_TESTED_VERSION": "0.46.1",
+    }
+    minimum = tuple(map(int, versions["BICEP_MIN_VERSION"].split(".")))
+    assert tuple(map(int, "0.41.2".split("."))) < minimum
+    assert "az bicep version" in shell
+    assert (
+        "az config get bicep.use_binary_from_path "
+        "--query value -o tsv"
+        in shell
+    )
+    assert (
+        shell.index("az config get bicep.use_binary_from_path")
+        < shell.index("az bicep version")
+    )
+    assert (
+        'test "$(printf \'%s\\n\' "$BICEP_FROM_PATH" | '
+        'tr \'[:upper:]\' \'[:lower:]\')" = "false"'
+        in shell
+    )
+    assert "az config set bicep.use_binary_from_path=false" in stage
+    assert '"$BICEP_VERSION" "$BICEP_MIN_VERSION"' in shell
+    assert "az bicep upgrade" in stage
+    assert "az bicep install --version v0.46.1" in stage
+    assert "standalone" in stage
+    assert "air-gapped" in stage
+    assert "SHA-256" in stage
+    assert "existingContainerApp!.properties" in read(
+        "infra/modules/container-app.bicep"
+    )
+
+    expected_commands = {
+        "az bicep build --file infra/main.bicep",
+        "az bicep lint --file infra/main.bicep",
+        (
+            "az bicep build --file "
+            "infra/day2/service-health-alert-scope.bicep"
+        ),
+        (
+            "az bicep lint --file "
+            "infra/day2/service-health-alert-scope.bicep"
+        ),
+    }
+    workflow = re.sub(r"\s+", " ", read(".github/workflows/ci.yml"))
+    for command in expected_commands:
+        assert command in shell
+        assert command in workflow
+    fail_closed_commands = {
+        (
+            "az bicep build --file infra/main.bicep --stdout > /dev/null "
+            "|| {"
+        ),
+        "az bicep lint --file infra/main.bicep || {",
+        (
+            "az bicep build --file "
+            "infra/day2/service-health-alert-scope.bicep --stdout "
+            "> /dev/null || {"
+        ),
+        (
+            "az bicep lint --file "
+            "infra/day2/service-health-alert-scope.bicep || {"
+        ),
+    }
+    for command in fail_closed_commands:
+        assert command in shell
+
+
+def test_lifecycle_checkpoints_match_status_json_schema_and_invariants():
+    readme = read("README.md")
+    expected_keys = status_schema_keys()
+    pre = documented_json_contract(readme, "pre-infrastructure")
+    post = documented_json_contract(readme, "post-bootstrap")
+
+    assert set(pre) == expected_keys
+    assert set(post) == expected_keys
+    assert pre == {
+        "Environment": "<selected AZD environment>",
+        "KeyVaultName": None,
+        "SecretVersion": "",
+        "LatestSecretVersion": "",
+        "PreviousSecretVersion": "",
+        "LegacyTokenPresent": False,
+        "MigrationMarkerSet": False,
+        "Bootstrapped": False,
+    }
+    assert post == {
+        "Environment": "<selected AZD environment>",
+        "KeyVaultName": "<deployed vault name>",
+        "SecretVersion": "",
+        "LatestSecretVersion": "<enabled version id>",
+        "PreviousSecretVersion": "",
+        "LegacyTokenPresent": False,
+        "MigrationMarkerSet": True,
+        "Bootstrapped": True,
+    }
+    assert "InfrastructureOnly" not in readme
+
+
+def test_bootstrap_has_separate_target_and_environment_uniqueness_gate():
+    stage = markdown_section(
+        read("README.md"),
+        "Stage 6: provision infrastructure and transfer the Slack token",
+    )
+    shell = normalized_shell(stage)
+    bootstrap = (
+        "python scripts/manage_slack_token.py bootstrap "
+        '--environment-name "$AZURE_ENV_NAME"'
+    )
+
+    assert 'az account show --query tenantId -o tsv' in shell
+    assert 'az account show --query id -o tsv' in shell
+    assert "azd env get-value AZURE_TENANT_ID" in shell
+    assert "azd env get-value AZURE_SUBSCRIPTION_ID" in shell
+    assert "azd env get-value AZURE_RESOURCE_GROUP" in shell
+    assert "az account list" in shell
+    assert "state=='Enabled'" in shell
+    assert "tenantId=='$TARGET_TENANT_ID_LC'" in shell
+    assert "--tag workload=azure-service-health-slack-bot" in shell
+    assert "json.load(sys.stdin)" in shell
+    assert 'get("azd-env-name", "")).casefold() == expected' in shell
+    assert "tags.\\\"azd-env-name\\\"" not in shell
+    assert 'test "$NORMALIZED_MATCHES" = "$EXPECTED_MATCH" || {' in shell
+    assert "bootstrap-target-confirmed" in shell
+    assert bootstrap in shell
+    assert shell.index("bootstrap-target-confirmed") < shell.index(bootstrap)
 
 
 def test_stage5_preview_uses_only_the_explicit_selected_environment():
