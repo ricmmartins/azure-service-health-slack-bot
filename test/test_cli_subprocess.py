@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FAKE_CLI = ROOT / "test" / "fake_operational_cli.py"
 SCOPE_CLI = ROOT / "scripts" / "manage_alert_scopes.py"
 SETUP_CLI = ROOT / "scripts" / "configure_secure_webhook.py"
+TOKEN_CLI = ROOT / "scripts" / "manage_slack_token.py"
 AZURE_YAML = ROOT / "azure.yaml"
 
 
@@ -44,6 +45,7 @@ def cli_environment(tmp_path):
     write_shim(shim_directory, "azd")
     state_path = tmp_path / "state.json"
     log_path = tmp_path / "commands.jsonl"
+    (tmp_path / "hook-contract-env.env").write_text("", encoding="utf-8")
     environment = os.environ.copy()
     environment.update(
         {
@@ -64,6 +66,7 @@ def run_cli(arguments, environment):
         capture_output=True,
         text=True,
         check=False,
+        timeout=180,
     )
 
 
@@ -76,7 +79,7 @@ def read_log(path: Path) -> list[dict]:
     ]
 
 
-@pytest.mark.parametrize("script", [SCOPE_CLI, SETUP_CLI])
+@pytest.mark.parametrize("script", [SCOPE_CLI, SETUP_CLI, TOKEN_CLI])
 def test_python_entry_points_help_is_success(script):
     result = run_cli([sys.executable, str(script), "--help"], os.environ.copy())
 

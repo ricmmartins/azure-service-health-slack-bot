@@ -8,8 +8,20 @@
     "location": {
       "value": "${AZURE_LOCATION}"
     },
-    "slackBotToken": {
-      "value": "${SLACK_BOT_TOKEN}"
+    "deployWorkload": {
+      "value": "${SERVICE_HEALTH_DEPLOY_WORKLOAD}"
+    },
+    "appResourceExists": {
+      "value": "${SERVICE_APP_RESOURCE_EXISTS}"
+    },
+    "baselineAlertEnabled": {
+      "value": "${SERVICE_HEALTH_BASELINE_ALERT_ENABLED}"
+    },
+    "slackBotTokenSecretVersion": {
+      "value": "${SERVICE_HEALTH_SECRET_VERSION}"
+    },
+    "operationsActionGroupId": {
+      "value": "${SERVICE_HEALTH_OPERATIONS_ACTION_GROUP_ID}"
     },
     "serviceHealthRoutesJsonB64": {
       "value": "${SERVICE_HEALTH_ROUTES_JSON_B64}"

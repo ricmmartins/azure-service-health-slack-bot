@@ -6,28 +6,38 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
+from urllib.parse import urlparse
 
 try:
     from scripts.manage_alert_scopes import (
         AzureCli,
+        SLACK_TOKEN_ENV_ALIASES,
         ScopeManagerError,
+        assert_no_slack_secret_material,
         as_list,
         member,
+        sanitized_child_environment,
         same_id,
     )
 except ModuleNotFoundError:
     from manage_alert_scopes import (  # type: ignore[no-redef]
         AzureCli,
+        SLACK_TOKEN_ENV_ALIASES,
         ScopeManagerError,
+        assert_no_slack_secret_material,
         as_list,
         member,
+        sanitized_child_environment,
         same_id,
     )
 
@@ -36,6 +46,79 @@ DEFAULT_AZNS_APPLICATION_ID = "461e8683-5575-4561-ac7f-899cc907d62a"
 DEFAULT_ROLE_NAME = "ActionGroupsSecureWebhook"
 GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
 MAX_GRAPH_PAGES = 100
+READ_ONLY_PREVIEW_ENV_NAME = "SERVICE_HEALTH_READ_ONLY_PREVIEW"
+
+# Nonsecret AZD defaults this hook must initialize exactly once (never
+# overwriting an operator- or tool-persisted value). Disabled-first: a
+# brand-new environment must not deploy the workload or the baseline
+# alert until an operator has explicitly bootstrapped or migrated a
+# Slack token.
+NONSECRET_AZD_DEFAULTS = {
+    "SERVICE_HEALTH_DEPLOY_WORKLOAD": "false",
+    "SERVICE_HEALTH_BASELINE_ALERT_ENABLED": "false",
+    "SERVICE_HEALTH_SECRET_VERSION": "",
+    "SERVICE_HEALTH_SECRET_LATEST_VERSION": "",
+    "SERVICE_HEALTH_OPERATIONS_ACTION_GROUP_ID": "",
+}
+LEGACY_TOKEN_ENV_NAME = "SLACK_BOT_TOKEN"
+TOKEN_MIGRATION_MARKER_ENV_NAME = "SERVICE_HEALTH_TOKEN_MIGRATION_MARKER"
+ENVIRONMENT_CLASS_ENV_NAME = "SERVICE_HEALTH_ENVIRONMENT_CLASS"
+OPERATIONS_ACTION_GROUP_ENV_NAME = (
+    "SERVICE_HEALTH_OPERATIONS_ACTION_GROUP_ID"
+)
+OPERATIONS_PRIMARY_OWNER_ENV_NAME = (
+    "SERVICE_HEALTH_OPERATIONS_PRIMARY_OWNER"
+)
+OPERATIONS_BACKUP_OWNER_ENV_NAME = (
+    "SERVICE_HEALTH_OPERATIONS_BACKUP_OWNER"
+)
+OPERATIONS_ON_CALL_ENV_NAME = (
+    "SERVICE_HEALTH_OPERATIONS_ON_CALL_DESTINATION"
+)
+OPERATIONS_RUNBOOK_ENV_NAME = "SERVICE_HEALTH_OPERATIONS_RUNBOOK_URI"
+OPERATIONS_RECEIVER_EVIDENCE_ENV_NAME = (
+    "SERVICE_HEALTH_OPERATIONS_RECEIVER_TEST_EVIDENCE"
+)
+MAX_RECEIVER_EVIDENCE_AGE_SECONDS = 90 * 24 * 60 * 60
+MAX_RECEIVER_CLOCK_SKEW_SECONDS = 5 * 60
+PREVIEW_REQUIRED_NONEMPTY_VALUES = frozenset(
+    {
+        "AZURE_ENV_NAME",
+        "AZURE_LOCATION",
+        "AZURE_SUBSCRIPTION_ID",
+        "AZURE_TENANT_ID",
+        "SERVICE_HEALTH_API_CLIENT_ID",
+        "SERVICE_HEALTH_API_IDENTIFIER_URI",
+        "SERVICE_HEALTH_API_OBJECT_ID",
+        "SERVICE_HEALTH_BASELINE_ALERT_ENABLED",
+        "SERVICE_HEALTH_DEPLOY_WORKLOAD",
+        "SERVICE_HEALTH_ROUTES_JSON_B64",
+    }
+)
+PREVIEW_REQUIRED_PRESENT_VALUES = frozenset(
+    {
+        "AZURE_MANAGEMENT_GROUP_ID",
+        "SERVICE_HEALTH_OPERATIONS_ACTION_GROUP_ID",
+        "SERVICE_HEALTH_SECRET_VERSION",
+    }
+)
+# SERVICE_APP_RESOURCE_EXISTS is intentionally absent: AZD computes that
+# service-state signal for each provision instead of persisting it in dotenv.
+PREVIEW_LOCAL_VALUES = (
+    PREVIEW_REQUIRED_NONEMPTY_VALUES
+    | PREVIEW_REQUIRED_PRESENT_VALUES
+    | frozenset(
+        {
+            ENVIRONMENT_CLASS_ENV_NAME,
+            "AZURE_RESOURCE_GROUP",
+            OPERATIONS_PRIMARY_OWNER_ENV_NAME,
+            OPERATIONS_BACKUP_OWNER_ENV_NAME,
+            OPERATIONS_ON_CALL_ENV_NAME,
+            OPERATIONS_RUNBOOK_ENV_NAME,
+            OPERATIONS_RECEIVER_EVIDENCE_ENV_NAME,
+        }
+    )
+)
 
 
 class AzdCli:
@@ -44,8 +127,10 @@ class AzdCli:
     def __init__(
         self,
         runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+        environment_name: str | None = None,
     ) -> None:
         self.runner = runner
+        self.environment_name = environment_name
         self.executable = (
             shutil.which("azd") if runner is subprocess.run else "azd"
         )
@@ -55,8 +140,19 @@ class AzdCli:
             raise ScopeManagerError(
                 "Azure Developer CLI is required. Install it, run 'azd auth login', and retry."
             )
+        command = [self.executable, "env", "set", name, value]
+        if self.environment_name:
+            command.extend(
+                ["--environment", self.environment_name, "--no-prompt"]
+            )
+        if name.upper() in SLACK_TOKEN_ENV_ALIASES:
+            raise ScopeManagerError(
+                "Slack credential variables cannot be written through AZD."
+            )
+        assert_no_slack_secret_material(command)
         result = self.runner(
-            [self.executable, "env", "set", name, value],
+            command,
+            env=sanitized_child_environment(),
             capture_output=True,
             text=True,
             check=False,
@@ -79,14 +175,23 @@ class AzdCli:
                 "Azure Developer CLI is required. Install it, run "
                 "'azd auth login', and retry."
             )
+        if name.upper() in SLACK_TOKEN_ENV_ALIASES:
+            raise ScopeManagerError(
+                "Slack credential variables cannot be read through AZD."
+            )
+        command = [
+            self.executable,
+            "env",
+            "get-value",
+            name,
+            "--no-prompt",
+        ]
+        if self.environment_name:
+            command.extend(["--environment", self.environment_name])
+        assert_no_slack_secret_material(command)
         result = self.runner(
-            [
-                self.executable,
-                "env",
-                "get-value",
-                name,
-                "--no-prompt",
-            ],
+            command,
+            env=sanitized_child_environment(),
             capture_output=True,
             text=True,
             check=False,
@@ -104,6 +209,461 @@ class AzdCli:
             "Azure Developer CLI command failed: "
             f"azd env get-value {name} --no-prompt\n{detail}"
         )
+
+    def list_environments(self) -> list[dict[str, Any]]:
+        """Nonsecret AZD environment metadata only (names and local
+        dotenv file paths); never used to read or transport secret
+        values."""
+        if self.executable is None:
+            raise ScopeManagerError(
+                "Azure Developer CLI is required. Install it, run "
+                "'azd auth login', and retry."
+            )
+        command = [self.executable, "env", "list", "--output", "json"]
+        result = self.runner(
+            command,
+            env=sanitized_child_environment(),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = "\n".join(
+                text.strip()
+                for text in (result.stdout, result.stderr)
+                if text.strip()
+            )
+            raise ScopeManagerError(
+                "Azure Developer CLI command failed: azd env list --output json\n"
+                f"{detail}"
+            )
+        text_value = result.stdout.strip()
+        if not text_value:
+            return []
+        try:
+            parsed = json.loads(text_value)
+        except json.JSONDecodeError as exc:
+            raise ScopeManagerError(
+                "Azure Developer CLI returned invalid JSON for: "
+                "azd env list --output json"
+            ) from exc
+        return as_list(parsed)
+
+    def provision(self) -> None:
+        """Trigger a token-free provision. Never receives a secret
+        value: Container Apps resolve the Slack token from Key Vault at
+        runtime, not from an AZD-managed environment variable."""
+        if self.executable is None:
+            raise ScopeManagerError(
+                "Azure Developer CLI is required. Install it, run "
+                "'azd auth login', and retry."
+            )
+        command = [self.executable, "provision", "--no-prompt"]
+        if not self.environment_name:
+            raise ScopeManagerError(
+                "AZD provision requires an explicit environment name."
+            )
+        command.extend(["--environment", self.environment_name])
+        result = self.runner(
+            command,
+            env=sanitized_child_environment(),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = "\n".join(
+                text.strip()
+                for text in (result.stdout, result.stderr)
+                if text.strip()
+            )
+            raise ScopeManagerError(
+                f"Azure Developer CLI command failed: azd provision --no-prompt\n{detail}"
+            )
+
+
+class EnvironmentValues(Protocol):
+    def get_environment_value(self, name: str) -> str:
+        ...
+
+
+def enforce_production_readiness(
+    azd: EnvironmentValues,
+    environment_name: str,
+    *,
+    anchor_action_group_id: str | None = None,
+    clock: Callable[[], float] = time.time,
+) -> None:
+    environment_class = azd.get_environment_value(
+        ENVIRONMENT_CLASS_ENV_NAME
+    ).strip()
+    is_production = (
+        environment_class.casefold() == "production"
+        if environment_class
+        else bool(
+            re.search(
+                r"(^|[-_])prod(?:uction)?($|[-_])",
+                environment_name.casefold(),
+            )
+        )
+    )
+    if not is_production:
+        return
+    names = (
+        OPERATIONS_ACTION_GROUP_ENV_NAME,
+        OPERATIONS_PRIMARY_OWNER_ENV_NAME,
+        OPERATIONS_BACKUP_OWNER_ENV_NAME,
+        OPERATIONS_ON_CALL_ENV_NAME,
+        OPERATIONS_RUNBOOK_ENV_NAME,
+        OPERATIONS_RECEIVER_EVIDENCE_ENV_NAME,
+    )
+    values = {
+        name: azd.get_environment_value(name).strip()
+        for name in names
+    }
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        raise ScopeManagerError(
+            "Production monitoring readiness is incomplete; configure "
+            f"the following nonsecret values: {', '.join(missing)}."
+        )
+    action_group_id = values[OPERATIONS_ACTION_GROUP_ENV_NAME]
+    if (
+        "/providers/microsoft.insights/actiongroups/"
+        not in action_group_id.casefold()
+        or (
+            anchor_action_group_id
+            and same_id(action_group_id, anchor_action_group_id)
+        )
+    ):
+        raise ScopeManagerError(
+            "Production monitoring requires an independent operations "
+            "Action Group resource id outside the bot's delivery path."
+        )
+    if same_id(
+        values[OPERATIONS_PRIMARY_OWNER_ENV_NAME],
+        values[OPERATIONS_BACKUP_OWNER_ENV_NAME],
+    ):
+        raise ScopeManagerError(
+            "Production monitoring primary and backup owners must be "
+            "different."
+        )
+    runbook = urlparse(values[OPERATIONS_RUNBOOK_ENV_NAME])
+    if runbook.scheme.casefold() != "https" or not runbook.netloc:
+        raise ScopeManagerError(
+            "Production monitoring runbook metadata must be an HTTPS URI."
+        )
+    try:
+        evidence = json.loads(
+            values[OPERATIONS_RECEIVER_EVIDENCE_ENV_NAME]
+        )
+        tested_at = datetime.fromisoformat(
+            str(evidence["testedAt"]).replace("Z", "+00:00")
+        )
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        raise ScopeManagerError(
+            "Production monitoring receiver-test evidence must be JSON "
+            "with a valid testedAt timestamp."
+        ) from exc
+    if (
+        not isinstance(evidence, dict)
+        or str(evidence.get("status", "")).casefold() != "succeeded"
+        or not same_id(evidence.get("actionGroupId"), action_group_id)
+        or tested_at.tzinfo is None
+    ):
+        raise ScopeManagerError(
+            "Production monitoring receiver-test evidence must record a "
+            "successful test for the configured Action Group."
+        )
+    age = clock() - tested_at.astimezone(timezone.utc).timestamp()
+    if (
+        age < -MAX_RECEIVER_CLOCK_SKEW_SECONDS
+        or age > MAX_RECEIVER_EVIDENCE_AGE_SECONDS
+    ):
+        raise ScopeManagerError(
+            "Production monitoring receiver-test evidence is expired or "
+            "future-dated; record a successful test from the last 90 days."
+        )
+
+
+def expected_anchor_action_group_id(
+    azd: EnvironmentValues, environment_name: str
+) -> str:
+    subscription_id = azd.get_environment_value(
+        "AZURE_SUBSCRIPTION_ID"
+    ).strip()
+    resource_group = azd.get_environment_value(
+        "AZURE_RESOURCE_GROUP"
+    ).strip()
+    if not subscription_id or not resource_group:
+        raise ScopeManagerError(
+            "Production workload enablement requires the exact AZD "
+            "subscription and resource-group outputs before readiness can "
+            "prove the operations Action Group is independent."
+        )
+    return (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+        "/providers/Microsoft.Insights/actionGroups/"
+        f"ag-{environment_name}-service-health"
+    )
+
+
+def resolve_local_dotenv_path(
+    azd: AzdCli, environment_name: str
+) -> Path | None:
+    """Nonsecret AZD environment metadata lookup only (environment
+    name and local dotenv file path); never reads or transports a
+    secret value. Returns None if the environment cannot be resolved,
+    which callers must treat as 'unknown', not 'absent'."""
+    if not environment_name:
+        return None
+    for entry in azd.list_environments():
+        name = member(entry, "Name") or member(entry, "name")
+        if name and same_id(name, environment_name):
+            raw = member(entry, "DotEnvPath") or member(entry, "dotEnvPath")
+            if raw:
+                return Path(str(raw))
+    return None
+
+
+def read_only_preview_enabled(
+    environment: dict[str, str] | None = None,
+) -> bool:
+    source = os.environ if environment is None else environment
+    if READ_ONLY_PREVIEW_ENV_NAME not in source:
+        return False
+    if source[READ_ONLY_PREVIEW_ENV_NAME].strip().casefold() == "true":
+        return True
+    raise ScopeManagerError(
+        f"{READ_ONLY_PREVIEW_ENV_NAME} must be omitted or set exactly to true."
+    )
+
+
+def resolve_preview_dotenv_path(
+    environment_name: str,
+    project_root: Path,
+) -> Path:
+    if (
+        not environment_name
+        or Path(environment_name).name != environment_name
+        or environment_name in {".", ".."}
+    ):
+        raise ScopeManagerError(
+            "Read-only preview requires a valid explicit AZD environment name."
+        )
+    azure_directory = project_root / ".azure"
+    if azure_directory.is_symlink() or not azure_directory.is_dir():
+        raise ScopeManagerError(
+            "The local .azure directory is missing; cannot resolve the selected "
+            "AZD environment dotenv file."
+        )
+    matches = [
+        path
+        for path in azure_directory.iterdir()
+        if path.is_dir() and same_id(path.name, environment_name)
+    ]
+    if len(matches) != 1:
+        raise ScopeManagerError(
+            "Read-only preview must resolve exactly one local dotenv directory "
+            "for the selected AZD environment."
+        )
+    environment_directory = matches[0]
+    dotenv_path = environment_directory / ".env"
+    if (
+        environment_directory.is_symlink()
+        or dotenv_path.is_symlink()
+        or not dotenv_path.is_file()
+    ):
+        raise ScopeManagerError(
+            "The selected AZD environment must have one regular local .env file."
+        )
+    return dotenv_path
+
+
+def read_preview_dotenv_values(dotenv_path: Path) -> dict[str, str]:
+    """Read only approved nonsecret values, rejecting Slack keys before values."""
+    values: dict[str, str] = {}
+    with dotenv_path.open("r", encoding="utf-8", newline="") as handle:
+        while True:
+            key_characters: list[str] = []
+            delimiter = ""
+            while True:
+                character = handle.read(1)
+                if not character:
+                    delimiter = ""
+                    break
+                if character in {"=", "\n"}:
+                    delimiter = character
+                    break
+                key_characters.append(character)
+            if not key_characters and not delimiter:
+                break
+            raw_key = "".join(key_characters).strip()
+            if raw_key.startswith("export "):
+                raw_key = raw_key[7:].strip()
+            if delimiter != "=":
+                if not delimiter:
+                    break
+                continue
+            if raw_key.upper() in SLACK_TOKEN_ENV_ALIASES:
+                raise ScopeManagerError(
+                    "A Slack credential entry is present in the selected local "
+                    "AZD dotenv file; read-only preview refuses to read its value."
+                )
+            value_characters: list[str] = []
+            while True:
+                character = handle.read(1)
+                if not character or character == "\n":
+                    break
+                value_characters.append(character)
+            if raw_key in PREVIEW_LOCAL_VALUES:
+                if raw_key in values:
+                    raise ScopeManagerError(
+                        "The selected AZD dotenv file contains duplicate required "
+                        "nonsecret entries."
+                    )
+                values[raw_key] = parse_dotenv_value(
+                    "".join(value_characters).rstrip("\r")
+                )
+            if not character:
+                break
+    return values
+
+
+class LocalPreviewValues:
+    def __init__(self, values: dict[str, str]) -> None:
+        self.values = values
+
+    def get_environment_value(self, name: str) -> str:
+        return self.values.get(name, "")
+
+
+def validate_read_only_preview(
+    environment_name: str,
+    *,
+    project_root: Path,
+    azure: AzureCli,
+) -> None:
+    dotenv_path = resolve_preview_dotenv_path(
+        environment_name,
+        project_root,
+    )
+    values = read_preview_dotenv_values(dotenv_path)
+    missing = sorted(
+        name
+        for name in PREVIEW_REQUIRED_NONEMPTY_VALUES
+        if not values.get(name, "").strip()
+    )
+    missing.extend(
+        sorted(
+            name
+            for name in PREVIEW_REQUIRED_PRESENT_VALUES
+            if name not in values
+        )
+    )
+    if missing:
+        raise ScopeManagerError(
+            "Read-only preview is missing required nonsecret deployment "
+            f"values: {', '.join(missing)}."
+        )
+    if values["AZURE_ENV_NAME"] != environment_name:
+        raise ScopeManagerError(
+            "The selected local dotenv AZURE_ENV_NAME does not exactly match "
+            "the requested environment."
+        )
+    for name in (
+        "AZURE_SUBSCRIPTION_ID",
+        "AZURE_TENANT_ID",
+        "SERVICE_HEALTH_API_CLIENT_ID",
+        "SERVICE_HEALTH_API_OBJECT_ID",
+    ):
+        try:
+            parsed = uuid.UUID(values[name])
+        except ValueError as exc:
+            raise ScopeManagerError(
+                f"Read-only preview requires {name} to be a UUID."
+            ) from exc
+        if str(parsed) != values[name].casefold():
+            raise ScopeManagerError(
+                f"Read-only preview requires {name} to use canonical UUID "
+                "format."
+            )
+    expected_identifier = (
+        f"api://{values['SERVICE_HEALTH_API_CLIENT_ID']}"
+    )
+    if values["SERVICE_HEALTH_API_IDENTIFIER_URI"] != expected_identifier:
+        raise ScopeManagerError(
+            "The persisted Secure Webhook identifier URI must exactly match "
+            "the persisted client id."
+        )
+    for name in (
+        "SERVICE_HEALTH_DEPLOY_WORKLOAD",
+        "SERVICE_HEALTH_BASELINE_ALERT_ENABLED",
+    ):
+        if values[name].casefold() not in {"true", "false"}:
+            raise ScopeManagerError(
+                f"Read-only preview requires {name} to be true or false."
+            )
+
+    local_values = LocalPreviewValues(values)
+    if values["SERVICE_HEALTH_DEPLOY_WORKLOAD"].casefold() == "true":
+        enforce_production_readiness(
+            local_values,
+            environment_name,
+            anchor_action_group_id=expected_anchor_action_group_id(
+                local_values,
+                environment_name,
+            ),
+        )
+
+    account = azure.invoke("account", "show")
+    if not isinstance(account, dict):
+        raise ScopeManagerError(
+            "No active Azure CLI account is available for read-only target "
+            "validation."
+        )
+    if not same_id(account.get("tenantId"), values["AZURE_TENANT_ID"]):
+        raise ScopeManagerError(
+            "The active Azure CLI tenant does not match the selected local "
+            "AZD environment."
+        )
+    if not same_id(account.get("id"), values["AZURE_SUBSCRIPTION_ID"]):
+        raise ScopeManagerError(
+            "The active Azure CLI subscription does not match the selected "
+            "local AZD environment."
+        )
+
+
+def parse_dotenv_value(raw: str) -> str:
+    """Minimal, fail-closed dotenv value parsing: trims surrounding
+    whitespace and, if present, exactly matching single/double quotes.
+    Never silently accepts a malformed (unterminated) quoted value."""
+    value = raw.strip()
+    if not value:
+        return value
+    if value[0] in ("'", '"'):
+        if len(value) < 2 or value[-1] != value[0]:
+            raise ScopeManagerError(
+                "Malformed local dotenv value: unterminated quote."
+            )
+        return value[1:-1]
+    return value
+
+
+def local_dotenv_value_present(
+    dotenv_path: Path | None, name: str
+) -> bool:
+    """Direct local file scan for a nonempty `name=...` line. Returns
+    a boolean only; never returns, logs, or raises with the value
+    itself, and never invokes a subprocess or reads a process
+    environment variable to make this determination."""
+    if dotenv_path is None or not dotenv_path.is_file():
+        return False
+    prefix = f"{name}="
+    for line in dotenv_path.read_text(encoding="utf-8").splitlines():
+        if line.startswith(prefix):
+            return bool(parse_dotenv_value(line[len(prefix):]))
+    return False
 
 
 class GraphClient:
@@ -273,6 +833,69 @@ class SecureWebhookConfigurator:
         self.graph = graph
         self.azd = azd
 
+    def enforce_token_migration_precondition(
+        self, environment_name: str = ""
+    ) -> None:
+        """Fail closed if a legacy plaintext SLACK_BOT_TOKEN is still
+        present in the operator's local AZD dotenv file. Presence is
+        detected by a direct local file scan (never by asking AZD for
+        the value itself, which would transport the secret through a
+        child process's stdout). Ordinary provisioning must not silently
+        keep deploying a legacy plaintext token; the operator must run
+        'manage_slack_token.py migrate' (or 'bootstrap'), which only
+        sets the migration marker after the token has actually been
+        removed locally.
+
+        If a named environment cannot be resolved to its local dotenv file,
+        fail closed rather than treating an unknown file as token-free."""
+        if (
+            self.azd.get_environment_value(
+                "SERVICE_HEALTH_DEPLOY_WORKLOAD"
+            ).casefold()
+            == "false"
+        ):
+            return
+        if not environment_name:
+            environments = self.azd.list_environments()
+            names = [
+                str(member(entry, "Name") or member(entry, "name") or "")
+                for entry in environments
+            ]
+            names = [name for name in names if name]
+            if len(names) != 1:
+                raise ScopeManagerError(
+                    "Could not resolve exactly one selected AZD environment; "
+                    "refusing to assume the legacy token is absent."
+                )
+            environment_name = names[0]
+        dotenv_path = resolve_local_dotenv_path(self.azd, environment_name)
+        if dotenv_path is None or not dotenv_path.is_file():
+            raise ScopeManagerError(
+                "Could not resolve the selected AZD environment's local "
+                "dotenv file; refusing to assume the legacy token is absent."
+            )
+        if not local_dotenv_value_present(dotenv_path, LEGACY_TOKEN_ENV_NAME):
+            return
+        raise ScopeManagerError(
+            "A legacy SLACK_BOT_TOKEN value is still present in the local "
+            "AZD environment file. Ordinary provisioning is refused until "
+            "it is migrated: run 'scripts/manage_slack_token.py migrate' "
+            "(or 'bootstrap' for a first-time, token-free setup)."
+        )
+
+    def ensure_operational_defaults(self) -> dict[str, str]:
+        """Initialize missing nonsecret AZD defaults without overwriting
+        any value an operator or another tool already persisted."""
+        resolved: dict[str, str] = {}
+        for name, default in NONSECRET_AZD_DEFAULTS.items():
+            current = self.azd.get_environment_value(name)
+            if current:
+                resolved[name] = current
+                continue
+            self.azd.set_environment_value(name, default)
+            resolved[name] = default
+        return resolved
+
     def _find_service_principal(
         self,
         application_id: str,
@@ -425,6 +1048,7 @@ class SecureWebhookConfigurator:
         expected_tenant_id: str = "",
         expected_owner_ids: str = "",
         adopt_existing_owner_baseline: bool = False,
+        environment_name: str = "",
     ) -> dict[str, str]:
         account = self.azure.invoke("account", "show")
         if not isinstance(account, dict):
@@ -441,6 +1065,8 @@ class SecureWebhookConfigurator:
                 "The active Azure CLI tenant does not match the persisted "
                 "AZD environment tenant."
             )
+
+        self.enforce_token_migration_precondition(environment_name)
 
         has_persisted_identity = bool(
             application_object_id or application_client_id
@@ -539,6 +1165,10 @@ class SecureWebhookConfigurator:
             "SERVICE_HEALTH_API_OBJECT_ID": application_object_id,
             "SERVICE_HEALTH_API_IDENTIFIER_URI": identifier_uri,
         }
+        # Nonsecret defaults are only ever initialized once every risky
+        # Graph mutation above has already succeeded, so a rejected or
+        # rolled-back configure() call never persists any AZD value.
+        values.update(self.ensure_operational_defaults())
         if not application_object_persisted:
             self.azd.set_environment_value(
                 "SERVICE_HEALTH_API_OBJECT_ID",
@@ -728,21 +1358,50 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    resolved_environment_name = os.environ.get("AZURE_ENV_NAME", "").strip()
+    if not resolved_environment_name:
+        print(
+            "ERROR: AZURE_ENV_NAME is required for fail-closed local "
+            "secret-state verification.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        if read_only_preview_enabled():
+            validate_read_only_preview(
+                resolved_environment_name,
+                project_root=Path(__file__).resolve().parent.parent,
+                azure=AzureCli(),
+            )
+            print(
+                "Read-only preview hook validation passed; no state was "
+                "changed."
+            )
+            return 0
+    except ScopeManagerError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     display_name = args.display_name
     if not display_name:
-        environment_name = os.environ.get("AZURE_ENV_NAME", "").strip()
-        if not environment_name:
-            print(
-                "ERROR: AZURE_ENV_NAME is required unless --display-name is provided.",
-                file=sys.stderr,
-            )
-            return 1
         display_name = (
-            f"Azure Service Health Slack Bot - {environment_name}"
+            f"Azure Service Health Slack Bot - {resolved_environment_name}"
         )
     try:
         azure = AzureCli()
-        azd = AzdCli()
+        azd = AzdCli(environment_name=resolved_environment_name)
+        if (
+            azd.get_environment_value(
+                "SERVICE_HEALTH_DEPLOY_WORKLOAD"
+            ).casefold()
+            == "true"
+        ):
+            enforce_production_readiness(
+                azd,
+                resolved_environment_name,
+                anchor_action_group_id=expected_anchor_action_group_id(
+                    azd, resolved_environment_name
+                ),
+            )
 
         def persisted_value(argument_value, environment_name):
             return (
@@ -778,6 +1437,7 @@ def main(argv: list[str] | None = None) -> int:
             adopt_existing_owner_baseline=(
                 args.adopt_existing_owner_baseline
             ),
+            environment_name=resolved_environment_name,
         )
     except ScopeManagerError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

@@ -250,14 +250,13 @@ def main() -> int:
     record(tool, arguments, body, body_path)
     state = load_state()
     if tool == "azd":
-        if arguments[:2] == ["env", "set"] and len(arguments) == 4:
+        if arguments[:2] == ["env", "set"] and len(arguments) >= 4:
             state["azd"][arguments[2]] = arguments[3]
             save_state(state)
             return 0
         if (
             arguments[:2] == ["env", "get-value"]
-            and len(arguments) == 4
-            and arguments[3] == "--no-prompt"
+            and "--no-prompt" in arguments
         ):
             key = arguments[2]
             if key not in state["azd"]:
@@ -267,6 +266,24 @@ def main() -> int:
                 )
                 return 1
             print(state["azd"][key])
+            return 0
+        if arguments[:2] == ["env", "list"] and "--output" in arguments:
+            environment_name = os.environ.get("AZURE_ENV_NAME", ENVIRONMENT_NAME)
+            dotenv_path = Path(os.environ["FAKE_CLI_STATE"]).with_name(
+                f"{environment_name}.env"
+            )
+            print(
+                json.dumps(
+                    [
+                        {
+                            "Name": environment_name,
+                            "DotEnvPath": str(dotenv_path),
+                        }
+                    ]
+                )
+            )
+            return 0
+        if arguments[:1] == ["provision"]:
             return 0
         fail(f"Unsupported azd command: {' '.join(arguments)}")
     response = azure_response(state, arguments, body)

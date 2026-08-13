@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM python:3.13-slim-bookworm AS builder
+FROM python:3.13-slim-bookworm@sha256:00faa2debb87529f9f0764e9491d8ba400a3678976616c3bd7cb193745ac20d1 AS builder
 
 WORKDIR /build
 
@@ -13,7 +13,7 @@ RUN pip wheel --no-cache-dir --retries 1 --wheel-dir /wheels -r requirements.txt
     || pip wheel --no-cache-dir --index-url "${PIP_FALLBACK_INDEX_URL}" \
         --wheel-dir /wheels -r requirements.txt
 
-FROM python:3.13-slim-bookworm
+FROM python:3.13-slim-bookworm@sha256:00faa2debb87529f9f0764e9491d8ba400a3678976616c3bd7cb193745ac20d1
 
 WORKDIR /app
 

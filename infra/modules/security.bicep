@@ -1,9 +1,7 @@
 param environmentName string
 param location string
 param resourceToken string
-
-@secure()
-param slackBotToken string
+param slackBotTokenSecretVersion string = ''
 
 param peSubnetId string
 param keyVaultPrivateDnsZoneId string
@@ -75,14 +73,6 @@ resource keyVaultPrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/private
   }
 }
 
-resource slackBotTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
-  parent: keyVault
-  name: 'slack-bot-token'
-  properties: {
-    value: slackBotToken
-  }
-}
-
 var keyVaultSecretsUserRole = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
   '4633458b-17de-408a-b874-0445c86b69e6'
@@ -101,4 +91,5 @@ resource keyVaultSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01
 output managedIdentityId string = identity.id
 output managedIdentityPrincipalId string = identity.properties.principalId
 output keyVaultName string = keyVault.name
-output slackBotTokenSecretUri string = slackBotTokenSecret.properties.secretUriWithVersion
+output keyVaultId string = keyVault.id
+output slackBotTokenSecretUri string = 'https://${keyVault.name}${environment().suffixes.keyvaultDns}/secrets/slack-bot-token${empty(slackBotTokenSecretVersion) ? '' : '/${slackBotTokenSecretVersion}'}'

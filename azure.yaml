@@ -1,6 +1,6 @@
 name: azure-service-health-slack-bot
 metadata:
-  template: azure-service-health-slack-bot@0.0.1
+  template: azure-service-health-slack-bot@0.3.0
 services:
   app:
     project: .
