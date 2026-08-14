@@ -274,6 +274,18 @@ def test_azure_cli_never_retries_mutations():
     assert len(calls) == 1
 
 
+def test_azure_cli_extracts_error_code_from_wrapped_json():
+    detail = (
+        'ERROR: Not Found({"error":{"code":"DeploymentNotFound",'
+        '"message":"The deployment could not be found."}})'
+    )
+
+    assert scope_cli._azure_error_metadata(detail) == (
+        None,
+        "DeploymentNotFound",
+    )
+
+
 def test_azure_cli_rejects_invalid_json():
     result = subprocess.CompletedProcess([], 0, "not-json", "")
     with pytest.raises(ScopeManagerError, match="invalid JSON"):

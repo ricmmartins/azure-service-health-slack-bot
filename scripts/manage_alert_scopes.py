@@ -94,8 +94,21 @@ def _azure_error_metadata(detail: str) -> tuple[int | None, str | None]:
     try:
         payload = json.loads(detail)
     except json.JSONDecodeError:
-        match = re.match(r"^\s*ERROR:\s*\(([^)]+)\)", detail)
-        return (None, match.group(1)) if match else (None, None)
+        payload = None
+        decoder = json.JSONDecoder()
+        for index, character in enumerate(detail):
+            if character != "{":
+                continue
+            try:
+                candidate, _ = decoder.raw_decode(detail[index:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict):
+                payload = candidate
+                break
+        if payload is None:
+            match = re.match(r"^\s*ERROR:\s*\(([^)]+)\)", detail)
+            return (None, match.group(1)) if match else (None, None)
     if not isinstance(payload, dict):
         return None, None
     error = payload.get("error", payload)
