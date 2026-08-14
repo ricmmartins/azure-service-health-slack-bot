@@ -654,3 +654,40 @@ pass the pre-infrastructure status, read-only hook, exact AZD preview, and
 post-preview absence checks before this clean-room installation is accepted.
 No Azure, Entra, Slack, remote AZD state, deployed resource, or secret was
 mutated, and `azure-deploy` was not invoked.
+
+### Fourth clean-room validation finding for `ca8c6f2`
+
+The corrected Linux-native fresh-clone rerun used exact commit
+`ca8c6f2efaa69b1c33a9c76eeb25fd993969f912` and tree
+`d4d0b490789f71d384d3f6fd379db6cd9f60408b`. Post-merge CI run
+`31732968638` passed. Stage 0 passed with Python 3.12.3, Azure CLI 2.81.0,
+Azure CLI-managed Bicep 0.46.1, AZD 1.31.0, Docker 28.3.3, and Git 2.43.0.
+Both central and day-2 Bicep graphs built and linted. The corrected Stage 1
+binding persisted and verified the approved tenant, subscription, region, and
+environment.
+
+Read-only provider, regional capacity, and policy checks passed. The full
+offline validation passed 347 tests, Flake8, dependency audit with no known
+vulnerabilities, Docker build, and AZD packaging. The pre-infrastructure
+lifecycle status then passed with exactly the eight documented keys and
+invariants, confirming that the explicit `AZURE_TENANT_ID` correction resolved
+the blocker found in the third run.
+
+The rerun stopped at the mandatory pre-preview absence gate. Resource group
+`rg-service-health-cleanroom-k7m4` and subscription resource-group tags for the
+candidate environment were absent, but Microsoft Entra already contained
+application object `810146e9-2d18-4662-ae6d-0bbb19d1b9c6`, client ID
+`a91083ac-0549-4981-a1e0-d6937f6768a0`, and identifier URI
+`api://a91083ac-0549-4981-a1e0-d6937f6768a0` under display name
+`Azure Service Health Slack Bot - service-health-cleanroom-k7m4`. The
+application reports creation time `2026-08-13T22:11:01Z`, two owners, one
+service principal, and the expected `ActionGroupsSecureWebhook` app role.
+
+The operator chose to preserve this residual identity and record the blocker.
+The read-only hook and `azd provision --preview` were not run because the
+required candidate-absence invariant had already failed. The existing
+`service-health-mgmt-test` Container App remained `Succeeded` and `Running`;
+`/healthz` returned healthy, `/readyz` returned ready, and an unauthenticated
+webhook POST returned `401`. The plan remains Ready for Validation. No Azure,
+Entra, Slack, remote AZD state, deployed resource, or secret was mutated, and
+`azure-deploy` was not invoked.
