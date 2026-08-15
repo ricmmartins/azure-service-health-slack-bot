@@ -1539,17 +1539,27 @@ class SlackTokenManager:
             target=target,
             caller=self._caller_identity(),
         )
-        _update_operation_journal(
-            journal,
-            operation_id,
-            {
-                "Command": command,
-                "Target": target,
-                "StartedAt": handle.metadata["startedAt"],
-                "LockNonce": handle.nonce,
-                "State": "Started",
-            },
-        )
+        try:
+            _update_operation_journal(
+                journal,
+                operation_id,
+                {
+                    "Command": command,
+                    "Target": target,
+                    "StartedAt": handle.metadata["startedAt"],
+                    "LockNonce": handle.nonce,
+                    "State": "Started",
+                },
+            )
+        except Exception as journal_exc:
+            try:
+                lock.release(handle)
+            except Exception as release_exc:
+                raise OperationLockError(
+                    "Could not initialize the operation journal and could not "
+                    f"release operation lock '{handle.name}': {release_exc}"
+                ) from journal_exc
+            raise
         try:
             lock.renew(handle)
             self._active_journal = journal

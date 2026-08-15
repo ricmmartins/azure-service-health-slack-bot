@@ -944,6 +944,23 @@ def test_bootstrap_cleans_up_temporary_access_even_when_secret_write_fails():
     assert entry["properties"]["outputs"]["journalState"]["value"]["State"] == "Failed"
 
 
+def test_bootstrap_releases_lock_when_initial_journal_write_fails():
+    class JournalWriteFailure(FakeAzure):
+        def _deployment(self, arguments, uri):
+            method = arguments[arguments.index("--method") + 1].lower()
+            if method == "put":
+                raise ScopeManagerError("journal unavailable")
+            return super()._deployment(arguments, uri)
+
+    azure = JournalWriteFailure()
+    manager = make_manager(azure)
+
+    with pytest.raises(ScopeManagerError, match="journal unavailable"):
+        manager.bootstrap()
+
+    assert azure.locks == {}
+
+
 def test_execute_surfaces_lock_contention_as_operation_lock_error():
     azure = FakeAzure()
     azure.locks[DEFAULT_LOCK_NAME] = {

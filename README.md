@@ -754,6 +754,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+python -m pip install -r requirements-ops.txt
 
 cp config/service_health_routes.example.json \
   config/service_health_routes.json
