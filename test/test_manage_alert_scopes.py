@@ -1366,6 +1366,33 @@ def test_execute_mutating_command_acquires_lock_and_clears_journal_on_success(
     )
 
 
+def test_execute_releases_lock_when_initial_journal_write_fails(monkeypatch):
+    class JournalWriteFailure(LockingFakeAzure):
+        def _deployment(self, arguments, uri):
+            method = arguments[arguments.index("--method") + 1].lower()
+            if method == "put":
+                raise ScopeManagerError("journal unavailable")
+            return super()._deployment(arguments, uri)
+
+    azure = JournalWriteFailure(
+        lambda _args: {"user": {"name": "operator@example.com"}}
+    )
+    instance = locking_manager(azure, scopes=[scope_member()])
+    monkeypatch.setattr(
+        instance,
+        "add_scope",
+        lambda *_a, **_k: {"Status": "Added"},
+    )
+
+    with pytest.raises(ScopeManagerError, match="journal unavailable"):
+        instance.execute(
+            "add-subscription",
+            subscription_id=TARGET_SUBSCRIPTION,
+        )
+
+    assert azure.locks == {}
+
+
 def test_execute_list_and_what_if_never_touch_lock_or_journal(monkeypatch):
     def handler(args):
         if args[:2] == ("account", "show"):

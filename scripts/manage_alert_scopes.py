@@ -3052,18 +3052,29 @@ class ScopeManager:
                 caller=self._caller_identity(),
             )
             self.operation_lock_context = (lock, handle)
-            journal.record(
-                operation_id,
-                {
-                    "Command": command,
-                    "Target": target,
-                    "Fingerprint": fingerprint,
-                    "ReviewedExecutionFingerprint": reviewed_fingerprint,
-                    "StartedAt": handle.metadata["startedAt"],
-                    "LockNonce": handle.nonce,
-                    "State": "Started",
-                },
-            )
+            try:
+                journal.record(
+                    operation_id,
+                    {
+                        "Command": command,
+                        "Target": target,
+                        "Fingerprint": fingerprint,
+                        "ReviewedExecutionFingerprint": reviewed_fingerprint,
+                        "StartedAt": handle.metadata["startedAt"],
+                        "LockNonce": handle.nonce,
+                        "State": "Started",
+                    },
+                )
+            except Exception as journal_exc:
+                try:
+                    lock.release(handle)
+                except Exception as release_exc:
+                    raise OperationLockError(
+                        "Could not initialize the operation journal and could "
+                        f"not release operation lock '{handle.name}': "
+                        f"{release_exc}"
+                    ) from journal_exc
+                raise
             try:
                 lock.renew(handle)
                 result = self._mutating_dispatch(

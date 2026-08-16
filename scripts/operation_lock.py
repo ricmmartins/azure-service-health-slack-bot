@@ -52,6 +52,7 @@ LOCK_API_VERSION = "2022-04-01"
 DEPLOYMENT_API_VERSION = "2021-04-01"
 DEFAULT_LOCK_NAME = "service-health-operation"
 DEFAULT_JOURNAL_PREFIX = "service-health-journal"
+MAX_DEPLOYMENT_NAME_LENGTH = 64
 DEFAULT_TTL_SECONDS = 15 * 60
 MAX_NOTES_LENGTH = 512
 NOT_FOUND_ERROR_CODES = frozenset(
@@ -585,7 +586,12 @@ class OperationJournal:
         self.api_version = api_version
 
     def _deployment_name(self, operation_id: str) -> str:
-        return f"{self.deployment_prefix}-{operation_id}"
+        name = f"{self.deployment_prefix}-{operation_id}"
+        if len(name) <= MAX_DEPLOYMENT_NAME_LENGTH:
+            return name
+        digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
+        prefix_length = MAX_DEPLOYMENT_NAME_LENGTH - len(digest) - 1
+        return f"{name[:prefix_length]}-{digest}"
 
     def _uri(self, operation_id: str) -> str:
         name = self._deployment_name(operation_id)

@@ -469,6 +469,20 @@ def test_journal_clear_of_missing_entry_is_a_no_op():
     journal(fake).clear("never-existed")
 
 
+def test_journal_hashes_long_operation_ids_within_arm_name_limit():
+    instance = journal(FakeArm())
+    operation_id = (
+        "add-subscription-subscription-"
+        "d61e43e0-4793-4b0e-ac08-002e8c18763f"
+    )
+
+    name = instance._deployment_name(operation_id)
+
+    assert len(name) == 64
+    assert name == instance._deployment_name(operation_id)
+    assert name != instance._deployment_name(f"{operation_id}-different")
+
+
 def test_journal_record_waits_until_output_is_durable():
     class AsyncJournalArm(FakeArm):
         def __init__(self):
