@@ -18,6 +18,7 @@ requests, receive Slack events, or replace an incident management system.
 | Deploy | [Deploy with Azure Developer CLI](#deploy-with-azure-developer-cli) |
 | Add subscriptions | [Manage alert scopes](#manage-alert-scopes) |
 | Operate or troubleshoot | [Operations](#operations) |
+| Confirm deployment acceptance | [End-to-end acceptance record](#end-to-end-acceptance-record) |
 | Check the Microsoft platform evidence | [Microsoft platform evidence](docs/microsoft-platform-evidence.md) |
 
 ## Architecture
@@ -217,6 +218,11 @@ a sovereign cloud.
 - The day-2 command implements a Management Group as one managed subscription
   alert path per accessible descendant. It does not deploy one native
   Management Group Activity Log Alert.
+- The Tenant Root Group contains every subscription and Management Group in the
+  tenant. A day-2 Management Group operation that includes the central
+  subscription is rejected because it overlaps the immutable AZD-owned baseline
+  alert. Use a non-overlapping child Management Group or manage additional
+  subscriptions individually.
 - The templates use Azure public cloud endpoint suffixes.
 
 ## Prerequisites
@@ -236,6 +242,11 @@ For deployment:
 - `Owner`, or `Contributor` plus `User Access Administrator`, at the target
   subscription so Bicep can create resources and role assignments
 - Microsoft Entra `Application Administrator` while the Secure Webhook hook runs
+
+The operational CLIs have dependencies that are intentionally excluded from the
+runtime image. Install both `requirements.txt` and `requirements-ops.txt` in the
+same active virtual environment used to run `configure_secure_webhook.py`,
+`manage_slack_token.py`, and `manage_alert_scopes.py`.
 
 The documented Bash commands work in Linux, macOS where the command syntax is
 available, and Ubuntu on WSL. On WSL, keep the repository in the Linux file
@@ -395,8 +406,9 @@ Expected state:
 - `command -v azd` identifies the binary that the shell will execute. If
   `type -a azd` lists more than one installation, the first one must be the
   current stable installation.
-- AZD reports `1.30.0` or a later stable version. The deployment commands in
-  this guide were checked against the 1.30 command reference.
+- AZD reports `1.31.0` or a later stable version. The complete clean deployment,
+  bootstrap, image deployment, signed Action Group test, and day-2 previews in
+  this guide were exercised with AZD `1.31.0`.
 - Every command exits with status `0`.
 - Docker reports both a client and server version.
 - Docker reports `os=linux`.
@@ -755,6 +767,8 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python -m pip install -r requirements-ops.txt
+python -c \
+  'from azure.keyvault.secrets import SecretClient; from azure.storage.blob import BlobServiceClient; print("operations-sdk-ready")'
 
 cp config/service_health_routes.example.json \
   config/service_health_routes.json
@@ -775,7 +789,8 @@ echo "routing-checkpoint-passed"
 ```
 
 Expected state: the parser prints `routing-valid`, the placeholder scan is
-silent, and the final line is `routing-checkpoint-passed`.
+silent, the SDK import prints `operations-sdk-ready`, and the final line is
+`routing-checkpoint-passed`.
 
 Checkpoint: inspect the file once more and confirm that its subscription IDs
 belong to the intended tenant and its channel IDs belong to the intended Slack
@@ -1457,6 +1472,13 @@ python scripts/manage_slack_token.py bootstrap \
   --environment-name "$AZURE_ENV_NAME"
 ```
 
+Run the lifecycle CLI with the virtual environment's `python`. A system Python
+without `requirements-ops.txt` fails before secret persistence with
+`ModuleNotFoundError: No module named 'azure.storage'`. If that happens, stop,
+activate `.venv`, install both requirements files from Stage 3, confirm
+`operations-sdk-ready`, verify `status` still reports `Bootstrapped: false`, and
+then retry.
+
 The first command creates only the network, private endpoints, Log Analytics,
 Application Insights, Key Vault, application Storage account/table, isolated
 operation-lock Storage account/container, registry, and managed identity. The
@@ -1476,6 +1498,13 @@ the lifecycle CLI. The bootstrap command then:
 6. proves no local AZD token remains;
 7. clears the emergency version pin and performs a token-free workload
    provision using the versionless secret URI.
+
+The hidden token prompt accepts only the Slack **Bot User OAuth Token**, whose
+value starts with `xoxb-`. Copy it from **OAuth & Permissions**, paste it
+directly into the hidden prompt, and never place it in a command, shell variable,
+file, clipboard-reading helper, transcript, or chat. At the network prompt,
+enter only the explicit public IPv4 address, for example `203.0.113.10`; the CLI
+adds the `/32` rule. Do not type the literal `/32` suffix.
 
 AZD's `SERVICE_APP_RESOURCE_EXISTS` signal makes that provision an image-safe
 upsert: an existing Container App keeps its currently deployed image, while a
@@ -1590,6 +1619,36 @@ version, versionless Container Apps reference, and absence of temporary
 firewall, RBAC, lock, or journal residue; those details are not additional
 fields in the status JSON.
 
+Run an independent nonsecret cleanup checkpoint:
+
+```bash
+KEY_VAULT_NAME="$(azd env get-value SERVICE_HEALTH_KEY_VAULT_NAME \
+  -e "$AZURE_ENV_NAME" --no-prompt)"
+KEY_VAULT_ID="$(az keyvault show --name "$KEY_VAULT_NAME" \
+  --query id -o tsv)"
+CALLER_OBJECT_ID="$(az ad signed-in-user show --query id -o tsv)"
+
+test "$(python scripts/manage_slack_token.py lock-status \
+  --environment-name "$AZURE_ENV_NAME" --json | \
+  python -c 'import json,sys; print(json.load(sys.stdin)["Status"])')" = \
+  "Unlocked" &&
+test "$(az deployment group list --resource-group "$RESOURCE_GROUP" \
+  --query "length([?starts_with(name, 'service-health-journal')])" \
+  -o tsv)" = "0" &&
+test "$(az keyvault show --name "$KEY_VAULT_NAME" \
+  --query 'length(properties.networkAcls.ipRules)' -o tsv)" = "0" &&
+test "$(az role assignment list --scope "$KEY_VAULT_ID" \
+  --assignee-object-id "$CALLER_OBJECT_ID" \
+  --query "length([?roleDefinitionName=='Key Vault Secrets Officer'])" \
+  -o tsv)" = "0" &&
+echo "bootstrap-cleanup-proven"
+```
+
+If the vault intentionally had pre-existing IP rules or the operator already
+had `Key Vault Secrets Officer`, compare against the pre-bootstrap snapshot
+instead of requiring zero. The invariant is exact restoration, not globally
+empty configuration.
+
 Recovery:
 
 - For `MissingSubscriptionRegistration`, register the namespace named in the
@@ -1614,8 +1673,15 @@ Run:
 
 ```bash
 docker info --format 'os={{.OSType}}'
+command -v docker-credential-desktop.exe >/dev/null 2>&1 || true
 azd deploy -e "$AZURE_ENV_NAME" --no-prompt
 ```
+
+On WSL with Docker Desktop, do not replace `PATH` with a minimal Linux-only
+value before `azd deploy`. Docker may need the Windows credential helper under
+`/mnt/c/Program Files/Docker/Docker/resources/bin`. If packaging fails with
+`docker-credential-desktop.exe: executable file not found`, restore the normal
+WSL `PATH`, confirm `docker info`, and rerun the idempotent `azd deploy`.
 
 Expected state: AZD builds the Docker image, pushes it to the deployed registry,
 updates the Container App, and reports a successful service deployment.
@@ -1755,6 +1821,14 @@ Slack message appears in the intended channel. After telemetry arrives, use the
 [Application Insights queries](#application-insights-queries) to confirm the
 Table and Slack dependencies.
 
+The successful Azure CLI response has `state` equal to `Complete` or
+`Completed`, and the Secure Webhook action has `Status: Succeeded`. The
+Container App console log must show the signed `POST /api/service-health` with
+HTTP `200` and `Service Health incident processed`. Finally, a human must
+confirm that the formatted message appeared in the configured Slack channel.
+The Azure-owned synthetic subscription and tracking IDs in that message are
+expected and are not production incident data.
+
 Recovery:
 
 - A `401` or `403` indicates an audience, allowed-client, owner, or app-role
@@ -1816,6 +1890,22 @@ python scripts/manage_alert_scopes.py add-subscription \
   --execution-fingerprint "<fingerprint-from-reviewed-what-if>"
 ```
 
+The execution creates the target resource group, Action Group, and disabled
+Activity Log Alert, sends the signed Secure Webhook test, and enables the alert
+only after that test succeeds. To remove the temporary or retired path, obtain
+and review a fresh destructive fingerprint, then execute the exact reviewed
+operation:
+
+```bash
+python scripts/manage_alert_scopes.py remove-subscription \
+  --subscription-id "00000000-0000-0000-0000-000000000000" \
+  --environment-name "$AZURE_ENV_NAME" --what-if --json
+python scripts/manage_alert_scopes.py remove-subscription \
+  --subscription-id "00000000-0000-0000-0000-000000000000" \
+  --environment-name "$AZURE_ENV_NAME" \
+  --execution-fingerprint "<fresh-reviewed-fingerprint>"
+```
+
 Management Group commands expand accessible descendants into managed
 subscription alert paths:
 
@@ -1836,6 +1926,14 @@ python scripts/manage_alert_scopes.py migrate-to-management-group \
   --environment-name "$AZURE_ENV_NAME" \
   --execution-fingerprint "<fingerprint-from-reviewed-what-if>"
 ```
+
+Use the immutable Management Group **ID**, not its display name. Start with
+`--what-if --json`; it enumerates accessible descendants and performs no
+mutation. The Tenant Root Group ID is the tenant ID and includes every
+subscription in the hierarchy. If it includes the central subscription, the
+CLI intentionally fails with `overlaps the immutable azd-owned baseline alert`.
+Do not bypass that guard. Create or select a non-overlapping child Management
+Group, or use `add-subscription` for the required descendants.
 
 Always pass `--environment-name`; do not rely on discovery when more than one
 deployment can exist. Use `--json` for machine-readable output.
@@ -2083,6 +2181,13 @@ Stop unless the status is `StaleBlocking` and every active operation can be
 ruled out. Preserve a failed operation journal until the primary and backup
 owners reconcile every partial resource.
 
+The lock is shared by token lifecycle and day-2 scope commands, so the
+`manage_slack_token.py lock-status` and `recover-lock` commands are also the
+supported recovery surface after an interrupted `manage_alert_scopes.py`
+operation. Never delete the lock blob directly. Azure Blob leases can remain
+unavailable briefly after expiry; the explicit recovery path proves ownership,
+environment, metadata expiry, lease state, and final absence.
+
 ### Roll back application code
 
 The Container App uses single revision mode. Confirm the target and load the
@@ -2140,6 +2245,8 @@ restore the previous value through the explicit routing or rotation procedure.
 | `azd version` is older than expected after an update | Run `command -v azd` and `type -a azd`; put the current installation before the older installation in `PATH` and start a new shell. |
 | `az quota list` is empty or reports stale `Microsoft.Quota` registration | Use the provider-specific usage requests in stage 1 and wait for provider propagation. Registration state alone does not prove available capacity. |
 | Docker is unavailable from WSL | Run `docker context show` and `docker info`; confirm Docker Desktop uses Linux containers and enables WSL integration. |
+| `azd deploy` cannot find `docker-credential-desktop.exe` | Restore the normal WSL `PATH` or add Docker Desktop's resources directory, then confirm `command -v docker-credential-desktop.exe` and rerun `azd deploy`. Do not rebuild from a Windows-mounted checkout. |
+| An operational CLI reports `No module named 'azure.storage'` or `azure.keyvault` | Activate `.venv`, install `requirements.txt` and `requirements-ops.txt`, run the Stage 3 SDK import checkpoint, and retry. |
 | Secure Webhook setup is forbidden | Confirm the Azure CLI identity has the Microsoft Entra `Application Administrator` role. |
 | Signed test returns `401` or `403` | Check Easy Auth audiences, the AzNS allowed application, and the app role assignment. |
 | Signed test succeeds but Slack is empty | Check the bot token, `chat:write`, channel IDs, and bot membership. |
@@ -2153,6 +2260,48 @@ restore the previous value through the explicit routing or rotation procedure.
 | Ordinary provision reports a legacy token | Stop. Run lifecycle `status`, then the migration procedure; do not delete or display the value manually. |
 | A lifecycle operation reports cleanup residue | Do not provision. Restore the exact prior vault network/RBAC state and reconcile the preserved journal. |
 | The central operation lock is expired | Prove no ARM deployment or tool operation is active, then use the explicit `recover-lock --force` procedure. |
+| A day-2 journal deployment name exceeds 64 characters | Update to a repository revision containing deterministic journal-name truncation and hashing. Do not shorten subscription or Management Group IDs manually; rerun the what-if because the execution fingerprint binds the code artifacts. |
+| A Management Group preview overlaps the baseline alert | The group contains the central subscription. Use a non-overlapping child Management Group or add the required subscriptions individually. Do not modify or adopt the AZD-owned baseline into day-2 management. |
+
+## End-to-end acceptance record
+
+The following path was exercised from a clean environment on 2026-08-15. It is
+the minimum evidence required before calling another deployment operational:
+
+| Gate | Accepted evidence |
+|---|---|
+| Workstation | Python 3.12, Azure CLI 2.81.0, Azure CLI-managed Bicep 0.46.1, AZD 1.31.0, Docker client/server 28.3.3, and Git 2.43.0 responded successfully. |
+| Repository | 351 tests, Flake8, dependency audit, both Bicep build/lint graphs, Docker build, and AZD packaging passed after the operational fixes documented here. |
+| Infrastructure preview | Infrastructure-only preview showed the expected phase-one resources and no Container App, Action Group, or alert before bootstrap. |
+| Bootstrap | The hidden `xoxb-` transfer completed, Key Vault held an enabled latest version, local plaintext was absent, migration marker was set, and temporary firewall/RBAC/lock/journal state was restored. |
+| Workload | `azd deploy` published the application image and Container Apps single revision mode converged to exactly one healthy active revision. |
+| Security boundary | `/healthz` and `/readyz` returned `200`; an anonymous webhook POST returned `401`. |
+| Signed delivery | Action Group test notification returned Secure Webhook `Succeeded`; the app logged an authenticated HTTP `200` and `Service Health incident processed`; the formatted message appeared in the configured Slack channel. |
+| Multi-scope safety | Subscription what-if produced an expiring artifact-bound fingerprint. Tenant Root Group what-if was correctly rejected when it overlapped the immutable central baseline. |
+
+Do not copy environment-specific IDs from another deployment. Reproduce every
+gate with the target tenant, subscription, region, Slack workspace, channel, and
+approved Management Group hierarchy.
+
+## Official Microsoft references
+
+The repository's fail-closed checks add application-specific safety around the
+documented Azure behavior; they do not replace Azure documentation. The
+following Microsoft Learn pages are the authoritative platform references used
+by this runbook:
+
+| Operational claim | Microsoft documentation |
+|---|---|
+| AZD stores environment values under `.azure/<environment>/.env`; secrets must not be committed or printed. | [Manage Azure Developer CLI environment variables](https://learn.microsoft.com/azure/developer/azure-developer-cli/manage-environment-variables) |
+| Container Apps built-in authentication validates Microsoft Entra tokens and can reject unauthenticated requests with HTTP `401`. | [Authentication and authorization in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/authentication) |
+| Action Groups support Microsoft Entra-authenticated Secure Webhooks and Common Alert Schema. | [Create and manage Azure Monitor action groups](https://learn.microsoft.com/azure/azure-monitor/alerts/action-groups) |
+| Blob leases provide acquire, renew, release, and break operations used by the distributed operation lock. | [Create and manage a blob lease with Python](https://learn.microsoft.com/azure/storage/blobs/storage-blob-lease-python) |
+| The Python Key Vault client requires `azure-keyvault-secrets` and Azure Identity authentication. | [Quickstart: Azure Key Vault secret client library for Python](https://learn.microsoft.com/azure/key-vault/secrets/quick-create-python) |
+| The Tenant Root Group contains all Management Groups and subscriptions in the directory. | [What are Azure Management Groups?](https://learn.microsoft.com/azure/governance/management-groups/overview) |
+
+See [Microsoft platform evidence](docs/microsoft-platform-evidence.md) for the
+larger source-to-control mapping, including permissions, API behavior, limits,
+and the repository control that depends on each fact.
 
 ### Production ownership and retention
 
@@ -2485,13 +2634,19 @@ recovery procedure and recreate the deleted integrations and role assignments.
 
 ```bash
 source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m pip install -r requirements-ops.txt
 python -m pip install -r requirements-test.txt
 python -m pytest -q
 python -m flake8 .
+python -m pip_audit -r requirements.txt -r requirements-ops.txt
 az bicep build --file infra/main.bicep --stdout
 az bicep lint --file infra/main.bicep
 az bicep build --file infra/day2/service-health-alert-scope.bicep --stdout
 az bicep lint --file infra/day2/service-health-alert-scope.bicep
+python scripts/manage_alert_scopes.py --help >/dev/null
+python scripts/manage_slack_token.py --help >/dev/null
+python scripts/configure_secure_webhook.py --help >/dev/null
 ```
 
 The test suite covers payload parsing, routing, authorization, Table Storage
