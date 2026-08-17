@@ -2213,6 +2213,7 @@ class ScopeManager:
         scope_id: str,
         leave_disabled: bool = False,
         allow_subscription_overlap: bool = False,
+        allow_management_group_overlap: bool = False,
     ) -> dict[str, Any]:
         existing = [
             item
@@ -2234,7 +2235,10 @@ class ScopeManager:
                     f"Subscription '{scope_id}' is already covered by the immutable azd-owned "
                     "baseline alert. Adding a day-2 alert would duplicate delivery."
                 )
-            if self.subscription_covered_by_management_group(scope_id):
+            if (
+                self.subscription_covered_by_management_group(scope_id)
+                and not allow_management_group_overlap
+            ):
                 raise ScopeManagerError(
                     f"Subscription '{scope_id}' is already covered by an enabled Management "
                     "Group alert. Adding an individual alert would duplicate delivery."
@@ -2450,6 +2454,29 @@ class ScopeManager:
             raise ScopeManagerError(
                 f"Multiple alerts exist for Management Group '{scope_id}'. Resolve duplicates manually."
             )
+        confirmed_ids = unique_ids(item["ScopeId"] for item in overlaps)
+        if overlaps:
+            for overlap in overlaps:
+                self.assert_remove_permissions(overlap)
+            subscription_list = ", ".join(confirmed_ids)
+            if not self.should_process(
+                f"Management Group '{scope_id}'",
+                "Create and validate Management Group coverage, then remove "
+                f"overlapping individual alerts: {subscription_list}",
+            ):
+                return {
+                    "Status": "Planned",
+                    "ManagementGroupId": scope_id,
+                    "OverlappingSubscriptions": confirmed_ids,
+                }
+            if not self.confirm_destructive(
+                f"Create and validate Management Group '{scope_id}', then remove "
+                f"the overlapping individual alerts for: {subscription_list}?"
+            ):
+                return {
+                    "Status": "Cancelled",
+                    "ManagementGroupId": scope_id,
+                }
         complete = bool(existing) and self.membership_state(
             existing[0], coverage
         )["Complete"]
@@ -2494,31 +2521,6 @@ class ScopeManager:
                 "ManagementGroupId": scope_id,
                 "RemovedSubscriptions": [],
             }
-        for overlap in overlaps:
-            self.assert_remove_permissions(overlap)
-        subscription_list = ", ".join(item["ScopeId"] for item in overlaps)
-        if not self.should_process(
-            f"Management Group '{scope_id}'",
-            "Enable Management Group alert and remove overlapping individual alerts: "
-            f"{subscription_list}",
-        ):
-            return {
-                "Status": "Planned",
-                "ManagementGroupId": scope_id,
-                "OverlappingSubscriptions": [
-                    item["ScopeId"] for item in overlaps
-                ],
-            }
-        if not self.confirm_destructive(
-            f"Enable Management Group '{scope_id}', then remove the overlapping individual "
-            f"alerts for: {subscription_list}?"
-        ):
-            return {
-                "Status": "Cancelled",
-                "ManagementGroupId": scope_id,
-                "ValidatedAlertId": state["AlertId"],
-            }
-        confirmed_ids = unique_ids(item["ScopeId"] for item in overlaps)
         self.refresh()
         coverage = self.get_management_group_coverage(scope_id)
         if any(
@@ -2663,6 +2665,180 @@ class ScopeManager:
             "ManagementGroupId": scope_id,
             "RemovedSubscriptions": confirmed_ids,
             "TestStatus": add_result["TestStatus"] if add_result else "NotRun",
+        }
+
+    def migrate_from_management_group(self, scope_id: str) -> dict[str, Any]:
+        state = self.unique_scope("managementGroup", scope_id)
+        if state is None:
+            return {"Status": "AlreadyAbsent", "ManagementGroupId": scope_id}
+        coverage = self.get_management_group_coverage(scope_id)
+        self.assert_membership_complete(
+            state, coverage, "migrate to individual subscription alerts"
+        )
+        if not is_active(state):
+            raise ScopeManagerError(
+                f"Management Group '{scope_id}' is not active; replacement "
+                "coverage cannot be handed off safely."
+            )
+        other_groups = [
+            item
+            for item in self.overlaps_for_management_group(
+                coverage, exclude_management_group_id=scope_id
+            )
+            if item["ScopeKind"] == "managementGroup" and is_active(item)
+        ]
+        if other_groups:
+            raise ScopeManagerError(
+                f"Management Group '{scope_id}' overlaps another enabled "
+                "Management Group alert. Nested migrations are not automatic."
+            )
+        subscription_ids = unique_ids(coverage["SubscriptionIds"])
+        if not subscription_ids:
+            raise ScopeManagerError(
+                f"Management Group '{scope_id}' has no descendant "
+                "subscriptions to migrate."
+            )
+        self.assert_remove_permissions(state)
+        for subscription_id in subscription_ids:
+            self.test_subscription_tenant(subscription_id)
+            self.assert_add_permissions(subscription_id, None)
+        subscription_list = ", ".join(subscription_ids)
+        if not self.should_process(
+            f"Management Group '{scope_id}'",
+            "Create and validate individual replacement alerts, then remove "
+            f"Management Group coverage for: {subscription_list}",
+        ):
+            return {
+                "Status": "Planned",
+                "ManagementGroupId": scope_id,
+                "ReplacementSubscriptions": subscription_ids,
+            }
+        if not self.confirm_destructive(
+            f"Create and validate individual alerts for {subscription_list}, "
+            f"then remove Management Group '{scope_id}' coverage?"
+        ):
+            return {
+                "Status": "Cancelled",
+                "ManagementGroupId": scope_id,
+            }
+
+        self.refresh()
+        current_coverage = self.get_management_group_coverage(scope_id)
+        current_ids = unique_ids(current_coverage["SubscriptionIds"])
+        if id_set(current_ids) != id_set(subscription_ids):
+            raise ScopeManagerError(
+                f"Coverage changed after confirmation. Management Group "
+                f"'{scope_id}' now covers: {', '.join(current_ids)}."
+            )
+        state = self.unique_scope("managementGroup", scope_id)
+        if state is None:
+            raise ScopeManagerError(
+                "Management Group coverage disappeared after confirmation; "
+                "no replacement alerts were created."
+            )
+        self.assert_membership_complete(
+            state, current_coverage, "continue reverse migration"
+        )
+        if not is_active(state):
+            raise ScopeManagerError(
+                "Management Group coverage became inactive after confirmation; "
+                "no replacement alerts were created."
+            )
+        replacements = []
+        test_statuses = []
+        for subscription_id in subscription_ids:
+            result = self.add_scope(
+                "subscription",
+                subscription_id,
+                leave_disabled=True,
+                allow_management_group_overlap=True,
+            )
+            replacements.append(result["Scope"])
+            test_statuses.append(result["TestStatus"])
+
+        try:
+            for replacement in replacements:
+                if not replacement["Enabled"]:
+                    self.set_alert_enabled(replacement, True)
+            for replacement in replacements:
+                subscription_id = replacement["MemberSubscriptionId"]
+                if not self.current_enabled(
+                    replacement,
+                    "ActionGroupId",
+                    "ActionGroupEnabled",
+                    "2023-01-01",
+                ) or not self.current_enabled(
+                    replacement,
+                    "AlertId",
+                    "Enabled",
+                    "2020-10-01",
+                ):
+                    raise ScopeManagerError(
+                        f"Individual replacement coverage is inactive for "
+                        f"subscription '{subscription_id}'."
+                    )
+        except ScopeManagerError as migration_error:
+            rollback_errors = []
+            active_replacements = []
+            for replacement in replacements:
+                try:
+                    if self.current_enabled(
+                        replacement,
+                        "AlertId",
+                        "Enabled",
+                        "2020-10-01",
+                    ):
+                        active_replacements.append(replacement)
+                except ScopeManagerError as state_error:
+                    rollback_errors.append(
+                        f"{replacement['MemberSubscriptionId']}: state "
+                        f"could not be verified ({state_error})"
+                    )
+            for replacement in reversed(active_replacements):
+                try:
+                    self.set_alert_enabled(replacement, False)
+                    if self.current_enabled(
+                        replacement,
+                        "AlertId",
+                        "Enabled",
+                        "2020-10-01",
+                    ):
+                        rollback_errors.append(
+                            f"{replacement['MemberSubscriptionId']}: "
+                            "replacement remains enabled"
+                        )
+                except ScopeManagerError as rollback_error:
+                    rollback_errors.append(str(rollback_error))
+            if rollback_errors:
+                raise ScopeManagerError(
+                    "Individual replacement activation failed and replacement "
+                    "state could not be restored safely. Management Group "
+                    "coverage remains enabled, but duplicate delivery is "
+                    f"possible: {'; '.join(rollback_errors)}"
+                ) from migration_error
+            raise ScopeManagerError(
+                "Individual replacement activation failed. Management Group "
+                f"coverage remains enabled. {migration_error}"
+            ) from migration_error
+
+        try:
+            self.remove_scope_resources(state)
+        except ScopeManagerError as delete_error:
+            raise ScopeManagerError(
+                "Individual replacement coverage is enabled, but Management "
+                "Group resources could not be removed. Duplicate delivery may "
+                f"continue until the migration is retried. {delete_error}"
+            ) from delete_error
+        return {
+            "Status": "Migrated",
+            "ManagementGroupId": scope_id,
+            "ReplacementSubscriptions": subscription_ids,
+            "TestStatus": (
+                "Complete"
+                if test_statuses
+                and all(status == "Complete" for status in test_statuses)
+                else "NotRun"
+            ),
         }
 
     def report(self) -> list[dict[str, Any]]:
@@ -2939,6 +3115,8 @@ class ScopeManager:
             return self.add_scope("managementGroup", management_group_id)
         if command == "remove-management-group":
             return self.remove_management_group(management_group_id)
+        if command == "migrate-from-management-group":
+            return self.migrate_from_management_group(management_group_id)
         return self.migrate_management_group(management_group_id)
 
     def execute(
@@ -3160,6 +3338,7 @@ def build_parser() -> argparse.ArgumentParser:
             "add-management-group",
             "remove-management-group",
             "migrate-to-management-group",
+            "migrate-from-management-group",
         ),
     )
     parser.add_argument("--subscription-id")

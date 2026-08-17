@@ -1956,6 +1956,13 @@ python scripts/manage_alert_scopes.py migrate-to-management-group \
   --management-group-id "platform" \
   --environment-name "$AZURE_ENV_NAME" \
   --execution-fingerprint "<fingerprint-from-reviewed-what-if>"
+python scripts/manage_alert_scopes.py migrate-from-management-group \
+  --management-group-id "platform" \
+  --environment-name "$AZURE_ENV_NAME" --what-if --json
+python scripts/manage_alert_scopes.py migrate-from-management-group \
+  --management-group-id "platform" \
+  --environment-name "$AZURE_ENV_NAME" \
+  --execution-fingerprint "<fingerprint-from-reviewed-what-if>"
 python scripts/manage_alert_scopes.py remove-management-group \
   --management-group-id "platform" \
   --environment-name "$AZURE_ENV_NAME" --what-if --json
@@ -1972,6 +1979,13 @@ subscription in the hierarchy. If it includes the central subscription, the
 CLI intentionally fails with `overlaps the immutable azd-owned baseline alert`.
 Do not bypass that guard. Create or select a non-overlapping child Management
 Group, or use `add-subscription` for the required descendants.
+
+Use `migrate-from-management-group` when retiring a Management Group path.
+It creates disabled individual replacements for every descendant subscription,
+performs the signed test, enables and verifies every replacement, and only then
+removes the Management Group-owned alert resources. This avoids both a coverage
+gap and the overlap deadlock that separate add/remove commands intentionally
+reject.
 
 Always pass `--environment-name`; do not rely on discovery when more than one
 deployment can exist. Use `--json` for machine-readable output.
