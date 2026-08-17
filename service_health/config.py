@@ -1,6 +1,7 @@
 import json
 import os
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from service_health.routing import RoutingConfig
 
@@ -59,6 +60,23 @@ class ServiceHealthSettings:
         if not endpoint:
             raise InvalidServiceHealthConfiguration(
                 "AZURE_TABLE_ENDPOINT is required")
+        parsed_endpoint = urlsplit(endpoint)
+        expected_suffix = ".table.core.windows.net"
+        hostname = (parsed_endpoint.hostname or "").casefold()
+        if (
+            parsed_endpoint.scheme != "https"
+            or not hostname.endswith(expected_suffix)
+            or hostname == expected_suffix.lstrip(".")
+            or parsed_endpoint.username is not None
+            or parsed_endpoint.password is not None
+            or parsed_endpoint.port is not None
+            or parsed_endpoint.path not in {"", "/"}
+            or parsed_endpoint.query
+            or parsed_endpoint.fragment
+        ):
+            raise InvalidServiceHealthConfiguration(
+                "AZURE_TABLE_ENDPOINT must be an Azure public cloud Table "
+                "endpoint using HTTPS")
         table_name = environ.get(
             "SERVICE_HEALTH_TABLE_NAME", "ServiceHealthIncidents").strip()
         if not table_name:

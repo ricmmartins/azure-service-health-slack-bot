@@ -21,6 +21,8 @@ class ProcessingResult(str, Enum):
     UPDATED = "updated"
     DUPLICATE = "duplicate"
     STALE = "stale"
+    TRANSIENT_FAILURE = "transient_failure"
+    PERMANENT_FAILURE = "permanent_failure"
 
 
 class TransientProcessingError(RuntimeError):
@@ -46,6 +48,18 @@ class ServiceHealthProcessor:
         self.notifier = notifier
 
     def process(self, event):
+        try:
+            return self._process(event)
+        except TransientProcessingError:
+            service_health_metrics.record(
+                event, ProcessingResult.TRANSIENT_FAILURE)
+            raise
+        except PermanentProcessingError:
+            service_health_metrics.record(
+                event, ProcessingResult.PERMANENT_FAILURE)
+            raise
+
+    def _process(self, event):
         channel_id = self.routing.channel_for(event)
         try:
             work_item = self.store.begin(event, channel_id)

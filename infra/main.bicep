@@ -32,20 +32,10 @@ param operationsActionGroupId string = ''
 ])
 param acrSkuName string = 'Basic'
 
-@description('''
-Deprecated. Management Group coverage is configured after the central
-deployment with scripts/manage_alert_scopes.py.
-''')
-@allowed([
-  ''
-])
-param managementGroupId string = ''
 var resourceToken = toLower(uniqueString(subscription().id, environmentName))
 var resourceGroupName = 'rg-${environmentName}'
 var serviceHealthRoutesJson = base64ToString(serviceHealthRoutesJsonB64)
-var centralAlertSubscriptionId = empty(managementGroupId)
-  ? subscription().subscriptionId
-  : ''
+var centralAlertSubscriptionId = subscription().subscriptionId
 var tags = {
   'azd-env-name': environmentName
   workload: 'azure-service-health-slack-bot'

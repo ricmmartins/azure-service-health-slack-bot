@@ -17,10 +17,29 @@ from scripts.configure_secure_webhook import (
 
 
 ROOT = Path(__file__).resolve().parent.parent
+RUNBOOK = "docs/deployment-and-operations.md"
 
 
 def read(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def test_readme_is_a_concise_landing_page_for_the_complete_runbook():
+    readme = read("README.md")
+    runbook = read(RUNBOOK)
+    overview = read("img/architecture-overview.svg")
+    detailed = read("img/architecture-flow.svg")
+
+    assert len(readme.splitlines()) <= 250
+    assert "(docs/deployment-and-operations.md#deploy-with-azure-developer-cli)" in readme
+    assert "(docs/deployment-and-operations.md#manage-alert-scopes)" in readme
+    assert "(docs/deployment-and-operations.md#operations)" in readme
+    assert "(img/architecture-overview.svg)" in readme
+    assert "(../img/architecture-flow.svg)" in runbook
+    assert "One alert path per subscription" in detailed
+    assert "MGs expand to descendants" in detailed
+    assert "Operation lock storage" in detailed
+    assert "Management Groups are logical input only" in overview
 
 
 def markdown_section(markdown: str, heading: str) -> str:
@@ -120,8 +139,8 @@ def created_resource_count(resource_type: str) -> int:
 
 
 def test_stage0_fails_closed_for_stale_azure_cli_managed_bicep():
-    readme = read("README.md")
-    stage = markdown_section(readme, "Stage 0: verify the workstation")
+    runbook = read(RUNBOOK)
+    stage = markdown_section(runbook, "Stage 0: verify the workstation")
     shell = normalized_shell(stage)
     versions = {
         name: value
@@ -200,12 +219,12 @@ def test_stage0_fails_closed_for_stale_azure_cli_managed_bicep():
 
 
 def test_lifecycle_checkpoints_match_status_json_schema_and_invariants():
-    readme = read("README.md")
+    runbook = read(RUNBOOK)
     expected_keys = status_schema_keys()
-    pre = documented_json_contract(readme, "pre-infrastructure")
-    post = documented_json_contract(readme, "post-bootstrap")
+    pre = documented_json_contract(runbook, "pre-infrastructure")
+    post = documented_json_contract(runbook, "post-bootstrap")
     stage1 = normalized_shell(markdown_section(
-        readme,
+        runbook,
         "Stage 1: pin the Azure and AZD deployment target",
     ))
 
@@ -231,23 +250,23 @@ def test_lifecycle_checkpoints_match_status_json_schema_and_invariants():
         "MigrationMarkerSet": True,
         "Bootstrapped": True,
     }
-    assert "InfrastructureOnly" not in readme
+    assert "InfrastructureOnly" not in runbook
     assert (
         'azd env set AZURE_TENANT_ID "$TARGET_TENANT_ID" '
         '-e "$AZURE_ENV_NAME" --no-prompt'
         in stage1
     )
     assert (
-        readme.index('azd env new "$AZURE_ENV_NAME"')
-        < readme.index("azd env set AZURE_TENANT_ID")
-        < readme.index("status-contract:pre-infrastructure")
+        runbook.index('azd env new "$AZURE_ENV_NAME"')
+        < runbook.index("azd env set AZURE_TENANT_ID")
+        < runbook.index("status-contract:pre-infrastructure")
     )
     assert "azd env get-value AZURE_TENANT_ID" in stage1
 
 
 def test_bootstrap_has_separate_target_and_environment_uniqueness_gate():
     stage = markdown_section(
-        read("README.md"),
+        read(RUNBOOK),
         "Stage 6: provision infrastructure and transfer the Slack token",
     )
     shell = normalized_shell(stage)
@@ -276,7 +295,7 @@ def test_bootstrap_has_separate_target_and_environment_uniqueness_gate():
 
 def test_stage5_preview_uses_only_the_explicit_selected_environment():
     stage = markdown_section(
-        read("README.md"),
+        read(RUNBOOK),
         "Stage 5: reconcile Microsoft Entra and preview Azure changes",
     )
     shell = normalized_shell(stage)
@@ -307,7 +326,7 @@ def test_stage5_preview_uses_only_the_explicit_selected_environment():
 
 
 def test_stage4_keeps_independent_action_group_readiness_contract():
-    stage = markdown_section(read("README.md"), "Stage 4: load nonsecret inputs")
+    stage = markdown_section(read(RUNBOOK), "Stage 4: load nonsecret inputs")
     shell = normalized_shell(stage)
 
     assert "az monitor action-group create" in shell
@@ -355,7 +374,7 @@ def test_documented_storage_increment_matches_central_bicep_graph():
         "Microsoft.Storage/storageAccounts"
     )
     stage = markdown_section(
-        read("README.md"),
+        read(RUNBOOK),
         "Stage 1: pin the Azure and AZD deployment target",
     )
     shell = normalized_shell(stage)

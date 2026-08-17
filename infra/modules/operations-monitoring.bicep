@@ -81,7 +81,7 @@ resource healthWebTest 'Microsoft.Insights/webTests@2022-06-15' = if (deployWork
   properties: {
     SyntheticMonitorId: 'webtest-${environmentName}-health'
     Name: 'webtest-${environmentName}-health'
-    Description: 'Production availability check. Runbook: README.md#operations'
+    Description: 'Production availability check. Runbook: docs/deployment-and-operations.md#operations'
     Enabled: true
     Frequency: 300
     Timeout: 30
@@ -112,8 +112,8 @@ resource webhookFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01'
   location: location
   tags: tags
   properties: {
-    displayName: 'Service Health webhook 5xx failures'
-    description: 'Runbook: README.md#operations'
+    displayName: 'Service Health webhook processing failures'
+    description: 'Runbook: docs/deployment-and-operations.md#operations'
     severity: 1
     enabled: true
     evaluationFrequency: 'PT5M'
@@ -124,7 +124,7 @@ resource webhookFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01'
     criteria: {
       allOf: [
         {
-          query: 'AppRequests | where Url endswith "/api/service-health" | where Success == false and ResultCode startswith "5"'
+          query: 'union (AppRequests | where Url endswith "/api/service-health" | where Success == false and ResultCode startswith "5" | project TimeGenerated), (AppTraces | where Message == "Permanent Service Health processing failure" | project TimeGenerated)'
           timeAggregation: 'Count'
           operator: 'GreaterThan'
           threshold: 0
@@ -150,7 +150,7 @@ resource dependencyFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-
   tags: tags
   properties: {
     displayName: 'Sustained Slack or Table dependency failures'
-    description: 'Runbook: README.md#operations'
+    description: 'Runbook: docs/deployment-and-operations.md#operations'
     severity: 1
     enabled: true
     evaluationFrequency: 'PT5M'
@@ -187,7 +187,7 @@ resource availabilityFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-1
   tags: tags
   properties: {
     displayName: 'Service Health bot availability failures'
-    description: 'Runbook: README.md#operations'
+    description: 'Runbook: docs/deployment-and-operations.md#operations'
     severity: 1
     enabled: true
     evaluationFrequency: 'PT5M'
@@ -226,7 +226,7 @@ resource replicaAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (deployW
   location: 'Global'
   tags: tags
   properties: {
-    description: 'No running Container App replicas. Runbook: README.md#operations'
+    description: 'No running Container App replicas. Runbook: docs/deployment-and-operations.md#operations'
     severity: 0
     enabled: true
     scopes: [

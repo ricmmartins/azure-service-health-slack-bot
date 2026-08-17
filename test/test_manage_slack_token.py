@@ -31,6 +31,7 @@ from scripts.manage_slack_token import (
     DEPLOY_WORKLOAD_ENV_NAME,
     EXPECTED_BOT_USER_ID_ENV_NAME,
     EXPECTED_TEAM_ID_ENV_NAME,
+    IncompleteProvisioningError,
     PREVIOUS_SECRET_VERSION_ENV_NAME,
     SECRET_LATEST_VERSION_ENV_NAME,
     SECRET_NAME,
@@ -832,6 +833,62 @@ def test_bootstrap_is_idempotent_when_already_bootstrapped():
     assert azd.provision_calls == 0
 
 
+def test_bootstrap_resumes_token_free_after_final_provision_failure():
+    azure = FakeAzure()
+    azd = FakeAzd({SECRET_LATEST_VERSION_ENV_NAME: "v9"})
+    checks = iter([
+        IncompleteProvisioningError("not provisioned"),
+        None,
+    ])
+
+    def provisioning_checker(_azure, _central):
+        result = next(checks)
+        if result is not None:
+            raise result
+
+    manager = make_manager(
+        azure,
+        azd,
+        prompt_token=lambda: (_ for _ in ()).throw(
+            AssertionError("token prompt must not run")
+        ),
+        provisioning_checker=provisioning_checker,
+    )
+
+    result = manager.bootstrap()
+
+    assert result == {
+        "Status": "BootstrapRecovered",
+        "SecretVersion": "v9",
+    }
+    assert azd.provision_calls == 1
+    assert azd.values[DEPLOY_WORKLOAD_ENV_NAME] == "true"
+    assert azd.values[SECRET_VERSION_ENV_NAME] == ""
+    assert azure.locks == {}
+    assert azure.deployments == {}
+
+
+def test_bootstrap_does_not_mutate_on_provisioning_check_read_failure():
+    azure = FakeAzure()
+    azd = FakeAzd({SECRET_LATEST_VERSION_ENV_NAME: "v9"})
+    manager = make_manager(
+        azure,
+        azd,
+        provisioning_checker=lambda _azure, _central: (
+            (_ for _ in ()).throw(
+                ScopeManagerError("authorization failed")
+            )
+        ),
+    )
+
+    with pytest.raises(ScopeManagerError, match="authorization failed"):
+        manager.bootstrap()
+
+    assert azd.provision_calls == 0
+    assert azure.locks == {}
+    assert azure.deployments == {}
+
+
 def test_bootstrap_phase_one_provisions_before_any_vault_lookup():
     azure = FakeAzure()
     azd = FakeAzd()
@@ -942,6 +999,86 @@ def test_bootstrap_cleans_up_temporary_access_even_when_secret_write_fails():
     assert azure.locks == {}
     (entry,) = azure.deployments.values()
     assert entry["properties"]["outputs"]["journalState"]["value"]["State"] == "Failed"
+
+
+def test_bootstrap_releases_lock_when_initial_journal_write_fails():
+    class JournalWriteFailure(FakeAzure):
+        def _deployment(self, arguments, uri):
+            method = arguments[arguments.index("--method") + 1].lower()
+            if method == "put":
+                raise ScopeManagerError("journal unavailable")
+            return super()._deployment(arguments, uri)
+
+    azure = JournalWriteFailure()
+    manager = make_manager(azure)
+
+    with pytest.raises(ScopeManagerError, match="journal unavailable"):
+        manager.bootstrap()
+
+    assert azure.locks == {}
+
+
+@pytest.mark.parametrize("final_state", ["Failed", "Completed"])
+def test_mutation_releases_lock_when_final_journal_write_fails(final_state):
+    class FinalJournalFailure(FakeAzure):
+        def _deployment(self, arguments, uri):
+            method = arguments[arguments.index("--method") + 1].lower()
+            if method == "put":
+                state = self._body(arguments)["properties"]["template"][
+                    "outputs"
+                ]["journalState"]["value"]["State"]
+                if state == final_state:
+                    raise ScopeManagerError(
+                        f"{final_state} journal unavailable"
+                    )
+            return super()._deployment(arguments, uri)
+
+    azure = FinalJournalFailure()
+    manager = make_manager(azure)
+
+    if final_state == "Failed":
+        with pytest.raises(RuntimeError, match="primary mutation failure"):
+            manager._mutate(
+                "test",
+                "target",
+                lambda _renew: (_ for _ in ()).throw(
+                    RuntimeError("primary mutation failure")
+                ),
+            )
+    else:
+        with pytest.raises(
+            OperationLockError, match="journal could not be finalized"
+        ):
+            manager._mutate(
+                "test",
+                "target",
+                lambda _renew: {"Status": "Succeeded"},
+            )
+
+    assert azure.locks == {}
+
+
+def test_mutation_preserves_primary_error_when_final_journal_read_fails():
+    class FinalJournalReadFailure(FakeAzure):
+        def _deployment(self, arguments, uri):
+            method = arguments[arguments.index("--method") + 1].lower()
+            if method == "get" and self.deployments:
+                raise ScopeManagerError("journal read unavailable")
+            return super()._deployment(arguments, uri)
+
+    azure = FinalJournalReadFailure()
+    manager = make_manager(azure)
+
+    with pytest.raises(RuntimeError, match="primary mutation failure"):
+        manager._mutate(
+            "test",
+            "target",
+            lambda _renew: (_ for _ in ()).throw(
+                RuntimeError("primary mutation failure")
+            ),
+        )
+
+    assert azure.locks == {}
 
 
 def test_execute_surfaces_lock_contention_as_operation_lock_error():
@@ -1432,6 +1569,31 @@ def test_interrupted_operation_owned_role_grant_is_recovered_on_retry():
     )
 
 
+def test_temporary_role_cleanup_uses_principal_captured_before_journal_loss():
+    azure = FakeAzure()
+    journal, operation_id = operation_journal(
+        azure, "slack-token-principal-cache"
+    )
+
+    with _TemporaryRoleAssignment(
+        azure,
+        azure.vault_id,
+        SUBSCRIPTION_ID,
+        journal,
+        operation_id,
+    ):
+        journal.record(operation_id, {})
+
+    list_calls = [
+        call
+        for call in azure.calls
+        if call[:3] == ("role", "assignment", "list")
+    ]
+    assert list_calls[-1][
+        list_calls[-1].index("--assignee-object-id") + 1
+    ] == azure.caller_object_id
+
+
 def test_temporary_vault_network_access_refuses_non_default_deny_start_state():
     azure = FakeAzure()
     azure.vault_default_action = "Allow"
@@ -1563,11 +1725,21 @@ def test_token_format_pattern_accepts_xoxb_and_rejects_xoxe():
     )
 
 
-def test_journal_error_is_redacted_when_underlying_exception_contains_a_token():
+@pytest.mark.parametrize(
+    "leaked_token",
+    [
+        "xoxb-should-not-leak-123456",
+        "XOXB-UPPER_case-123456",
+        "xoxe.xoxp-refresh_token-123456",
+    ],
+)
+def test_journal_error_is_redacted_when_underlying_exception_contains_a_token(
+    leaked_token,
+):
     azure = FakeAzure()
     azd = FakeAzd()
     secret_client = FakeSecretClient()
-    leaking_message = "write failed for xoxb-should-not-leak-123456"
+    leaking_message = f"write failed for {leaked_token}"
 
     def failing_set_secret(name, value):
         raise RuntimeError(leaking_message)
@@ -1580,7 +1752,7 @@ def test_journal_error_is_redacted_when_underlying_exception_contains_a_token():
 
     (entry,) = azure.deployments.values()
     error_text = entry["properties"]["outputs"]["journalState"]["value"]["Error"]
-    assert "xoxb-should-not-leak-123456" not in error_text
+    assert leaked_token not in error_text
     assert "[REDACTED-SLACK-TOKEN]" in error_text
 
 

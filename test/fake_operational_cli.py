@@ -99,6 +99,31 @@ def graph_request(
     uri: str,
     body: dict[str, Any] | None,
 ) -> Any:
+    unique_name_match = re.search(
+        r"/applications\(uniqueName='([^']+)'\)", uri
+    )
+    if unique_name_match and method == "get":
+        application = state["application"]
+        if (
+            application
+            and application.get("uniqueName") == unique_name_match.group(1)
+        ):
+            return application
+        return None
+    if unique_name_match and method == "patch":
+        if state["application"] is None:
+            state["application"] = {
+                "id": APPLICATION_OBJECT_ID,
+                "appId": APPLICATION_ID,
+                "displayName": body["displayName"],
+                "uniqueName": unique_name_match.group(1),
+                "api": body["api"],
+                "identifierUris": [],
+                "appRoles": [],
+            }
+            return state["application"]
+        state["application"].update(body)
+        return None
     if "/applications?" in uri and method == "get":
         application = state["application"]
         return {"value": [application] if application else []}

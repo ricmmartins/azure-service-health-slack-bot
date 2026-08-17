@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 360" role="img" aria-labelledby="title desc">
+  <title id="title">Azure Service Health to Slack overview</title>
+  <desc id="desc">Subscriptions, selected directly or through Management Group expansion, receive subscription-scoped Service Health alerts. Secure Webhooks invoke an authenticated Container App, which uses private Azure data services and sends incident messages to Slack.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#6c8ebf"/>
+    </marker>
+    <style>
+      text { font-family: "Segoe UI", Arial, sans-serif; fill: #24292f; }
+      .title { font-size: 18px; font-weight: 700; }
+      .heading { font-size: 11px; font-weight: 700; }
+      .detail { font-size: 9px; }
+      .primary { fill: #dae8fc; stroke: #6c8ebf; stroke-width: 1.5; }
+      .success { fill: #d5e8d4; stroke: #82b366; stroke-width: 1.5; }
+      .warning { fill: #fff2cc; stroke: #d6b656; stroke-width: 1.5; }
+      .accent { fill: #e1d5e7; stroke: #9673a6; stroke-width: 1.5; }
+      .flow { fill: none; stroke: #6c8ebf; stroke-width: 2; marker-end: url(#arrow); }
+      .support { fill: none; stroke: #9673a6; stroke-width: 1.5; stroke-dasharray: 5 4; marker-end: url(#arrow); }
+      @media (prefers-color-scheme: dark) {
+        text { fill: #e6edf3; }
+        .primary { fill: #20354b; }
+        .success { fill: #213b2a; }
+        .warning { fill: #493d1f; }
+        .accent { fill: #362c42; }
+      }
+    </style>
+  </defs>
+
+  <text class="title" x="24" y="30">Azure Service Health to Slack</text>
+  <text class="detail" x="24" y="48">Authenticated delivery, private state, and subscription-scoped coverage</text>
+
+  <rect class="warning" x="24" y="78" width="142" height="78" rx="10"/>
+  <text class="heading" x="95" y="101" text-anchor="middle">Coverage selection</text>
+  <text class="detail" x="95" y="120" text-anchor="middle">Individual subscriptions</text>
+  <text class="detail" x="95" y="136" text-anchor="middle">or Management Group</text>
+  <text class="detail" x="95" y="149" text-anchor="middle">descendant expansion</text>
+
+  <rect class="primary" x="196" y="78" width="150" height="78" rx="10"/>
+  <text class="heading" x="271" y="101" text-anchor="middle">Azure Monitor</text>
+  <text class="detail" x="271" y="120" text-anchor="middle">One Activity Log Alert</text>
+  <text class="detail" x="271" y="136" text-anchor="middle">and Action Group</text>
+  <text class="detail" x="271" y="149" text-anchor="middle">per subscription</text>
+
+  <rect class="accent" x="376" y="78" width="142" height="78" rx="10"/>
+  <text class="heading" x="447" y="101" text-anchor="middle">Container App</text>
+  <text class="detail" x="447" y="120" text-anchor="middle">Secure Webhook</text>
+  <text class="detail" x="447" y="136" text-anchor="middle">Entra authentication</text>
+  <text class="detail" x="447" y="149" text-anchor="middle">Parse, route, deduplicate</text>
+
+  <rect class="success" x="548" y="78" width="128" height="78" rx="10"/>
+  <text class="heading" x="612" y="108" text-anchor="middle">Slack</text>
+  <text class="detail" x="612" y="128" text-anchor="middle">Canonical incident</text>
+  <text class="detail" x="612" y="144" text-anchor="middle">and thread updates</text>
+
+  <path class="flow" d="M166 117H196"/>
+  <path class="flow" d="M346 117H376"/>
+  <path class="flow" d="M518 117H548"/>
+  <text class="detail" x="361" y="105" text-anchor="middle">signed HTTPS</text>
+
+  <rect class="primary" x="196" y="220" width="150" height="72" rx="10"/>
+  <text class="heading" x="271" y="243" text-anchor="middle">Private data services</text>
+  <text class="detail" x="271" y="262" text-anchor="middle">Key Vault + Table Storage</text>
+  <text class="detail" x="271" y="278" text-anchor="middle">Private endpoints and DNS</text>
+
+  <rect class="warning" x="376" y="220" width="142" height="72" rx="10"/>
+  <text class="heading" x="447" y="243" text-anchor="middle">Managed identity</text>
+  <text class="detail" x="447" y="262" text-anchor="middle">ACR image pull</text>
+  <text class="detail" x="447" y="278" text-anchor="middle">Secret and state access</text>
+
+  <rect class="success" x="548" y="220" width="128" height="72" rx="10"/>
+  <text class="heading" x="612" y="243" text-anchor="middle">Observability</text>
+  <text class="detail" x="612" y="262" text-anchor="middle">App Insights + Logs</text>
+  <text class="detail" x="612" y="278" text-anchor="middle">Independent alerts</text>
+
+  <path class="support" d="M447 156V220"/>
+  <path class="support" d="M376 256H346"/>
+  <path class="support" d="M518 256H548"/>
+
+  <rect class="accent" x="24" y="220" width="142" height="72" rx="10"/>
+  <text class="heading" x="95" y="243" text-anchor="middle">Safe operations</text>
+  <text class="detail" x="95" y="262" text-anchor="middle">Preview fingerprints</text>
+  <text class="detail" x="95" y="278" text-anchor="middle">Blob lease + journal</text>
+  <path class="support" d="M166 256H196"/>
+
+  <text class="detail" x="24" y="332">Management Groups are logical input only; Azure Service Health alert resources remain subscription-scoped.</text>
+</svg>

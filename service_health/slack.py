@@ -41,6 +41,10 @@ def _escape_mrkdwn(value):
         ">", "&gt;")
 
 
+def _escape_code_span(value):
+    return _escape_mrkdwn(value).replace("`", "'")
+
+
 def _truncate(value, limit):
     if len(value) <= limit:
         return value
@@ -188,7 +192,7 @@ def render_incident_message(event: ServiceHealthEvent, lifecycle_status):
                     "type": "mrkdwn",
                     "text": (
                         f"*Subscription*\n"
-                        f"`{_escape_mrkdwn(event.subscription_id)}`"
+                        f"`{_escape_code_span(event.subscription_id)}`"
                     ),
                 },
             ],
@@ -213,7 +217,7 @@ def render_incident_message(event: ServiceHealthEvent, lifecycle_status):
                 {
                     "type": "mrkdwn",
                     "text": (
-                        f"Tracking ID: `{_escape_mrkdwn(event.tracking_id)}` · "
+                        f"Tracking ID: `{_escape_code_span(event.tracking_id)}` · "
                         f"Updated "
                         f"{event.submission_time.strftime('%Y-%m-%d %H:%M UTC')} · "
                         f"<{portal_url}|Open Azure Service Health>"
@@ -255,7 +259,7 @@ def render_incident_update(event: ServiceHealthEvent, lifecycle_status):
                 {
                     "type": "mrkdwn",
                     "text": (
-                        f"Tracking ID: `{_escape_mrkdwn(event.tracking_id)}` · "
+                        f"Tracking ID: `{_escape_code_span(event.tracking_id)}` · "
                         f"Updated "
                         f"{event.submission_time.strftime('%Y-%m-%d %H:%M UTC')} · "
                         f"<{portal_url}|Open Azure Service Health>"

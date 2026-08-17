@@ -1,6 +1,7 @@
 import html
 import json
 import re
+import uuid
 from datetime import datetime, timezone
 
 from service_health.models import (
@@ -16,7 +17,7 @@ class InvalidServiceHealthPayload(ValueError):
 
 
 _SUBSCRIPTION_PATTERN = re.compile(
-    r"/subscriptions/([0-9a-fA-F-]{36})(?:/|$)", re.IGNORECASE)
+    r"/subscriptions/([^/]+)(?:/|$)", re.IGNORECASE)
 _LEVEL_BY_NUMBER = {
     0: AlertLevel.CRITICAL,
     1: AlertLevel.ERROR,
@@ -78,23 +79,38 @@ def _is_service_health(value):
 
 
 def _parse_lifecycle(context, properties):
-    candidates = [
-        properties.get("stage"),
-        context.get("status"),
-    ]
-    normalized = [
-        item.strip().casefold()
-        for item in candidates
-        if isinstance(item, str) and item.strip()
-    ]
-    if "resolved" in normalized:
+    stage = properties.get("stage")
+    status = context.get("status")
+    normalized_stage = (
+        stage.strip().casefold()
+        if isinstance(stage, str)
+        else ""
+    )
+    normalized_status = (
+        status.strip().casefold()
+        if isinstance(status, str)
+        else ""
+    )
+    if (
+        normalized_status == "resolved"
+        or normalized_stage in {
+            "canceled",
+            "cancelled",
+            "complete",
+            "resolved",
+            "rca",
+        }
+    ):
         return LifecycleStatus.RESOLVED
-    if "updated" in normalized:
+    if normalized_stage in {"inprogress", "rescheduled", "updated"}:
         return LifecycleStatus.UPDATED
-    if "active" in normalized:
+    if (
+        normalized_status == "active"
+        or normalized_stage in {"active", "planned"}
+    ):
         return LifecycleStatus.ACTIVE
     raise InvalidServiceHealthPayload(
-        "Service Health status must be Active, Updated, or Resolved")
+        "Service Health status or stage is unsupported")
 
 
 def _parse_impacted_services(raw_value):
@@ -143,7 +159,10 @@ def _parse_impacted_services(raw_value):
 def _find_subscription_id(context, essentials):
     value = context.get("subscriptionId")
     if isinstance(value, str) and value.strip():
-        return value.strip()
+        return _canonical_subscription_id(value, "alertContext.subscriptionId")
+    if value is not None:
+        raise InvalidServiceHealthPayload(
+            "Invalid 'alertContext.subscriptionId'")
 
     candidates = [essentials.get("alertId")]
     candidates.extend(essentials.get("alertTargetIDs") or [])
@@ -152,9 +171,18 @@ def _find_subscription_id(context, essentials):
             continue
         match = _SUBSCRIPTION_PATTERN.search(candidate)
         if match:
-            return match.group(1)
+            return _canonical_subscription_id(
+                match.group(1), "subscription id in alert essentials")
     raise InvalidServiceHealthPayload(
         "Missing subscriptionId in alert context and essentials")
+
+
+def _canonical_subscription_id(value, field_name):
+    try:
+        return str(uuid.UUID(value.strip()))
+    except (AttributeError, ValueError) as exc:
+        raise InvalidServiceHealthPayload(
+            f"Invalid '{field_name}'") from exc
 
 
 def parse_service_health_alert(payload):
