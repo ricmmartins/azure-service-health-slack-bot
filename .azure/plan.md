@@ -379,12 +379,14 @@ token-free. Never use vault purge/name reuse as rollback.
 ## Provisioning and quota impact
 
 No new compute, VNet, private endpoint, registry, or Container Apps environment
-is introduced. One Standard LRS lock-only storage account is added because ARM
-management resources do not provide the required atomic mutex semantics.
-Other net-new objects are secret versions, diagnostic settings, a minimal alert
-set, and one availability test. Migration preflight must validate the storage
-account plus alert-rule and diagnostic-setting limits and existing policy
-checks. No Azure query or deployment occurs in planning.
+is introduced. One Standard LRS lock-only storage account is added beside the
+existing application Storage account because ARM management resources do not
+provide the required atomic mutex semantics. Other net-new objects are secret
+versions, diagnostic settings, a minimal alert set, and one availability test.
+Fresh-environment preflight must allow two Storage accounts in total; migration
+preflight must allow the one additional lock account and validate alert-rule,
+diagnostic-setting, and existing policy limits. No Azure query or deployment
+occurs in planning.
 
 ## Compatibility and release
 
@@ -562,7 +564,8 @@ proved no source-binding, validation-binding, or live deployment change. No
 Graph mutation, AZD environment write, ARM deployment, RBAC operation, Key
 Vault/Slack access, token exposure, or `azure-deploy` invocation occurred.
 
-For any future preview, continue to use this fail-closed sequence exactly:
+The following sequence is retained as historical evidence for that named
+validation environment only:
 
 ```bash
 test "$AZURE_ENV_NAME" = "service-health-mgmt-test" || {
@@ -575,3 +578,153 @@ if ! PYTHONPATH=. AZURE_ENV_NAME=service-health-mgmt-test SERVICE_HEALTH_READ_ON
 fi
 SERVICE_HEALTH_READ_ONLY_PREVIEW=true azd provision --preview --no-prompt --environment service-health-mgmt-test
 ```
+
+### Clean-room documentation acceptance for `79c890c8`
+
+The approved fresh-adopter validation identified three documentation-only
+defects without mutating Azure, Entra, Slack, AZD environments, or deployed
+resources:
+
+- the generic README Stage 5 preview command was incorrectly bound to the
+  historical validation environment above;
+- Stage 4 named the independent operations readiness inputs but did not provide
+  a complete create, verify, real-receiver test, freshness, retry, and ownership
+  procedure for a new adopter;
+- Stage 1 checked quota for one Storage account although the transitive central
+  Bicep graph creates the application Storage account and the isolated
+  operation-lock Storage account.
+
+The README now uses the adopter's explicit current environment, verifies that
+it is selected, and passes the same name to both the read-only hook and AZD
+preview. It documents an independent email receiver creation and observed
+synthetic delivery before writing the existing production readiness inputs,
+while preserving the bot Secure Webhook boundary and separate destructive
+approval for operations-receiver decommission. The capacity procedure now
+requires two Storage accounts. Documentation contract tests bind these commands
+and the documented Storage increment to the transitive Bicep resource graph.
+
+### Second clean-room documentation follow-up for `a8d1dc2`
+
+The second fresh-adopter run preserved all proof above and reproduced two more
+documentation-only defects without Azure, Entra, Slack, AZD, deployment,
+release, or cost mutation:
+
+- Stage 0 accepted any installed Azure CLI-managed Bicep. Version `0.41.2`
+  emitted `BCP129` for the current templates; an idempotent `az bicep upgrade`
+  installed `0.46.1`, after which both central and day-2 build/lint pairs
+  passed.
+- The pre-provision lifecycle checkpoint expected the literal
+  `InfrastructureOnly`, although `manage_slack_token.py status --json` returns
+  an eight-key structured object and correctly reports `Bootstrapped:false`
+  with empty version values and no vault before infrastructure exists.
+
+The README now fails closed below Azure CLI-managed Bicep `0.46.1`, distinguishes
+that installation from standalone tools, documents online and air-gapped
+recovery, and compiles/lints both graphs as the installed-version compatibility
+gate. The lifecycle checkpoints now state the exact pre-infrastructure and
+post-bootstrap status invariants. Because that status schema is intentionally
+token-free and target-light, a separate read-only pre-bootstrap gate binds the
+environment to the approved tenant, subscription, and resource group and
+rejects a same-named central group in another enabled subscription. Focused
+tests bind the version flow to the template syntax, the bootstrap target gate,
+and both documented JSON objects to the keys returned by the real `status()`
+implementation.
+
+A new fresh-clone clean-room rerun remains required to accept these corrections;
+this source-only follow-up does not replace or overwrite the earlier proof.
+
+### Third clean-room validation finding for `518c90e`
+
+The third Linux-native fresh-clone run passed post-merge CI, Stage 0, target
+binding, provider/capacity/policy checks, 347 tests, Flake8, dependency audit,
+Docker build, and AZD packaging. It then stopped at the documented
+pre-infrastructure lifecycle checkpoint before any preview or cloud mutation.
+
+`azd env new` persisted `AZURE_ENV_NAME`, `AZURE_SUBSCRIPTION_ID`, and
+`AZURE_LOCATION`, but not `AZURE_TENANT_ID`. The status command correctly
+failed closed with `The selected AZD environment is missing nonsecret target
+metadata.` because its fallback target validation requires the environment,
+subscription, and tenant before querying Azure. Stage 1 now writes the approved
+tenant ID explicitly, verifies it with the same case-insensitive target gate,
+and documents it in the recovery allowlist. A documentation contract test binds
+that write between environment creation and the first status checkpoint.
+
+The plan remains Ready for Validation. A corrected fresh-binding rerun must
+pass the pre-infrastructure status, read-only hook, exact AZD preview, and
+post-preview absence checks before this clean-room installation is accepted.
+No Azure, Entra, Slack, remote AZD state, deployed resource, or secret was
+mutated, and `azure-deploy` was not invoked.
+
+### Fourth clean-room validation finding for `ca8c6f2`
+
+The corrected Linux-native fresh-clone rerun used exact commit
+`ca8c6f2efaa69b1c33a9c76eeb25fd993969f912` and tree
+`d4d0b490789f71d384d3f6fd379db6cd9f60408b`. Post-merge CI run
+`31732968638` passed. Stage 0 passed with Python 3.12.3, Azure CLI 2.81.0,
+Azure CLI-managed Bicep 0.46.1, AZD 1.31.0, Docker 28.3.3, and Git 2.43.0.
+Both central and day-2 Bicep graphs built and linted. The corrected Stage 1
+binding persisted and verified the approved tenant, subscription, region, and
+environment.
+
+Read-only provider, regional capacity, and policy checks passed. The full
+offline validation passed 347 tests, Flake8, dependency audit with no known
+vulnerabilities, Docker build, and AZD packaging. The pre-infrastructure
+lifecycle status then passed with exactly the eight documented keys and
+invariants, confirming that the explicit `AZURE_TENANT_ID` correction resolved
+the blocker found in the third run.
+
+The rerun stopped at the mandatory pre-preview absence gate. Resource group
+`rg-service-health-cleanroom-k7m4` and subscription resource-group tags for the
+candidate environment were absent, but Microsoft Entra already contained
+application object `810146e9-2d18-4662-ae6d-0bbb19d1b9c6`, client ID
+`a91083ac-0549-4981-a1e0-d6937f6768a0`, and identifier URI
+`api://a91083ac-0549-4981-a1e0-d6937f6768a0` under display name
+`Azure Service Health Slack Bot - service-health-cleanroom-k7m4`. The
+application reports creation time `2026-08-13T22:11:01Z`, two owners, one
+service principal, and the expected `ActionGroupsSecureWebhook` app role.
+
+The operator chose to preserve this residual identity and record the blocker.
+The read-only hook and `azd provision --preview` were not run because the
+required candidate-absence invariant had already failed. The existing
+`service-health-mgmt-test` Container App remained `Succeeded` and `Running`;
+`/healthz` returned healthy, `/readyz` returned ready, and an unauthenticated
+webhook POST returned `401`. The plan remains Ready for Validation. No Azure,
+Entra, Slack, remote AZD state, deployed resource, or secret was mutated, and
+`azure-deploy` was not invoked.
+
+### Fifth clean-room validation acceptance for `ca8c6f2`
+
+After the operator removed the old test resource group and explicitly approved
+cleanup of the two obsolete Microsoft Entra identities, a new Linux-native
+clone repeated the validation from exact commit
+`ca8c6f2efaa69b1c33a9c76eeb25fd993969f912` and tree
+`d4d0b490789f71d384d3f6fd379db6cd9f60408b`.
+
+Stage 0 passed with Python 3.12.3, Azure CLI 2.81.0, Azure CLI-managed Bicep
+0.46.1, AZD 1.31.0, Docker 28.3.3, and Git 2.43.0. Both Bicep graphs built and
+linted. The full offline validation passed 347 tests, Flake8, dependency audit
+with no known vulnerabilities, Docker build
+`sha256:8e39924e39ec5924fd9d4b39650fd61be064a71e3f6042050c013911b1e90173`,
+and AZD packaging.
+
+The corrected local AZD binding persisted and verified the environment,
+tenant, subscription, and location. Read-only provider checks passed; eastus2
+had capacity for one Container Apps managed environment, two Storage accounts,
+one virtual network, and two private endpoints; and the subscription policy
+query returned zero assignments. The pre-infrastructure lifecycle status
+matched all eight documented keys and invariants.
+
+Before preview, the candidate resource group, matching environment tag, and
+Microsoft Entra application were absent. The read-only preprovision hook passed
+without changing state. Two consecutive `azd provision --preview` executions
+reported exactly ten creates: the resource group, Container Registry,
+Application Insights, Key Vault, two private endpoints, virtual network, Log
+Analytics workspace, and two Storage accounts. Neither preview included a
+Container App, Action Group, or Activity Log Alert. The asserted preview
+SHA-256 was
+`25f0720b7125768b31444329310bcf3242ad3c100227f12160653956dbdd9e57`.
+
+Post-preview checks again proved the candidate resource group, environment tag,
+and Microsoft Entra application were absent. No Azure, Entra, Slack, remote AZD
+state, deployed resource, or secret was mutated by validation. The plan is now
+Validated and ready for the separately approved deployment workflow.

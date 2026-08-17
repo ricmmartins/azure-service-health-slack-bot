@@ -46,8 +46,11 @@ def create_service_health_blueprint(get_runtime):
         try:
             runtime = get_runtime()
             settings = runtime.settings
+            request.max_content_length = settings.max_payload_bytes + 1
             if request.content_length is not None and (
                     request.content_length > settings.max_payload_bytes):
+                raise RequestEntityTooLarge()
+            if len(request.get_data(cache=True)) > settings.max_payload_bytes:
                 raise RequestEntityTooLarge()
             if request.mimetype != "application/json":
                 return (
