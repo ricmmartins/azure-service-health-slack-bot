@@ -11,7 +11,7 @@ from scripts.operation_lock import (
     membership_fingerprint,
 )
 from scripts.manage_alert_scopes import ScopeManagerError
-from fake_blob_lock import FakeBlobService
+from fake_blob_lock import FakeBlobClient, FakeBlobError, FakeBlobService
 
 
 SUBSCRIPTION_ID = "central-sub"
@@ -212,6 +212,46 @@ def test_acquire_fails_closed_on_conflict_without_breaking_existing_lock():
         )
 
     assert stored_lock_metadata(fake)["nonce"] == first.nonce
+
+
+def test_acquire_removes_new_blob_when_lease_acquisition_fails(monkeypatch):
+    fake = FakeArm()
+
+    def fail_lease(_self, lease_duration=60):
+        del lease_duration
+        raise FakeBlobError("storage unavailable", 500)
+
+    monkeypatch.setattr(FakeBlobClient, "acquire_lease", fail_lease)
+
+    with pytest.raises(OperationLockError, match="Could not acquire"):
+        lock(fake).acquire(
+            environment="production",
+            command="rotate",
+            target="secret",
+            caller="operator@example.com",
+        )
+
+    assert DEFAULT_LOCK_NAME not in fake.locks
+
+
+def test_acquire_removes_leased_blob_when_readback_fails(monkeypatch):
+    fake = FakeArm()
+
+    def fail_readback(_self, lease=None):
+        del lease
+        raise FakeBlobError("read unavailable", 500)
+
+    monkeypatch.setattr(FakeBlobClient, "download_blob", fail_readback)
+
+    with pytest.raises(OperationLockError, match="verification failed"):
+        lock(fake).acquire(
+            environment="production",
+            command="rotate",
+            target="secret",
+            caller="operator@example.com",
+        )
+
+    assert DEFAULT_LOCK_NAME not in fake.locks
 
 
 def test_revalidate_detects_lost_ownership():

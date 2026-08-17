@@ -8,6 +8,7 @@ from unittest.mock import Mock
 from urllib.error import URLError
 
 import pytest
+import service_health.service as service_module
 from azure.core.exceptions import ResourceExistsError
 from flask import Flask
 from slack_sdk.errors import SlackApiError
@@ -27,6 +28,7 @@ from service_health.parser import (
 from service_health.routes import create_service_health_blueprint
 from service_health.routing import RoutingConfig
 from service_health.service import (
+    PermanentProcessingError,
     ProcessingOutcome,
     ProcessingResult,
     ServiceHealthProcessor,
@@ -168,6 +170,26 @@ def test_parser_rejects_invalid_payload(mutator):
         parse_service_health_alert(payload)
 
 
+def test_parser_rejects_malformed_explicit_subscription_id():
+    payload = common_alert()
+    payload["data"]["alertContext"]["subscriptionId"] = "not-a-guid"
+
+    with pytest.raises(
+        InvalidServiceHealthPayload,
+        match="alertContext.subscriptionId",
+    ):
+        parse_service_health_alert(payload)
+
+
+def test_parser_canonicalizes_explicit_subscription_id():
+    payload = common_alert()
+    payload["data"]["alertContext"]["subscriptionId"] = SUBSCRIPTION_ID.upper()
+
+    event = parse_service_health_alert(payload)
+
+    assert event.subscription_id == SUBSCRIPTION_ID
+
+
 def test_event_keys_and_fingerprint_are_deterministic():
     event = parse_service_health_alert(common_alert())
     again = parse_service_health_alert(copy.deepcopy(common_alert()))
@@ -260,6 +282,20 @@ def test_slack_rendering_includes_accessible_fallback_and_incident_details():
     assert "East US" in serialized
     assert "Open Azure Service Health" in serialized
     assert len(blocks[0]["text"]["text"]) <= 150
+
+
+def test_slack_rendering_keeps_tracking_id_inside_one_code_span():
+    event = replace(
+        parse_service_health_alert(common_alert()),
+        tracking_id="ABC`DEF",
+    )
+
+    _text, blocks = render_incident_message(
+        event, LifecycleStatus.ACTIVE)
+
+    context = blocks[-1]["elements"][0]["text"]
+    assert "Tracking ID: `ABC'DEF`" in context
+    assert context.count("`") == 2
 
 
 def test_slack_rendering_truncates_complete_resolved_header():
@@ -760,6 +796,47 @@ def test_processor_returns_transient_error_when_incident_is_busy():
     with pytest.raises(TransientProcessingError):
         ServiceHealthProcessor(
             routing, store, FakeNotifier()).process(event)
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (
+            TransientProcessingError("temporary"),
+            ProcessingResult.TRANSIENT_FAILURE,
+        ),
+        (
+            PermanentProcessingError("permanent"),
+            ProcessingResult.PERMANENT_FAILURE,
+        ),
+    ],
+)
+def test_processor_records_classified_failure_metrics(
+    monkeypatch, error, expected
+):
+    event = parse_service_health_alert(common_alert())
+    recorded = []
+    monkeypatch.setattr(
+        service_module.service_health_metrics,
+        "record",
+        lambda recorded_event, result: recorded.append(
+            (recorded_event, result)
+        ),
+    )
+    processor = ServiceHealthProcessor(
+        RoutingConfig.from_dict({
+            "default_channel_id": "CDEFAULT",
+            "rules": [],
+        }),
+        FakeStore([]),
+        FakeNotifier(),
+    )
+    monkeypatch.setattr(processor, "_process", lambda _event: (_ for _ in ()).throw(error))
+
+    with pytest.raises(type(error)):
+        processor.process(event)
+
+    assert recorded == [(event, expected)]
 
 
 class StubProcessor:

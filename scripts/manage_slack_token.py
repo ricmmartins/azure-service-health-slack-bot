@@ -149,6 +149,10 @@ class LifecycleStateError(ScopeManagerError):
         self.lifecycle_state = lifecycle_state
 
 
+class IncompleteProvisioningError(ScopeManagerError):
+    """The Container App was read successfully but is not ready."""
+
+
 class SecretClientProtocol(Protocol):
     def set_secret(self, name: str, value: str) -> Any:
         ...
@@ -282,7 +286,7 @@ def default_provisioning_checker(azure: Any, central: dict[str, Any]) -> None:
     """Confirm the provisioned Container App has a ready revision."""
     container_app_id = str(central.get("ContainerAppId") or "")
     if not container_app_id:
-        raise ScopeManagerError(
+        raise IncompleteProvisioningError(
             "Cannot verify acceptance: the central deployment has no "
             "Container App id."
         )
@@ -296,13 +300,13 @@ def default_provisioning_checker(azure: Any, central: dict[str, Any]) -> None:
     )
     state = str(nested(details, "properties", "provisioningState") or "").casefold()
     if state != "succeeded":
-        raise ScopeManagerError(
+        raise IncompleteProvisioningError(
             "Acceptance check failed: the central Container App "
             f"provisioningState is '{state or 'unknown'}', not 'Succeeded'."
         )
     revision = str(nested(details, "properties", "latestReadyRevisionName") or "")
     if not revision:
-        raise ScopeManagerError(
+        raise IncompleteProvisioningError(
             "Acceptance check failed: no latest ready Container App revision."
         )
 
@@ -1575,10 +1579,87 @@ class SlackTokenManager:
                 self._active_journal = None
                 self._active_operation_id = None
         except Exception as exc:
-            current_state = journal.read(operation_id) or {}
+            journal_error = None
+            current_state = {}
+            try:
+                lock.revalidate(handle)
+                current_state = journal.read(operation_id) or {}
+            except Exception as read_exc:
+                journal_error = read_exc
+                exc.add_note(
+                    "The operation journal could not be read safely while "
+                    f"finalizing the failure: {_redact(str(read_exc))}"
+                )
             cleanup_incomplete = (
                 current_state.get("State") == "CLEANUP_INCOMPLETE"
             )
+            if journal_error is None:
+                try:
+                    _update_operation_journal(
+                        journal,
+                        operation_id,
+                        {
+                            "Command": command,
+                            "Target": target,
+                            "StartedAt": handle.metadata["startedAt"],
+                            "State": (
+                                "CLEANUP_INCOMPLETE"
+                                if cleanup_incomplete
+                                else getattr(
+                                    exc, "lifecycle_state", "Failed"
+                                )
+                            ),
+                            "Error": _redact(str(exc)),
+                        },
+                    )
+                except Exception as update_exc:
+                    journal_error = update_exc
+                    exc.add_note(
+                        "The failed operation could not be finalized in the "
+                        f"journal: {_redact(str(update_exc))}"
+                    )
+            # A lock-release failure here must never mask the original
+            # mutation error; it is journaled separately and the ORIGINAL
+            # exception is always what propagates.
+            try:
+                lock.release(handle)
+            except Exception as release_exc:
+                exc.add_note(
+                    "The operation lock also could not be released: "
+                    f"{_redact(str(release_exc))}"
+                )
+                if journal_error is None:
+                    try:
+                        lock.revalidate(handle)
+                        _update_operation_journal(
+                            journal,
+                            operation_id,
+                            {
+                                "Command": command,
+                                "Target": target,
+                                "StartedAt": handle.metadata["startedAt"],
+                                "State": (
+                                    "CLEANUP_INCOMPLETE"
+                                    if cleanup_incomplete
+                                    else "FailedLockReleaseFailed"
+                                ),
+                                "LockReleaseState": "Failed",
+                                "Error": _redact(
+                                    f"{exc}; lock release also failed: "
+                                    f"{release_exc}"
+                                ),
+                            },
+                        )
+                    except Exception as update_exc:
+                        exc.add_note(
+                            "The lock-release failure also could not be "
+                            f"journaled: {_redact(str(update_exc))}"
+                        )
+            if journal_error is not None:
+                raise exc from journal_error
+            raise
+        try:
+            lock.revalidate(handle)
             _update_operation_journal(
                 journal,
                 operation_id,
@@ -1586,50 +1667,26 @@ class SlackTokenManager:
                     "Command": command,
                     "Target": target,
                     "StartedAt": handle.metadata["startedAt"],
-                    "State": (
-                        "CLEANUP_INCOMPLETE"
-                        if cleanup_incomplete
-                        else getattr(exc, "lifecycle_state", "Failed")
-                    ),
-                    "Error": _redact(str(exc)),
+                    "State": "Completed",
+                    "Result": result,
                 },
             )
-            # A lock-release failure here must never mask the original
-            # mutation error; it is journaled separately and the ORIGINAL
-            # exception is always what propagates via the bare `raise`.
+        except Exception as journal_exc:
+            release_error = None
             try:
                 lock.release(handle)
-            except Exception as release_exc:
-                _update_operation_journal(
-                    journal,
-                    operation_id,
-                    {
-                        "Command": command,
-                        "Target": target,
-                        "StartedAt": handle.metadata["startedAt"],
-                        "State": (
-                            "CLEANUP_INCOMPLETE"
-                            if cleanup_incomplete
-                            else "FailedLockReleaseFailed"
-                        ),
-                        "LockReleaseState": "Failed",
-                        "Error": _redact(
-                            f"{exc}; lock release also failed: {release_exc}"
-                        ),
-                    },
+            except Exception as exc:
+                release_error = exc
+            error = OperationLockError(
+                f"The {command} mutation completed, but its journal could not "
+                "be finalized. Verify the resulting Azure state before retrying."
+            )
+            if release_error is not None:
+                error.add_note(
+                    "The operation lock also could not be released: "
+                    f"{_redact(str(release_error))}"
                 )
-            raise
-        _update_operation_journal(
-            journal,
-            operation_id,
-            {
-                "Command": command,
-                "Target": target,
-                "StartedAt": handle.metadata["startedAt"],
-                "State": "Completed",
-                "Result": result,
-            },
-        )
+            raise error from journal_exc
         # The journal entry is only cleared once the lock has genuinely
         # been released; a release failure surfaces explicitly (nonzero)
         # and the "Completed" journal record is left in place rather than
@@ -1637,17 +1694,28 @@ class SlackTokenManager:
         try:
             lock.release(handle)
         except Exception as release_exc:
-            _update_operation_journal(
-                journal,
-                operation_id,
-                {
-                    "Command": command,
-                    "Target": target,
-                    "StartedAt": handle.metadata["startedAt"],
-                    "State": "CompletedLockReleaseFailed",
-                    "Error": _redact(str(release_exc)),
-                },
-            )
+            journal_error = None
+            try:
+                lock.revalidate(handle)
+                _update_operation_journal(
+                    journal,
+                    operation_id,
+                    {
+                        "Command": command,
+                        "Target": target,
+                        "StartedAt": handle.metadata["startedAt"],
+                        "State": "CompletedLockReleaseFailed",
+                        "Error": _redact(str(release_exc)),
+                    },
+                )
+            except Exception as update_exc:
+                journal_error = update_exc
+                release_exc.add_note(
+                    "The lock-release failure could not be journaled safely: "
+                    f"{_redact(str(update_exc))}"
+                )
+            if journal_error is not None:
+                raise release_exc from journal_error
             raise
         self._clear_completed_journal(
             lock,
@@ -1691,17 +1759,30 @@ class SlackTokenManager:
             try:
                 lock.release(cleanup_handle)
             except Exception as release_exc:
-                _update_operation_journal(
-                    journal,
-                    operation_id,
-                    {
-                        "Command": command,
-                        "Target": target,
-                        "LockNonce": cleanup_handle.nonce,
-                        "State": "CompletedJournalCleanupLockReleaseFailed",
-                        "Error": _redact(str(release_exc)),
-                    },
-                )
+                journal_error = None
+                try:
+                    lock.revalidate(cleanup_handle)
+                    _update_operation_journal(
+                        journal,
+                        operation_id,
+                        {
+                            "Command": command,
+                            "Target": target,
+                            "LockNonce": cleanup_handle.nonce,
+                            "State": (
+                                "CompletedJournalCleanupLockReleaseFailed"
+                            ),
+                            "Error": _redact(str(release_exc)),
+                        },
+                    )
+                except Exception as update_exc:
+                    journal_error = update_exc
+                    release_exc.add_note(
+                        "The journal-cleanup lock-release failure could not "
+                        f"be journaled safely: {_redact(str(update_exc))}"
+                    )
+                if journal_error is not None:
+                    raise release_exc from journal_error
                 raise
 
     def bootstrap(self) -> dict[str, Any]:
@@ -1722,6 +1803,38 @@ class SlackTokenManager:
         self._require_mutation_environment()
         current_latest = self.azd.get_environment_value(SECRET_LATEST_VERSION_ENV_NAME)
         if current_latest:
+            try:
+                self.provisioning_checker(self.azure, self.central())
+            except IncompleteProvisioningError:
+                def recover(
+                    renew_lock: Callable[[], None],
+                ) -> dict[str, Any]:
+                    self.azd.set_environment_value(
+                        SECRET_VERSION_ENV_NAME, ""
+                    )
+                    self.azd.set_environment_value(
+                        TOKEN_MIGRATION_MARKER_ENV_NAME, "true"
+                    )
+                    self.azd.set_environment_value(
+                        DEPLOY_WORKLOAD_ENV_NAME, "true"
+                    )
+                    renew_lock()
+                    self.azd.provision()
+                    renew_lock()
+                    self._central = None
+                    self.provisioning_checker(
+                        self.azure, self.central()
+                    )
+                    return {
+                        "Status": "BootstrapRecovered",
+                        "SecretVersion": current_latest,
+                    }
+
+                return self._mutate(
+                    "bootstrap-recovery",
+                    "Container App workload provisioning",
+                    recover,
+                )
             return {
                 "Status": "AlreadyBootstrapped",
                 "SecretVersion": current_latest,

@@ -1294,6 +1294,11 @@ Expected state: the hook exits with status `0` after creating or reconciling the
 protected API application, service principal, identifier URI,
 `ActionGroupsSecureWebhook` role, verified owners, and AzNS role assignment.
 This stage changes Microsoft Entra, but does not provision the Azure resources.
+Run only one mutating hook for an environment at a time. Its immutable,
+environment-derived Microsoft Graph application key reconciles a simultaneous
+first-create race without retaining two protected API applications, but the
+later owner, role, service-principal, and AZD writes are not one atomic
+transaction and therefore remain intentionally single-operator.
 
 Check the nonsecret hook outputs without printing the local Slack token:
 
@@ -1509,7 +1514,10 @@ the lifecycle CLI. The bootstrap command then:
 5. restores temporary vault network/RBAC access exactly;
 6. proves no local AZD token remains;
 7. clears the emergency version pin and performs a token-free workload
-   provision using the versionless secret URI.
+   provision using the versionless secret URI;
+8. records the latest verified secret version before acceptance so rerunning
+   `bootstrap` after a final provision failure resumes token-free instead of
+   requesting or writing another credential.
 
 The hidden token prompt accepts only the Slack **Bot User OAuth Token**, whose
 value starts with `xoxb-`. Copy it from **OAuth & Permissions**, paste it
@@ -1670,8 +1678,14 @@ Recovery:
 - For a regional capacity or policy error, do not change regions without a new
   preview. Update `AZURE_LOCATION`, rerun preview, and obtain approval again.
 - If bootstrap fails after the secret write, do not restore plaintext. Correct
-  the reported nonsecret cleanup state and rerun the idempotent token-free
-  recovery path.
+  the reported nonsecret cleanup or provisioning state and rerun the same
+  `python scripts/manage_slack_token.py bootstrap --environment
+  "$AZURE_ENV_NAME"` command. When a verified latest version is already
+  recorded and the Container App is positively observed as incomplete, it
+  reacquires the distributed lock and journal, reruns only the token-free
+  workload provision and acceptance path, and reports `BootstrapRecovered`;
+  it does not prompt for or write another token. Authentication,
+  authorization, or control-plane read failures stop without provisioning.
 
 ### Stage 7: build and deploy the application
 
@@ -2285,7 +2299,7 @@ the minimum evidence required before calling another deployment operational:
 | Gate | Accepted evidence |
 |---|---|
 | Workstation | Python 3.12, Azure CLI 2.81.0, Azure CLI-managed Bicep 0.46.1, AZD 1.31.0, Docker client/server 28.3.3, and Git 2.43.0 responded successfully. |
-| Repository | 368 tests, Flake8, dependency audit, both Bicep build/lint graphs, Docker build, and AZD packaging passed after the operational fixes documented here. |
+| Repository | 381 tests, Flake8, dependency audit, both Bicep build/lint graphs, Docker build, and AZD packaging passed after the operational fixes documented here. |
 | Infrastructure preview | Infrastructure-only preview showed the expected phase-one resources and no Container App, Action Group, or alert before bootstrap. |
 | Bootstrap | The hidden `xoxb-` transfer completed, Key Vault held an enabled latest version, local plaintext was absent, migration marker was set, and temporary firewall/RBAC/lock/journal state was restored. |
 | Workload | `azd deploy` published the application image and Container Apps single revision mode converged to exactly one healthy active revision. |

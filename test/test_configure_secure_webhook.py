@@ -51,7 +51,7 @@ class FakeGraph:
         self.handler = handler
         self.calls = []
 
-    def request(self, method, uri, body=None):
+    def request(self, method, uri, body=None, headers=None):
         self.calls.append((method, uri, body))
         return self.handler(method, uri, body)
 
@@ -630,8 +630,10 @@ def test_graph_client_uses_temp_file_and_removes_it():
         def __init__(self):
             self.body_path = None
             self.body = None
+            self.arguments = ()
 
         def invoke(self, *args):
+            self.arguments = args
             body_argument = args[args.index("--body") + 1]
             self.body_path = Path(body_argument[1:])
             assert self.body_path.exists()
@@ -643,10 +645,12 @@ def test_graph_client_uses_temp_file_and_removes_it():
         "POST",
         "https://graph.microsoft.com/v1.0/applications",
         {"displayName": 'Name with "quotes"'},
+        headers={"Prefer": "create-if-missing"},
     )
 
     assert response == {"id": "created"}
     assert azure.body == {"displayName": 'Name with "quotes"'}
+    assert "Prefer=create-if-missing" in azure.arguments
     assert not azure.body_path.exists()
 
 
@@ -831,9 +835,11 @@ def test_missing_configuration_is_created_in_safe_order(monkeypatch):
     )
 
     def handler(method, uri, body):
-        if method == "GET" and "/applications?" in uri:
+        if method == "GET" and "(uniqueName=" in uri:
+            raise ScopeManagerError("not found", status_code=404)
+        if method == "GET" and "displayName eq" in uri:
             return {"value": []}
-        if method == "POST" and uri.endswith("/applications"):
+        if method == "PATCH" and "(uniqueName=" in uri:
             return application(role=False, display_name=body["displayName"])
         if method == "PATCH" and f"/applications/{APP_OBJECT_ID}" in uri:
             assert body["identifierUris"] == [f"api://{APP_ID}"]
@@ -876,19 +882,53 @@ def test_missing_configuration_is_created_in_safe_order(monkeypatch):
     mutation_paths = [
         (method, uri) for method, uri, _body in graph.calls if method != "GET"
     ]
-    assert mutation_paths[0][1].endswith("/applications")
+    assert "(uniqueName=" in mutation_paths[0][1]
     assert any("/owners/$ref" in uri for _method, uri in mutation_paths)
     assert mutation_paths[-1][1].endswith("/appRoleAssignments")
     assert result == azd.values
+
+
+def test_application_creation_race_adopts_unique_name_winner():
+    display_name = "concurrent-environment"
+    unique_name = "azure-service-health-slack-bot-concurrent"
+    winner = {
+        **application(display_name=display_name),
+        "id": "33333333-3333-3333-3333-333333333333",
+        "appId": "44444444-4444-4444-4444-444444444444",
+        "uniqueName": unique_name,
+    }
+    unique_reads = 0
+
+    def handler(method, uri, body):
+        nonlocal unique_reads
+        if method == "GET" and "(uniqueName=" in uri:
+            unique_reads += 1
+            if unique_reads == 1:
+                raise ScopeManagerError("not found", status_code=404)
+            return winner
+        if method == "GET" and "displayName eq" in uri:
+            return {"value": []}
+        if method == "PATCH" and "(uniqueName=" in uri:
+            return None
+        raise AssertionError((method, uri, body))
+
+    result, created = SecureWebhookConfigurator(
+        FakeAzure(), FakeGraph(handler), FakeAzd()
+    )._application(display_name, "", "", unique_name)
+
+    assert result == winner
+    assert created is False
 
 
 def test_new_application_rolls_back_when_object_id_cannot_be_persisted():
     deleted = []
 
     def handler(method, uri, body):
-        if method == "GET" and "/applications?" in uri:
+        if method == "GET" and "(uniqueName=" in uri:
+            raise ScopeManagerError("not found", status_code=404)
+        if method == "GET" and "displayName eq" in uri:
             return {"value": []}
-        if method == "POST" and uri.endswith("/applications"):
+        if method == "PATCH" and "(uniqueName=" in uri:
             return application(role=False, display_name=body["displayName"])
         if method == "GET" and "/me?" in uri:
             return {"id": "user-id"}
@@ -921,9 +961,11 @@ def test_new_application_rolls_back_when_object_id_cannot_be_persisted():
 
 def test_new_application_persists_object_id_before_followup_graph_reads():
     def handler(method, uri, body):
-        if method == "GET" and "/applications?" in uri:
+        if method == "GET" and "(uniqueName=" in uri:
+            raise ScopeManagerError("not found", status_code=404)
+        if method == "GET" and "displayName eq" in uri:
             return {"value": []}
-        if method == "POST" and uri.endswith("/applications"):
+        if method == "PATCH" and "(uniqueName=" in uri:
             return application(role=False, display_name=body["displayName"])
         if method == "GET" and "/me?" in uri:
             raise ScopeManagerError("injected Graph read failure")
@@ -949,10 +991,16 @@ def test_new_application_persists_object_id_before_followup_graph_reads():
 def test_display_name_collision_and_duplicate_role_are_rejected():
     duplicate_apps = FakeGraph(
         lambda _method, uri, _body: (
-            {"value": [application(), application()]}
-            if "/applications?" in uri
-            else None
-        )
+            (_ for _ in ()).throw(
+                ScopeManagerError("not found", status_code=404)
+            )
+            if "(uniqueName=" in uri
+            else (
+                {"value": [application(), application()]}
+                if "/applications?" in uri
+                else None
+            )
+        ),
     )
     with pytest.raises(ScopeManagerError, match="Refusing to adopt"):
         SecureWebhookConfigurator(

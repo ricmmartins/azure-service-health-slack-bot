@@ -2118,6 +2118,7 @@ class ScopeManager:
                     "2023-01-01",
                 )
                 self.assert_action_group_ownership(action_group, item)
+                self.assert_operation_membership_unchanged()
                 current_references = (
                     self._unexpected_action_group_references(
                         item["ActionGroupId"]
@@ -2130,19 +2131,9 @@ class ScopeManager:
                         "Log Alert references appeared after review: "
                         f"{', '.join(current_references)}."
                     )
-                action_group = self.azure.invoke(
-                    "resource",
-                    "show",
-                    "--ids",
-                    item["ActionGroupId"],
-                    "--api-version",
-                    "2023-01-01",
-                )
-                self.assert_action_group_ownership(action_group, item)
                 # Action Groups do not expose a documented ETag/CAS delete.
-                # Delete only the exact ID immediately after the second
-                # ownership read and the complete reference scan.
-                self.assert_operation_membership_unchanged()
+                # Delete the exact ID immediately after the final complete
+                # reference scan, with no intervening network request.
                 self.azure.invoke(
                     "resource",
                     "delete",
@@ -2585,8 +2576,6 @@ class ScopeManager:
                     f"Replacement Action Group is disabled for subscription '{subscription_id}'. "
                     "The original alert remains enabled; no handoff occurred."
                 )
-            if original["Enabled"]:
-                self.set_alert_enabled(original, False)
             try:
                 if not replacement["Enabled"]:
                     self.set_alert_enabled(replacement, True)
@@ -2602,29 +2591,21 @@ class ScopeManager:
                     raise ScopeManagerError(
                         f"Replacement alert state is indeterminate for subscription "
                         f"'{subscription_id}' after an enable failure. The original alert remains "
-                        "disabled to avoid duplicate delivery. Immediate manual intervention is "
-                        f"required. Enable error: {enable_error} State-read error: {read_error}"
+                        "enabled, preserving coverage. Immediate manual review is required. "
+                        f"Enable error: {enable_error} State-read error: {read_error}"
                     ) from read_error
                 if replacement_enabled:
                     raise ScopeManagerError(
                         f"Replacement alert is enabled for subscription '{subscription_id}' after "
-                        "an uncertain enable response. The original alert remains disabled, "
-                        f"preserving one active path. Manual review is required. {enable_error}"
+                        "an uncertain enable response. The original alert also remains enabled, "
+                        f"so duplicate delivery is possible. Manual review is required. {enable_error}"
                     ) from enable_error
-                try:
-                    self.set_alert_enabled(
-                        original, True, compensating_restore=True
-                    )
-                except ScopeManagerError as rollback_error:
-                    raise ScopeManagerError(
-                        f"Replacement alert failed for subscription '{subscription_id}', and its "
-                        "original alert could not be re-enabled. Immediate manual intervention is "
-                        f"required. Replacement error: {enable_error} Rollback error: {rollback_error}"
-                    ) from rollback_error
                 raise ScopeManagerError(
-                    f"Replacement alert failed for subscription '{subscription_id}'. Its original "
-                    f"alert was re-enabled, so coverage remains intact. {enable_error}"
+                    f"Replacement alert failed for subscription '{subscription_id}'. The original "
+                    f"alert remains enabled, so coverage remains intact. {enable_error}"
                 ) from enable_error
+            if original["Enabled"]:
+                self.set_alert_enabled(original, False)
         state["Enabled"] = all(item["Enabled"] for item in members)
         for subscription_id in confirmed_ids:
             original = overlap_by_id[normalized_id(subscription_id)]

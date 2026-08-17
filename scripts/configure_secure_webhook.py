@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -676,10 +677,15 @@ class GraphClient:
         method: str,
         uri: str,
         body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Any:
         arguments = ["rest", "--method", method.lower(), "--uri", uri]
         body_path: Path | None = None
         try:
+            request_headers = [
+                f"{name}={value}"
+                for name, value in (headers or {}).items()
+            ]
             if body is not None:
                 with tempfile.NamedTemporaryFile(
                     mode="w",
@@ -693,10 +699,13 @@ class GraphClient:
                     [
                         "--headers",
                         "Content-Type=application/json",
+                        *request_headers,
                         "--body",
                         f"@{body_path}",
                     ]
                 )
+            elif request_headers:
+                arguments.extend(["--headers", *request_headers])
             return self.azure.invoke(*arguments)
         finally:
             if body_path is not None:
@@ -937,8 +946,11 @@ class SecureWebhookConfigurator:
         display_name: str,
         application_object_id: str,
         application_client_id: str,
+        unique_name: str,
     ) -> tuple[dict[str, Any], bool]:
-        select = "id,appId,displayName,api,appRoles,identifierUris"
+        select = (
+            "id,appId,displayName,uniqueName,api,appRoles,identifierUris"
+        )
         if application_object_id:
             try:
                 uuid.UUID(application_object_id)
@@ -973,6 +985,10 @@ class SecureWebhookConfigurator:
                     )
                 )
                 or member(application, "displayName") != display_name
+                or (
+                    member(application, "uniqueName")
+                    and member(application, "uniqueName") != unique_name
+                )
             ):
                 raise ScopeManagerError(
                     "The persisted Secure Webhook application identity does "
@@ -1003,12 +1019,46 @@ class SecureWebhookConfigurator:
                     application_client_id,
                 )
                 or member(application, "displayName") != display_name
+                or (
+                    member(application, "uniqueName")
+                    and member(application, "uniqueName") != unique_name
+                )
             ):
                 raise ScopeManagerError(
                     "The persisted Secure Webhook application identity does "
                     "not match the requested environment."
                 )
             return application, False
+
+        escaped_unique_name = unique_name.replace("'", "''")
+        keyed_uri = (
+            f"{GRAPH_ROOT}/applications"
+            f"(uniqueName='{escaped_unique_name}')"
+        )
+        try:
+            keyed_application = self.graph.request(
+                "GET", f"{keyed_uri}?$select={select}"
+            )
+        except ScopeManagerError as exc:
+            if (
+                getattr(exc, "status_code", None) != 404
+                and getattr(exc, "error_code", None)
+                not in {"NotFound", "Request_ResourceNotFound"}
+            ):
+                raise
+            keyed_application = None
+        if keyed_application is not None:
+            if not isinstance(keyed_application, dict):
+                raise ScopeManagerError(
+                    "Microsoft Graph returned an invalid Secure Webhook "
+                    "application response."
+                )
+            if member(keyed_application, "displayName") != display_name:
+                raise ScopeManagerError(
+                    "The environment's immutable Secure Webhook application "
+                    "key belongs to an unexpected display name."
+                )
+            return keyed_application, False
 
         escaped_name = display_name.replace("'", "''")
         collisions = graph_collection(
@@ -1023,19 +1073,25 @@ class SecureWebhookConfigurator:
                 "adopt an application by display name."
             )
         application = self.graph.request(
-            "POST",
-            f"{GRAPH_ROOT}/applications",
+            "PATCH",
+            keyed_uri,
             {
                 "displayName": display_name,
                 "api": {"requestedAccessTokenVersion": 2},
             },
+            headers={"Prefer": "create-if-missing"},
         )
+        application_created = application is not None
+        if application is None:
+            application = self.graph.request(
+                "GET", f"{keyed_uri}?$select={select}"
+            )
         if not isinstance(application, dict):
             raise ScopeManagerError(
-                "Microsoft Graph returned an invalid response after creating "
+                "Microsoft Graph returned an invalid response after upserting "
                 "the Secure Webhook application."
             )
-        return application, True
+        return application, application_created
 
     def configure(
         self,
@@ -1076,10 +1132,18 @@ class SecureWebhookConfigurator:
                 "application object or client id."
             )
 
+        unique_name_seed = (
+            f"{tenant_id}\0{environment_name or display_name}"
+        ).encode("utf-8")
+        unique_name = (
+            "azure-service-health-slack-bot-"
+            f"{hashlib.sha256(unique_name_seed).hexdigest()[:32]}"
+        )
         application, application_created = self._application(
             display_name,
             application_object_id,
             application_client_id,
+            unique_name,
         )
         application_id = str(member(application, "appId", "") or "").strip()
         application_object_id = str(

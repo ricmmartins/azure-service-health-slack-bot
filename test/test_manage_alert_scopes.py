@@ -722,6 +722,7 @@ def test_orphan_cleanup_deletes_only_action_group():
         if args[:2] == ("resource", "show"):
             return action_group_resource(orphan)
         if args[:4] == ("monitor", "activity-log", "alert", "list"):
+            events.append("scan")
             return []
         if args[:2] == ("resource", "delete"):
             events.append("delete")
@@ -741,7 +742,7 @@ def test_orphan_cleanup_deletes_only_action_group():
         "--ids",
         orphan["ActionGroupId"],
     )
-    assert events[-2:] == ["revalidate", "delete"]
+    assert events[-2:] == ["scan", "delete"]
 
 
 def test_action_group_delete_revalidates_ownership_and_all_alert_references():
@@ -892,7 +893,9 @@ def test_action_group_delete_checks_all_monitor_rule_references(
         ).remove_scope_resources(item)
 
 
-def test_migration_restores_original_when_replacement_enable_fails(monkeypatch):
+def test_migration_keeps_original_enabled_when_replacement_enable_fails(
+    monkeypatch,
+):
     original = scope_member()
     replacement = scope_member(
         scope_kind="managementGroup",
@@ -941,15 +944,11 @@ def test_migration_restores_original_when_replacement_enable_fails(monkeypatch):
 
     with pytest.raises(ScopeManagerError, match="coverage remains intact"):
         instance.migrate_management_group(GROUP_ID)
-    assert transitions == [
-        ("subscription", False),
-        ("managementGroup", True),
-        ("subscription", True),
-    ]
+    assert transitions == [("managementGroup", True)]
     assert original["Enabled"] is True
 
 
-def test_migration_keeps_original_disabled_if_uncertain_replacement_is_enabled(
+def test_migration_preserves_coverage_if_replacement_enable_is_uncertain(
     monkeypatch,
 ):
     original = scope_member()
@@ -996,9 +995,9 @@ def test_migration_keeps_original_disabled_if_uncertain_replacement_is_enabled(
 
     monkeypatch.setattr(instance, "set_alert_enabled", set_enabled)
 
-    with pytest.raises(ScopeManagerError, match="preserving one active path"):
+    with pytest.raises(ScopeManagerError, match="duplicate delivery"):
         instance.migrate_management_group(GROUP_ID)
-    assert original["Enabled"] is False
+    assert original["Enabled"] is True
 
 
 def test_central_discovery_validates_tags_receiver_and_baseline_relationship():

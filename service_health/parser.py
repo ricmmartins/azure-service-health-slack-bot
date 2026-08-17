@@ -1,6 +1,7 @@
 import html
 import json
 import re
+import uuid
 from datetime import datetime, timezone
 
 from service_health.models import (
@@ -16,7 +17,7 @@ class InvalidServiceHealthPayload(ValueError):
 
 
 _SUBSCRIPTION_PATTERN = re.compile(
-    r"/subscriptions/([0-9a-fA-F-]{36})(?:/|$)", re.IGNORECASE)
+    r"/subscriptions/([^/]+)(?:/|$)", re.IGNORECASE)
 _LEVEL_BY_NUMBER = {
     0: AlertLevel.CRITICAL,
     1: AlertLevel.ERROR,
@@ -158,7 +159,10 @@ def _parse_impacted_services(raw_value):
 def _find_subscription_id(context, essentials):
     value = context.get("subscriptionId")
     if isinstance(value, str) and value.strip():
-        return value.strip()
+        return _canonical_subscription_id(value, "alertContext.subscriptionId")
+    if value is not None:
+        raise InvalidServiceHealthPayload(
+            "Invalid 'alertContext.subscriptionId'")
 
     candidates = [essentials.get("alertId")]
     candidates.extend(essentials.get("alertTargetIDs") or [])
@@ -167,9 +171,18 @@ def _find_subscription_id(context, essentials):
             continue
         match = _SUBSCRIPTION_PATTERN.search(candidate)
         if match:
-            return match.group(1)
+            return _canonical_subscription_id(
+                match.group(1), "subscription id in alert essentials")
     raise InvalidServiceHealthPayload(
         "Missing subscriptionId in alert context and essentials")
+
+
+def _canonical_subscription_id(value, field_name):
+    try:
+        return str(uuid.UUID(value.strip()))
+    except (AttributeError, ValueError) as exc:
+        raise InvalidServiceHealthPayload(
+            f"Invalid '{field_name}'") from exc
 
 
 def parse_service_health_alert(payload):

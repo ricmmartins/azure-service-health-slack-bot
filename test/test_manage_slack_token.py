@@ -31,6 +31,7 @@ from scripts.manage_slack_token import (
     DEPLOY_WORKLOAD_ENV_NAME,
     EXPECTED_BOT_USER_ID_ENV_NAME,
     EXPECTED_TEAM_ID_ENV_NAME,
+    IncompleteProvisioningError,
     PREVIOUS_SECRET_VERSION_ENV_NAME,
     SECRET_LATEST_VERSION_ENV_NAME,
     SECRET_NAME,
@@ -832,6 +833,62 @@ def test_bootstrap_is_idempotent_when_already_bootstrapped():
     assert azd.provision_calls == 0
 
 
+def test_bootstrap_resumes_token_free_after_final_provision_failure():
+    azure = FakeAzure()
+    azd = FakeAzd({SECRET_LATEST_VERSION_ENV_NAME: "v9"})
+    checks = iter([
+        IncompleteProvisioningError("not provisioned"),
+        None,
+    ])
+
+    def provisioning_checker(_azure, _central):
+        result = next(checks)
+        if result is not None:
+            raise result
+
+    manager = make_manager(
+        azure,
+        azd,
+        prompt_token=lambda: (_ for _ in ()).throw(
+            AssertionError("token prompt must not run")
+        ),
+        provisioning_checker=provisioning_checker,
+    )
+
+    result = manager.bootstrap()
+
+    assert result == {
+        "Status": "BootstrapRecovered",
+        "SecretVersion": "v9",
+    }
+    assert azd.provision_calls == 1
+    assert azd.values[DEPLOY_WORKLOAD_ENV_NAME] == "true"
+    assert azd.values[SECRET_VERSION_ENV_NAME] == ""
+    assert azure.locks == {}
+    assert azure.deployments == {}
+
+
+def test_bootstrap_does_not_mutate_on_provisioning_check_read_failure():
+    azure = FakeAzure()
+    azd = FakeAzd({SECRET_LATEST_VERSION_ENV_NAME: "v9"})
+    manager = make_manager(
+        azure,
+        azd,
+        provisioning_checker=lambda _azure, _central: (
+            (_ for _ in ()).throw(
+                ScopeManagerError("authorization failed")
+            )
+        ),
+    )
+
+    with pytest.raises(ScopeManagerError, match="authorization failed"):
+        manager.bootstrap()
+
+    assert azd.provision_calls == 0
+    assert azure.locks == {}
+    assert azure.deployments == {}
+
+
 def test_bootstrap_phase_one_provisions_before_any_vault_lookup():
     azure = FakeAzure()
     azd = FakeAzd()
@@ -957,6 +1014,69 @@ def test_bootstrap_releases_lock_when_initial_journal_write_fails():
 
     with pytest.raises(ScopeManagerError, match="journal unavailable"):
         manager.bootstrap()
+
+    assert azure.locks == {}
+
+
+@pytest.mark.parametrize("final_state", ["Failed", "Completed"])
+def test_mutation_releases_lock_when_final_journal_write_fails(final_state):
+    class FinalJournalFailure(FakeAzure):
+        def _deployment(self, arguments, uri):
+            method = arguments[arguments.index("--method") + 1].lower()
+            if method == "put":
+                state = self._body(arguments)["properties"]["template"][
+                    "outputs"
+                ]["journalState"]["value"]["State"]
+                if state == final_state:
+                    raise ScopeManagerError(
+                        f"{final_state} journal unavailable"
+                    )
+            return super()._deployment(arguments, uri)
+
+    azure = FinalJournalFailure()
+    manager = make_manager(azure)
+
+    if final_state == "Failed":
+        with pytest.raises(RuntimeError, match="primary mutation failure"):
+            manager._mutate(
+                "test",
+                "target",
+                lambda _renew: (_ for _ in ()).throw(
+                    RuntimeError("primary mutation failure")
+                ),
+            )
+    else:
+        with pytest.raises(
+            OperationLockError, match="journal could not be finalized"
+        ):
+            manager._mutate(
+                "test",
+                "target",
+                lambda _renew: {"Status": "Succeeded"},
+            )
+
+    assert azure.locks == {}
+
+
+def test_mutation_preserves_primary_error_when_final_journal_read_fails():
+    class FinalJournalReadFailure(FakeAzure):
+        def _deployment(self, arguments, uri):
+            method = arguments[arguments.index("--method") + 1].lower()
+            if method == "get" and self.deployments:
+                raise ScopeManagerError("journal read unavailable")
+            return super()._deployment(arguments, uri)
+
+    azure = FinalJournalReadFailure()
+    manager = make_manager(azure)
+
+    with pytest.raises(RuntimeError, match="primary mutation failure"):
+        manager._mutate(
+            "test",
+            "target",
+            lambda _renew: (_ for _ in ()).throw(
+                RuntimeError("primary mutation failure")
+            ),
+        )
 
     assert azure.locks == {}
 
