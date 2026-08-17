@@ -109,6 +109,12 @@ def test_python_entry_points_help_is_success(script):
             "--management-group-id",
             "platform",
         ],
+        [
+            "migrate-from-management-group",
+            "--management-group-id",
+            "platform",
+            "--what-if",
+        ],
     ],
 )
 def test_readme_scope_invocation_forms_are_accepted(arguments):
