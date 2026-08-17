@@ -1,4 +1,5 @@
 import copy
+import io
 import json
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -7,6 +8,7 @@ from unittest.mock import Mock
 from urllib.error import URLError
 
 import pytest
+import service_health.service as service_module
 from azure.core.exceptions import ResourceExistsError
 from flask import Flask
 from slack_sdk.errors import SlackApiError
@@ -26,6 +28,7 @@ from service_health.parser import (
 from service_health.routes import create_service_health_blueprint
 from service_health.routing import RoutingConfig
 from service_health.service import (
+    PermanentProcessingError,
     ProcessingOutcome,
     ProcessingResult,
     ServiceHealthProcessor,
@@ -105,6 +108,26 @@ def test_parser_normalizes_lifecycle(stage, status, expected):
     assert event.impacted_services[0].regions == ("East US",)
 
 
+@pytest.mark.parametrize(
+    ("stage", "expected"),
+    [
+        ("Planned", LifecycleStatus.ACTIVE),
+        ("InProgress", LifecycleStatus.UPDATED),
+        ("Rescheduled", LifecycleStatus.UPDATED),
+        ("Complete", LifecycleStatus.RESOLVED),
+        ("Canceled", LifecycleStatus.RESOLVED),
+        ("Cancelled", LifecycleStatus.RESOLVED),
+    ],
+)
+def test_parser_normalizes_documented_maintenance_stages(stage, expected):
+    payload = common_alert(stage=stage, status="Active")
+    payload["data"]["alertContext"]["properties"]["incidentType"] = "Maintenance"
+
+    event = parse_service_health_alert(payload)
+
+    assert event.lifecycle_status == expected
+
+
 def test_parser_accepts_numeric_source_and_level():
     payload = common_alert()
     payload["data"]["alertContext"]["eventSource"] = 2
@@ -145,6 +168,26 @@ def test_parser_rejects_invalid_payload(mutator):
     mutator(payload)
     with pytest.raises(InvalidServiceHealthPayload):
         parse_service_health_alert(payload)
+
+
+def test_parser_rejects_malformed_explicit_subscription_id():
+    payload = common_alert()
+    payload["data"]["alertContext"]["subscriptionId"] = "not-a-guid"
+
+    with pytest.raises(
+        InvalidServiceHealthPayload,
+        match="alertContext.subscriptionId",
+    ):
+        parse_service_health_alert(payload)
+
+
+def test_parser_canonicalizes_explicit_subscription_id():
+    payload = common_alert()
+    payload["data"]["alertContext"]["subscriptionId"] = SUBSCRIPTION_ID.upper()
+
+    event = parse_service_health_alert(payload)
+
+    assert event.subscription_id == SUBSCRIPTION_ID
 
 
 def test_event_keys_and_fingerprint_are_deterministic():
@@ -239,6 +282,20 @@ def test_slack_rendering_includes_accessible_fallback_and_incident_details():
     assert "East US" in serialized
     assert "Open Azure Service Health" in serialized
     assert len(blocks[0]["text"]["text"]) <= 150
+
+
+def test_slack_rendering_keeps_tracking_id_inside_one_code_span():
+    event = replace(
+        parse_service_health_alert(common_alert()),
+        tracking_id="ABC`DEF",
+    )
+
+    _text, blocks = render_incident_message(
+        event, LifecycleStatus.ACTIVE)
+
+    context = blocks[-1]["elements"][0]["text"]
+    assert "Tracking ID: `ABC'DEF`" in context
+    assert context.count("`") == 2
 
 
 def test_slack_rendering_truncates_complete_resolved_header():
@@ -429,6 +486,24 @@ def test_table_store_create_finalize_duplicate_and_update():
         "123.789",
     )
     assert table.entity["threadReplyTs"] == "123.789"
+
+
+def test_table_store_bounds_event_strings_by_utf16_code_units():
+    now = datetime(2025, 6, 1, 12, tzinfo=timezone.utc)
+    table = FakeTableClient()
+    store = AzureTableIncidentStore(table, now=lambda: now)
+    event = replace(
+        parse_service_health_alert(common_alert()),
+        communication="😀" * 40_000,
+    )
+
+    store.begin(event, "CDEFAULT")
+
+    assert len(table.entity["communication"]) == 16_000
+    assert (
+        len(table.entity["communication"].encode("utf-16-le"))
+        == 64_000
+    )
 
 
 def test_table_store_resumes_reply_without_regressing_root_watermark():
@@ -723,6 +798,47 @@ def test_processor_returns_transient_error_when_incident_is_busy():
             routing, store, FakeNotifier()).process(event)
 
 
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (
+            TransientProcessingError("temporary"),
+            ProcessingResult.TRANSIENT_FAILURE,
+        ),
+        (
+            PermanentProcessingError("permanent"),
+            ProcessingResult.PERMANENT_FAILURE,
+        ),
+    ],
+)
+def test_processor_records_classified_failure_metrics(
+    monkeypatch, error, expected
+):
+    event = parse_service_health_alert(common_alert())
+    recorded = []
+    monkeypatch.setattr(
+        service_module.service_health_metrics,
+        "record",
+        lambda recorded_event, result: recorded.append(
+            (recorded_event, result)
+        ),
+    )
+    processor = ServiceHealthProcessor(
+        RoutingConfig.from_dict({
+            "default_channel_id": "CDEFAULT",
+            "rules": [],
+        }),
+        FakeStore([]),
+        FakeNotifier(),
+    )
+    monkeypatch.setattr(processor, "_process", lambda _event: (_ for _ in ()).throw(error))
+
+    with pytest.raises(type(error)):
+        processor.process(event)
+
+    assert recorded == [(event, expected)]
+
+
 class StubProcessor:
     def __init__(self):
         self.events = []
@@ -779,6 +895,36 @@ def test_flask_endpoint_maps_invalid_payload_to_422():
         json={"schemaId": "wrong"},
     )
     assert response.status_code == 422
+
+
+def test_flask_endpoint_limits_chunked_body_without_content_length():
+    settings = ServiceHealthSettings(
+        table_endpoint="https://example.table.core.windows.net",
+        table_name="ServiceHealthIncidents",
+        routing=RoutingConfig.from_dict({
+            "default_channel_id": "CDEFAULT",
+            "rules": [],
+        }),
+        app_environment="test",
+        max_payload_bytes=32,
+    )
+    runtime = SimpleNamespace(settings=settings, processor=StubProcessor())
+    flask_app = Flask(__name__)
+    flask_app.register_blueprint(
+        create_service_health_blueprint(lambda: runtime))
+
+    response = flask_app.test_client().open(
+        "/api/service-health",
+        method="POST",
+        input_stream=io.BytesIO(json.dumps(common_alert()).encode()),
+        content_type="application/json",
+        content_length=None,
+        headers={"Transfer-Encoding": "chunked"},
+        environ_overrides={"wsgi.input_terminated": True},
+    )
+
+    assert response.status_code == 413
+    assert response.json["error"] == "payload_too_large"
 
 
 def test_flask_endpoint_requires_easy_auth_in_production():

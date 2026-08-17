@@ -87,24 +87,38 @@ def _etag(entity):
     return entity.get("etag") or entity.get("odata.etag") or ""
 
 
+def _truncate_table_string(value, max_utf16_code_units=32_000):
+    used_units = 0
+    result = []
+    for character in value:
+        character_units = 2 if ord(character) > 0xFFFF else 1
+        if used_units + character_units > max_utf16_code_units:
+            break
+        result.append(character)
+        used_units += character_units
+    return "".join(result)
+
+
 def _event_properties(event):
     return {
-        "trackingId": event.tracking_id,
+        "trackingId": _truncate_table_string(event.tracking_id),
         "pendingFingerprint": event.fingerprint,
         "pendingSubmissionTime": event.submission_time,
         "pendingLifecycleStatus": event.lifecycle_status.value,
         "level": event.level.value,
-        "title": event.title,
+        "title": _truncate_table_string(event.title),
         "impactStartTime": event.impact_start_time,
-        "communication": event.communication,
-        "impactedServicesJson": json.dumps(
-            [item.as_dict() for item in event.impacted_services],
-            ensure_ascii=True,
-            separators=(",", ":"),
+        "communication": _truncate_table_string(event.communication),
+        "impactedServicesJson": _truncate_table_string(
+            json.dumps(
+                [item.as_dict() for item in event.impacted_services],
+                ensure_ascii=True,
+                separators=(",", ":"),
+            )
         ),
-        "incidentType": event.incident_type,
-        "communicationId": event.communication_id,
-        "eventDataId": event.event_data_id,
+        "incidentType": _truncate_table_string(event.incident_type),
+        "communicationId": _truncate_table_string(event.communication_id),
+        "eventDataId": _truncate_table_string(event.event_data_id),
     }
 
 

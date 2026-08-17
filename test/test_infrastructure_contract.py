@@ -43,6 +43,8 @@ def test_two_phase_workload_and_disabled_first_alert_controls_are_explicit():
     assert "SERVICE_HEALTH_DEPLOY_WORKLOAD" in parameters
     assert "SERVICE_APP_RESOURCE_EXISTS" in parameters
     assert "SERVICE_HEALTH_BASELINE_ALERT_ENABLED" in parameters
+    assert "AZURE_MANAGEMENT_GROUP_ID" not in parameters
+    assert "param managementGroupId" not in main
 
 
 def test_reprovision_preserves_the_deployed_image_and_bootstrap_is_pinned():
@@ -78,6 +80,7 @@ def test_production_monitoring_uses_an_independent_action_group():
     assert "StorageWrite" in monitoring
     assert "StorageDelete" in monitoring
     assert "AppRequests" in monitoring
+    assert "Permanent Service Health processing failure" in monitoring
     assert "AppDependencies" in monitoring
     assert "AppAvailabilityResults" in monitoring
     assert "operationsActionGroupId" in monitoring

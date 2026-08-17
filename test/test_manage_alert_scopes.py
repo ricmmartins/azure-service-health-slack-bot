@@ -274,6 +274,18 @@ def test_azure_cli_never_retries_mutations():
     assert len(calls) == 1
 
 
+def test_azure_cli_extracts_error_code_from_wrapped_json():
+    detail = (
+        'ERROR: Not Found({"error":{"code":"DeploymentNotFound",'
+        '"message":"The deployment could not be found."}})'
+    )
+
+    assert scope_cli._azure_error_metadata(detail) == (
+        None,
+        "DeploymentNotFound",
+    )
+
+
 def test_azure_cli_rejects_invalid_json():
     result = subprocess.CompletedProcess([], 0, "not-json", "")
     with pytest.raises(ScopeManagerError, match="invalid JSON"):
@@ -704,16 +716,23 @@ def test_delete_guards_cannot_be_bypassed(
 
 def test_orphan_cleanup_deletes_only_action_group():
     orphan = scope_member(orphan=True)
+    events = []
 
     def handler(args):
         if args[:2] == ("resource", "show"):
             return action_group_resource(orphan)
         if args[:4] == ("monitor", "activity-log", "alert", "list"):
+            events.append("scan")
             return []
+        if args[:2] == ("resource", "delete"):
+            events.append("delete")
         return None
 
     azure = FakeAzure(handler)
     instance = manager(azure, scopes=[orphan])
+    instance.assert_operation_membership_unchanged = (
+        lambda: events.append("revalidate")
+    )
 
     instance.remove_scope_resources(orphan)
 
@@ -723,6 +742,7 @@ def test_orphan_cleanup_deletes_only_action_group():
         "--ids",
         orphan["ActionGroupId"],
     )
+    assert events[-2:] == ["scan", "delete"]
 
 
 def test_action_group_delete_revalidates_ownership_and_all_alert_references():
@@ -873,7 +893,261 @@ def test_action_group_delete_checks_all_monitor_rule_references(
         ).remove_scope_resources(item)
 
 
-def test_migration_restores_original_when_replacement_enable_fails(monkeypatch):
+def test_migration_confirms_before_first_mutation(monkeypatch):
+    individual = scope_member()
+    instance = manager(scopes=[individual], confirm=lambda _question: False)
+    coverage = {
+        "ManagementGroupId": GROUP_ID,
+        "TenantId": TENANT,
+        "SubscriptionIds": [TARGET_SUBSCRIPTION],
+        "DescendantManagementGroupIds": [],
+    }
+    monkeypatch.setattr(instance, "get_management_group_coverage", lambda _id: coverage)
+    monkeypatch.setattr(
+        instance,
+        "protected_baseline_overlaps_management_group",
+        lambda _coverage: False,
+    )
+    monkeypatch.setattr(
+        instance,
+        "overlaps_for_management_group",
+        lambda *_args, **_kwargs: [individual],
+    )
+    monkeypatch.setattr(instance, "assert_remove_permissions", lambda _scope: None)
+    mutations = []
+    monkeypatch.setattr(
+        instance,
+        "add_scope",
+        lambda *_args, **_kwargs: mutations.append("add"),
+    )
+
+    result = instance.migrate_management_group(GROUP_ID)
+
+    assert result["Status"] == "Cancelled"
+    assert mutations == []
+
+
+def test_reverse_migration_enables_replacements_before_delete(monkeypatch):
+    members = [
+        scope_member(
+            subscription_id=subscription_id,
+            scope_kind="managementGroup",
+            scope_id=GROUP_ID,
+        )
+        for subscription_id in ("sub-1", "sub-2")
+    ]
+    instance = manager(confirm=lambda _question: True)
+    group = instance.new_management_group_state(GROUP_ID, members)
+    instance.scopes = [group]
+    coverage = {
+        "ManagementGroupId": GROUP_ID,
+        "TenantId": TENANT,
+        "SubscriptionIds": ["sub-1", "sub-2"],
+        "DescendantManagementGroupIds": [],
+    }
+    monkeypatch.setattr(instance, "get_management_group_coverage", lambda _id: coverage)
+    monkeypatch.setattr(
+        instance, "overlaps_for_management_group", lambda *_args, **_kwargs: []
+    )
+    monkeypatch.setattr(instance, "assert_remove_permissions", lambda _scope: None)
+    monkeypatch.setattr(instance, "test_subscription_tenant", lambda _id: None)
+    monkeypatch.setattr(instance, "assert_add_permissions", lambda *_args: None)
+    monkeypatch.setattr(instance, "refresh", lambda: None)
+    order = []
+
+    def add_replacement(_kind, subscription_id, **kwargs):
+        assert kwargs["leave_disabled"] is True
+        assert kwargs["allow_management_group_overlap"] is True
+        order.append(f"add-{subscription_id}")
+        return {
+            "Scope": scope_member(
+                subscription_id=subscription_id, enabled=False
+            ),
+            "TestStatus": "Complete",
+        }
+
+    monkeypatch.setattr(instance, "add_scope", add_replacement)
+
+    def enable(scope, value):
+        order.append(f"enable-{scope['MemberSubscriptionId']}")
+        scope["Enabled"] = value
+
+    monkeypatch.setattr(instance, "set_alert_enabled", enable)
+    monkeypatch.setattr(
+        instance, "current_enabled", lambda *_args, **_kwargs: True
+    )
+    monkeypatch.setattr(
+        instance,
+        "remove_scope_resources",
+        lambda _scope: order.append("delete-group"),
+    )
+
+    result = instance.migrate_from_management_group(GROUP_ID)
+
+    assert result["Status"] == "Migrated"
+    assert result["ReplacementSubscriptions"] == ["sub-1", "sub-2"]
+    assert result["TestStatus"] == "Complete"
+    assert order == [
+        "add-sub-1",
+        "add-sub-2",
+        "enable-sub-1",
+        "enable-sub-2",
+        "delete-group",
+    ]
+
+
+def test_reverse_migration_rolls_back_enabled_replacements(monkeypatch):
+    members = [
+        scope_member(
+            subscription_id=subscription_id,
+            scope_kind="managementGroup",
+            scope_id=GROUP_ID,
+        )
+        for subscription_id in ("sub-1", "sub-2")
+    ]
+    instance = manager(confirm=lambda _question: True)
+    group = instance.new_management_group_state(GROUP_ID, members)
+    instance.scopes = [group]
+    coverage = {
+        "ManagementGroupId": GROUP_ID,
+        "TenantId": TENANT,
+        "SubscriptionIds": ["sub-1", "sub-2"],
+        "DescendantManagementGroupIds": [],
+    }
+    monkeypatch.setattr(instance, "get_management_group_coverage", lambda _id: coverage)
+    monkeypatch.setattr(
+        instance, "overlaps_for_management_group", lambda *_args, **_kwargs: []
+    )
+    monkeypatch.setattr(instance, "assert_remove_permissions", lambda _scope: None)
+    monkeypatch.setattr(instance, "test_subscription_tenant", lambda _id: None)
+    monkeypatch.setattr(instance, "assert_add_permissions", lambda *_args: None)
+    monkeypatch.setattr(instance, "refresh", lambda: None)
+    replacements = {
+        subscription_id: scope_member(
+            subscription_id=subscription_id, enabled=False
+        )
+        for subscription_id in ("sub-1", "sub-2")
+    }
+    monkeypatch.setattr(
+        instance,
+        "add_scope",
+        lambda _kind, subscription_id, **_kwargs: {
+            "Scope": replacements[subscription_id],
+            "TestStatus": "Complete",
+        },
+    )
+    updates = []
+
+    def set_enabled(scope, value):
+        subscription_id = scope["MemberSubscriptionId"]
+        updates.append((subscription_id, value))
+        if subscription_id == "sub-2" and value:
+            raise ScopeManagerError("activation failed")
+        scope["Enabled"] = value
+
+    monkeypatch.setattr(instance, "set_alert_enabled", set_enabled)
+    monkeypatch.setattr(
+        instance,
+        "current_enabled",
+        lambda scope, *_args: scope["Enabled"],
+    )
+    deletes = []
+    monkeypatch.setattr(
+        instance,
+        "remove_scope_resources",
+        lambda scope: deletes.append(scope),
+    )
+
+    with pytest.raises(ScopeManagerError, match="remains enabled"):
+        instance.migrate_from_management_group(GROUP_ID)
+
+    assert updates == [
+        ("sub-1", True),
+        ("sub-2", True),
+        ("sub-1", False),
+    ]
+    assert deletes == []
+
+
+def test_reverse_migration_absent_scope_does_not_query_management_group(
+    monkeypatch,
+):
+    instance = manager()
+    queries = []
+    monkeypatch.setattr(
+        instance,
+        "get_management_group_coverage",
+        lambda _id: queries.append("query"),
+    )
+
+    result = instance.migrate_from_management_group(GROUP_ID)
+
+    assert result == {
+        "Status": "AlreadyAbsent",
+        "ManagementGroupId": GROUP_ID,
+    }
+    assert queries == []
+
+
+def test_reverse_migration_reports_duplicate_delivery_when_delete_fails(
+    monkeypatch,
+):
+    member = scope_member(
+        scope_kind="managementGroup",
+        scope_id=GROUP_ID,
+    )
+    instance = manager(confirm=lambda _question: True)
+    group = instance.new_management_group_state(GROUP_ID, [member])
+    instance.scopes = [group]
+    coverage = {
+        "ManagementGroupId": GROUP_ID,
+        "TenantId": TENANT,
+        "SubscriptionIds": [TARGET_SUBSCRIPTION],
+        "DescendantManagementGroupIds": [],
+    }
+    monkeypatch.setattr(
+        instance, "get_management_group_coverage", lambda _id: coverage
+    )
+    monkeypatch.setattr(
+        instance, "overlaps_for_management_group", lambda *_args, **_kwargs: []
+    )
+    monkeypatch.setattr(instance, "assert_remove_permissions", lambda _scope: None)
+    monkeypatch.setattr(instance, "test_subscription_tenant", lambda _id: None)
+    monkeypatch.setattr(instance, "assert_add_permissions", lambda *_args: None)
+    monkeypatch.setattr(instance, "refresh", lambda: None)
+    replacement = scope_member(enabled=False)
+    monkeypatch.setattr(
+        instance,
+        "add_scope",
+        lambda *_args, **_kwargs: {
+            "Scope": replacement,
+            "TestStatus": "Complete",
+        },
+    )
+    monkeypatch.setattr(
+        instance,
+        "set_alert_enabled",
+        lambda scope, value: scope.update(Enabled=value),
+    )
+    monkeypatch.setattr(
+        instance, "current_enabled", lambda *_args, **_kwargs: True
+    )
+
+    def fail_delete(_scope):
+        raise ScopeManagerError("delete uncertain")
+
+    monkeypatch.setattr(instance, "remove_scope_resources", fail_delete)
+
+    with pytest.raises(ScopeManagerError, match="Duplicate delivery may continue"):
+        instance.migrate_from_management_group(GROUP_ID)
+
+    assert replacement["Enabled"] is True
+    assert group["Enabled"] is True
+
+
+def test_migration_keeps_original_enabled_when_replacement_enable_fails(
+    monkeypatch,
+):
     original = scope_member()
     replacement = scope_member(
         scope_kind="managementGroup",
@@ -922,15 +1196,11 @@ def test_migration_restores_original_when_replacement_enable_fails(monkeypatch):
 
     with pytest.raises(ScopeManagerError, match="coverage remains intact"):
         instance.migrate_management_group(GROUP_ID)
-    assert transitions == [
-        ("subscription", False),
-        ("managementGroup", True),
-        ("subscription", True),
-    ]
+    assert transitions == [("managementGroup", True)]
     assert original["Enabled"] is True
 
 
-def test_migration_keeps_original_disabled_if_uncertain_replacement_is_enabled(
+def test_migration_preserves_coverage_if_replacement_enable_is_uncertain(
     monkeypatch,
 ):
     original = scope_member()
@@ -977,9 +1247,9 @@ def test_migration_keeps_original_disabled_if_uncertain_replacement_is_enabled(
 
     monkeypatch.setattr(instance, "set_alert_enabled", set_enabled)
 
-    with pytest.raises(ScopeManagerError, match="preserving one active path"):
+    with pytest.raises(ScopeManagerError, match="duplicate delivery"):
         instance.migrate_management_group(GROUP_ID)
-    assert original["Enabled"] is False
+    assert original["Enabled"] is True
 
 
 def test_central_discovery_validates_tags_receiver_and_baseline_relationship():
@@ -1352,6 +1622,33 @@ def test_execute_mutating_command_acquires_lock_and_clears_journal_on_success(
         call[:4] == ("storage", "account", "keys", "list")
         for call in azure.calls
     )
+
+
+def test_execute_releases_lock_when_initial_journal_write_fails(monkeypatch):
+    class JournalWriteFailure(LockingFakeAzure):
+        def _deployment(self, arguments, uri):
+            method = arguments[arguments.index("--method") + 1].lower()
+            if method == "put":
+                raise ScopeManagerError("journal unavailable")
+            return super()._deployment(arguments, uri)
+
+    azure = JournalWriteFailure(
+        lambda _args: {"user": {"name": "operator@example.com"}}
+    )
+    instance = locking_manager(azure, scopes=[scope_member()])
+    monkeypatch.setattr(
+        instance,
+        "add_scope",
+        lambda *_a, **_k: {"Status": "Added"},
+    )
+
+    with pytest.raises(ScopeManagerError, match="journal unavailable"):
+        instance.execute(
+            "add-subscription",
+            subscription_id=TARGET_SUBSCRIPTION,
+        )
+
+    assert azure.locks == {}
 
 
 def test_execute_list_and_what_if_never_touch_lock_or_journal(monkeypatch):

@@ -37,9 +37,6 @@
     },
     "tenantId": {
       "value": "${AZURE_TENANT_ID}"
-    },
-    "managementGroupId": {
-      "value": "${AZURE_MANAGEMENT_GROUP_ID}"
     }
   }
 }

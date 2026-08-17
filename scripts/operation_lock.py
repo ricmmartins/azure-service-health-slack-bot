@@ -52,6 +52,7 @@ LOCK_API_VERSION = "2022-04-01"
 DEPLOYMENT_API_VERSION = "2021-04-01"
 DEFAULT_LOCK_NAME = "service-health-operation"
 DEFAULT_JOURNAL_PREFIX = "service-health-journal"
+MAX_DEPLOYMENT_NAME_LENGTH = 64
 DEFAULT_TTL_SECONDS = 15 * 60
 MAX_NOTES_LENGTH = 512
 NOT_FOUND_ERROR_CODES = frozenset(
@@ -342,7 +343,6 @@ class OperationLock:
         blob = self._blob()
         try:
             blob.upload_blob(payload, overwrite=False)
-            lease = blob.acquire_lease(lease_duration=60)
         except Exception as exc:
             if getattr(exc, "status_code", None) not in {409, 412}:
                 raise
@@ -350,13 +350,50 @@ class OperationLock:
                 f"Could not acquire operation lock '{self.lock_name}': another "
                 f"operation appears to be in progress.\n{exc}"
             ) from exc
-        current_metadata = self._metadata(blob, lease)
-        if current_metadata.get("nonce") != nonce:
-            raise OperationLockError(
-                f"Operation lock '{self.lock_name}' verification failed: the "
-                "read-back nonce did not match immediately after acquisition. "
-                "Another operation may have raced this one."
+        try:
+            lease = blob.acquire_lease(lease_duration=60)
+        except Exception as exc:
+            if getattr(exc, "status_code", None) in {409, 412}:
+                raise OperationLockError(
+                    f"Could not acquire operation lock '{self.lock_name}': "
+                    "the newly created lock blob was leased concurrently."
+                ) from exc
+            cleanup_error = None
+            try:
+                blob.delete_blob()
+            except Exception as delete_exc:
+                cleanup_error = delete_exc
+            error = OperationLockError(
+                f"Could not acquire the Blob lease for operation lock "
+                f"'{self.lock_name}'."
             )
+            if cleanup_error is not None:
+                error.add_note(
+                    "The unleased lock blob could not be removed: "
+                    f"{cleanup_error}"
+                )
+            raise error from exc
+        try:
+            current_metadata = self._metadata(blob, lease)
+            if current_metadata.get("nonce") != nonce:
+                raise OperationLockError(
+                    f"Operation lock '{self.lock_name}' verification failed: "
+                    "the read-back nonce did not match immediately after "
+                    "acquisition. Another operation may have raced this one."
+                )
+        except Exception as verification_exc:
+            try:
+                blob.delete_blob(lease=lease)
+            except Exception as cleanup_exc:
+                verification_exc.add_note(
+                    "The leased lock blob could not be removed after "
+                    f"verification failed: {cleanup_exc}"
+                )
+            if isinstance(verification_exc, OperationLockError):
+                raise
+            raise OperationLockError(
+                f"Operation lock '{self.lock_name}' verification failed."
+            ) from verification_exc
         handle = LockHandle(
             name=self.lock_name,
             nonce=nonce,
@@ -585,7 +622,12 @@ class OperationJournal:
         self.api_version = api_version
 
     def _deployment_name(self, operation_id: str) -> str:
-        return f"{self.deployment_prefix}-{operation_id}"
+        name = f"{self.deployment_prefix}-{operation_id}"
+        if len(name) <= MAX_DEPLOYMENT_NAME_LENGTH:
+            return name
+        digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
+        prefix_length = MAX_DEPLOYMENT_NAME_LENGTH - len(digest) - 1
+        return f"{name[:prefix_length]}-{digest}"
 
     def _uri(self, operation_id: str) -> str:
         name = self._deployment_name(operation_id)
