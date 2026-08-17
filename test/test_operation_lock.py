@@ -11,7 +11,7 @@ from scripts.operation_lock import (
     membership_fingerprint,
 )
 from scripts.manage_alert_scopes import ScopeManagerError
-from fake_blob_lock import FakeBlobService
+from fake_blob_lock import FakeBlobClient, FakeBlobError, FakeBlobService
 
 
 SUBSCRIPTION_ID = "central-sub"
@@ -214,6 +214,46 @@ def test_acquire_fails_closed_on_conflict_without_breaking_existing_lock():
     assert stored_lock_metadata(fake)["nonce"] == first.nonce
 
 
+def test_acquire_removes_new_blob_when_lease_acquisition_fails(monkeypatch):
+    fake = FakeArm()
+
+    def fail_lease(_self, lease_duration=60):
+        del lease_duration
+        raise FakeBlobError("storage unavailable", 500)
+
+    monkeypatch.setattr(FakeBlobClient, "acquire_lease", fail_lease)
+
+    with pytest.raises(OperationLockError, match="Could not acquire"):
+        lock(fake).acquire(
+            environment="production",
+            command="rotate",
+            target="secret",
+            caller="operator@example.com",
+        )
+
+    assert DEFAULT_LOCK_NAME not in fake.locks
+
+
+def test_acquire_removes_leased_blob_when_readback_fails(monkeypatch):
+    fake = FakeArm()
+
+    def fail_readback(_self, lease=None):
+        del lease
+        raise FakeBlobError("read unavailable", 500)
+
+    monkeypatch.setattr(FakeBlobClient, "download_blob", fail_readback)
+
+    with pytest.raises(OperationLockError, match="verification failed"):
+        lock(fake).acquire(
+            environment="production",
+            command="rotate",
+            target="secret",
+            caller="operator@example.com",
+        )
+
+    assert DEFAULT_LOCK_NAME not in fake.locks
+
+
 def test_revalidate_detects_lost_ownership():
     fake = FakeArm()
     instance = lock(fake)
@@ -262,10 +302,16 @@ def test_heartbeat_renews_lease_during_blocking_work():
         environment="e", command="c", target="t", caller="a"
     )
 
-    time.sleep(0.04)
-
-    assert handle.lease.renew_count >= 2
-    instance.release(handle)
+    deadline = time.monotonic() + 1
+    try:
+        while (
+            handle.lease.renew_count < 2
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.005)
+        assert handle.lease.renew_count >= 2
+    finally:
+        instance.release(handle)
 
 
 def test_renew_refuses_lock_recreated_by_another_owner():
@@ -467,6 +513,20 @@ def test_journal_records_reads_and_clears_state():
 def test_journal_clear_of_missing_entry_is_a_no_op():
     fake = FakeArm()
     journal(fake).clear("never-existed")
+
+
+def test_journal_hashes_long_operation_ids_within_arm_name_limit():
+    instance = journal(FakeArm())
+    operation_id = (
+        "add-subscription-subscription-"
+        "d61e43e0-4793-4b0e-ac08-002e8c18763f"
+    )
+
+    name = instance._deployment_name(operation_id)
+
+    assert len(name) == 64
+    assert name == instance._deployment_name(operation_id)
+    assert name != instance._deployment_name(f"{operation_id}-different")
 
 
 def test_journal_record_waits_until_output_is_durable():

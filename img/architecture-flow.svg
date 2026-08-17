@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1100" role="img" aria-labelledby="diagram-title diagram-desc">
   <title id="diagram-title">Azure Service Health to Slack operator architecture</title>
-  <desc id="diagram-desc">Numbered Service Health events cross Global Azure Monitor resources into an Easy Auth protected Container App in East US 2, then reach Slack. Separate delivery, private network, managed identity RBAC, data, and observability paths explain the supporting resources in the Azure resource group.</desc>
+  <desc id="diagram-desc">Numbered Service Health events cross global, subscription-scoped Azure Monitor resources into an Easy Auth protected Container App in the selected Azure region, then reach Slack. Management Groups are expanded into descendant subscription alert paths. Separate delivery, private network, managed identity RBAC, data, operations, and observability paths explain the supporting resources.</desc>
   <metadata>Source: Microsoft Azure Architecture Icons V24, https://arch-center.azureedge.net/icons/Azure_Public_Service_Icons_V24.zip. Terms: https://learn.microsoft.com/azure/architecture/icons/#icon-terms. Official product artwork is embedded unmodified, uniformly scaled, and shown beside its Azure product name.</metadata>
 
   <defs>
@@ -97,7 +97,7 @@
 
   <rect class="canvas" width="1440" height="1100"/>
   <text class="title" x="24" y="31">Azure Service Health to Slack - operator architecture</text>
-  <text class="detail" x="24" y="50">One resource group, two Azure scopes, and five relationship types</text>
+  <text class="detail" x="24" y="50">Subscription-scoped delivery, private data access, and monitored operations</text>
 
   <rect class="resource-group" x="220" y="64" width="1000" height="941" rx="18"/>
   <use href="#icon-resource-group" x="244" y="78" width="28" height="28"/>
@@ -107,7 +107,7 @@
   <text class="boundary-title" x="275" y="154">Global resources</text>
 
   <rect class="region-zone" x="250" y="340" width="940" height="655" rx="14"/>
-  <text class="boundary-title" x="275" y="371">East US 2 resources</text>
+  <text class="boundary-title" x="275" y="371">AZD-selected regional resources</text>
 
   <rect class="vnet" x="280" y="400" width="650" height="500" rx="12"/>
   <use href="#icon-vnet" x="300" y="410" width="28" height="28"/>
@@ -193,8 +193,8 @@
     <use href="#icon-alerts" x="300" y="195" width="36" height="36"/>
     <text class="node-title" x="347" y="202">Activity Log Alert</text>
     <text class="detail" x="347" y="220">ServiceHealth category</text>
-    <text class="tiny" x="347" y="237">Subscription / management group</text>
-    <text class="tiny" x="347" y="252">Alert scope</text>
+    <text class="tiny" x="347" y="237">One alert path per subscription</text>
+    <text class="tiny" x="347" y="252">MGs expand to descendants</text>
   </g>
 
   <g>
@@ -218,10 +218,10 @@
   <g>
     <rect class="support-card" x="1010" y="170" width="160" height="100" rx="9"/>
     <use href="#icon-alerts" x="1025" y="195" width="34" height="34"/>
-    <text class="node-title compact-title" x="1068" y="198">Failure</text>
-    <text class="node-title compact-title" x="1068" y="214">Anomalies</text>
-    <text class="tiny" x="1068" y="235">Azure-created alert for</text>
-    <text class="tiny" x="1068" y="251">Application Insights</text>
+    <text class="node-title compact-title" x="1068" y="198">Operations</text>
+    <text class="node-title compact-title" x="1068" y="214">alerts</text>
+    <text class="tiny" x="1068" y="235">Independent Action Group</text>
+    <text class="tiny" x="1068" y="251">Failures + availability</text>
   </g>
 
   <g>
@@ -327,6 +327,14 @@
   </g>
 
   <g>
+    <rect class="support-card" x="950" y="915" width="210" height="70" rx="9"/>
+    <use href="#icon-storage" x="968" y="933" width="34" height="34"/>
+    <text class="node-title compact-title" x="1012" y="936">Operation lock storage</text>
+    <text class="tiny" x="1012" y="955">Blob lease + ARM journal</text>
+    <text class="tiny" x="1012" y="971">Deployment and day-2 only</text>
+  </g>
+
+  <g>
     <rect class="external-card delivery-card" x="1250" y="400" width="170" height="95" rx="11"/>
     <rect x="1268" y="423" width="36" height="27" rx="3" fill="#25313c"/>
     <path d="M1275 431l6 5-6 6M1285 443h12" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -359,6 +367,6 @@
     <text class="tiny" x="777" y="21">RBAC authorization</text>
     <line class="telemetry-line" x1="872" y1="18" x2="916" y2="18"/>
     <text class="tiny" x="929" y="21">telemetry</text>
-    <text class="tiny" x="18" y="45">Global boundaries are dashed; East US 2 and VNet boundaries are solid. Private endpoint NICs are intentionally summarized, not drawn as separate nodes.</text>
+    <text class="tiny" x="18" y="45">Global boundaries are dashed; selected-region and VNet boundaries are solid. Private endpoint NICs are summarized, not drawn separately.</text>
   </g>
 </svg>
