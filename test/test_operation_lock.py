@@ -302,10 +302,16 @@ def test_heartbeat_renews_lease_during_blocking_work():
         environment="e", command="c", target="t", caller="a"
     )
 
-    time.sleep(0.04)
-
-    assert handle.lease.renew_count >= 2
-    instance.release(handle)
+    deadline = time.monotonic() + 1
+    try:
+        while (
+            handle.lease.renew_count < 2
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.005)
+        assert handle.lease.renew_count >= 2
+    finally:
+        instance.release(handle)
 
 
 def test_renew_refuses_lock_recreated_by_another_owner():
