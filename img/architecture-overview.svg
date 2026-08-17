@@ -55,7 +55,7 @@
   <path class="flow" d="M166 117H196"/>
   <path class="flow" d="M346 117H376"/>
   <path class="flow" d="M518 117H548"/>
-  <text class="detail" x="361" y="105" text-anchor="middle">signed HTTPS</text>
+  <text class="detail" x="361" y="105" text-anchor="middle">Entra-authenticated HTTPS</text>
 
   <rect class="primary" x="196" y="220" width="150" height="72" rx="10"/>
   <text class="heading" x="271" y="243" text-anchor="middle">Private data services</text>

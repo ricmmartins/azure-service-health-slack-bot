@@ -148,7 +148,7 @@
 
   <g>
     <rect class="label-bg" x="390" y="310" width="230" height="24" rx="12"/>
-    <text class="line-label" x="505" y="322" fill="#0078d4">signed HTTPS webhook + Entra token</text>
+    <text class="line-label" x="505" y="322" fill="#0078d4">Entra-authenticated HTTPS webhook</text>
   </g>
   <g>
     <rect class="label-bg" x="985" y="363" width="170" height="24" rx="12"/>
