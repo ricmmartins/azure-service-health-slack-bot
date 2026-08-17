@@ -1449,6 +1449,31 @@ def test_interrupted_operation_owned_role_grant_is_recovered_on_retry():
     )
 
 
+def test_temporary_role_cleanup_uses_principal_captured_before_journal_loss():
+    azure = FakeAzure()
+    journal, operation_id = operation_journal(
+        azure, "slack-token-principal-cache"
+    )
+
+    with _TemporaryRoleAssignment(
+        azure,
+        azure.vault_id,
+        SUBSCRIPTION_ID,
+        journal,
+        operation_id,
+    ):
+        journal.record(operation_id, {})
+
+    list_calls = [
+        call
+        for call in azure.calls
+        if call[:3] == ("role", "assignment", "list")
+    ]
+    assert list_calls[-1][
+        list_calls[-1].index("--assignee-object-id") + 1
+    ] == azure.caller_object_id
+
+
 def test_temporary_vault_network_access_refuses_non_default_deny_start_state():
     azure = FakeAzure()
     azure.vault_default_action = "Allow"
@@ -1580,11 +1605,21 @@ def test_token_format_pattern_accepts_xoxb_and_rejects_xoxe():
     )
 
 
-def test_journal_error_is_redacted_when_underlying_exception_contains_a_token():
+@pytest.mark.parametrize(
+    "leaked_token",
+    [
+        "xoxb-should-not-leak-123456",
+        "XOXB-UPPER_case-123456",
+        "xoxe.xoxp-refresh_token-123456",
+    ],
+)
+def test_journal_error_is_redacted_when_underlying_exception_contains_a_token(
+    leaked_token,
+):
     azure = FakeAzure()
     azd = FakeAzd()
     secret_client = FakeSecretClient()
-    leaking_message = "write failed for xoxb-should-not-leak-123456"
+    leaking_message = f"write failed for {leaked_token}"
 
     def failing_set_secret(name, value):
         raise RuntimeError(leaking_message)
@@ -1597,7 +1632,7 @@ def test_journal_error_is_redacted_when_underlying_exception_contains_a_token():
 
     (entry,) = azure.deployments.values()
     error_text = entry["properties"]["outputs"]["journalState"]["value"]["Error"]
-    assert "xoxb-should-not-leak-123456" not in error_text
+    assert leaked_token not in error_text
     assert "[REDACTED-SLACK-TOKEN]" in error_text
 
 

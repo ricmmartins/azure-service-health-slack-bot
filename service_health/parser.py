@@ -78,23 +78,38 @@ def _is_service_health(value):
 
 
 def _parse_lifecycle(context, properties):
-    candidates = [
-        properties.get("stage"),
-        context.get("status"),
-    ]
-    normalized = [
-        item.strip().casefold()
-        for item in candidates
-        if isinstance(item, str) and item.strip()
-    ]
-    if "resolved" in normalized:
+    stage = properties.get("stage")
+    status = context.get("status")
+    normalized_stage = (
+        stage.strip().casefold()
+        if isinstance(stage, str)
+        else ""
+    )
+    normalized_status = (
+        status.strip().casefold()
+        if isinstance(status, str)
+        else ""
+    )
+    if (
+        normalized_status == "resolved"
+        or normalized_stage in {
+            "canceled",
+            "cancelled",
+            "complete",
+            "resolved",
+            "rca",
+        }
+    ):
         return LifecycleStatus.RESOLVED
-    if "updated" in normalized:
+    if normalized_stage in {"inprogress", "rescheduled", "updated"}:
         return LifecycleStatus.UPDATED
-    if "active" in normalized:
+    if (
+        normalized_status == "active"
+        or normalized_stage in {"active", "planned"}
+    ):
         return LifecycleStatus.ACTIVE
     raise InvalidServiceHealthPayload(
-        "Service Health status must be Active, Updated, or Resolved")
+        "Service Health status or stage is unsupported")
 
 
 def _parse_impacted_services(raw_value):

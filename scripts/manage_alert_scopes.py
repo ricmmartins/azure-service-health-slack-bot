@@ -2142,6 +2142,7 @@ class ScopeManager:
                 # Action Groups do not expose a documented ETag/CAS delete.
                 # Delete only the exact ID immediately after the second
                 # ownership read and the complete reference scan.
+                self.assert_operation_membership_unchanged()
                 self.azure.invoke(
                     "resource",
                     "delete",

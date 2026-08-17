@@ -115,7 +115,9 @@ EXPECTED_BOT_USER_ID_ENV_NAME = "SERVICE_HEALTH_SLACK_BOT_USER_ID"
 TOKEN_FORMAT_PATTERN = re.compile(r"^xoxb-[A-Za-z0-9-]+$")
 # Matches any Slack-token-shaped substring (xoxb/xoxe/xoxa/xoxp/xoxr-...) so
 # it can be scrubbed from exception/journal text regardless of source.
-TOKEN_REDACTION_PATTERN = re.compile(r"xox[a-z]-[A-Za-z0-9-]+")
+TOKEN_REDACTION_PATTERN = re.compile(
+    r"(?i)(?:xox[baprs]-|xoxe(?:\.[A-Za-z0-9_-]+)?-)[A-Za-z0-9_-]+"
+)
 CONTAINER_APP_API_VERSION = "2023-05-01"
 ENVIRONMENT_NAME_ENV_NAME = "AZURE_ENV_NAME"
 SUBSCRIPTION_ID_ENV_NAME = "AZURE_SUBSCRIPTION_ID"
@@ -826,6 +828,7 @@ class _TemporaryRoleAssignment:
         self.journal = journal
         self.operation_id = operation_id
         self._assignment_id: str | None = None
+        self._principal_id: str | None = None
         self._created = False
 
     @staticmethod
@@ -861,6 +864,7 @@ class _TemporaryRoleAssignment:
                 "Could not resolve the signed-in caller's object id for a "
                 "temporary Key Vault role assignment."
             )
+        self._principal_id = principal_id
         assignment_name = str(
             uuid.uuid5(
                 uuid.NAMESPACE_URL,
@@ -986,11 +990,12 @@ class _TemporaryRoleAssignment:
                     "--subscription",
                     self.subscription_id,
                 )
-                principal_id = str(
-                    (self.journal.read(self.operation_id) or {})
-                    .get("TemporaryRoleAssignment", {})
-                    .get("PrincipalId", "")
-                )
+                principal_id = self._principal_id
+                if not principal_id:
+                    raise ScopeManagerError(
+                        "The temporary role assignment principal identity was "
+                        "not retained for cleanup verification."
+                    )
                 if any(
                     same_id(member(item, "id"), assignment_id)
                     for item in self._list(principal_id)

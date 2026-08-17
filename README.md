@@ -100,6 +100,10 @@ with additional stage values that depend on the incident type. `Updated` in
 this application is a local lifecycle label: a newer accepted nonterminal
 notification for an existing Slack incident is rendered as an update. It is
 not presented as a complete list of Azure Service Health stage values.
+For Maintenance events, `Planned` maps to `Active`; `InProgress` and
+`Rescheduled` map to `Updated`; and `Complete`, `Canceled`, `Cancelled`, and
+`Resolved` map to `Resolved`. `RCA` is also rendered as resolved because it is
+a post-resolution communication.
 Slack renders `Active` with a red circle, `Updated` with an orange circle, and
 `Resolved` with a green circle. The Slack app avatar is separate from this
 lifecycle indicator.
@@ -223,6 +227,12 @@ a sovereign cloud.
   subscription is rejected because it overlaps the immutable AZD-owned baseline
   alert. Use a non-overlapping child Management Group or manage additional
   subscriptions individually.
+- The webhook reads at most the configured payload limit plus one byte, including
+  chunked requests without `Content-Length`; the default accepted payload limit
+  is 256 KiB.
+- Azure Table string properties retain at most 32,000 UTF-16 code units. Slack
+  rendering has its own smaller display limits, while correlation fingerprints
+  continue to use the complete accepted event.
 - The templates use Azure public cloud endpoint suffixes.
 
 ## Prerequisites
@@ -283,7 +293,9 @@ virtual environment. Activate it again in each new shell.
 Copy `.env-example` to `.env`, then set:
 
 - `SLACK_BOT_TOKEN`
-- `AZURE_TABLE_ENDPOINT`
+- `AZURE_TABLE_ENDPOINT`, using
+  `https://<account>.table.core.windows.net` with no path, query, credentials,
+  or custom port
 - one routing source
 - `SERVICE_HEALTH_EXPECTED_AUDIENCE` only when `APP_ENV` is not
   `development` or `test`
@@ -2017,7 +2029,9 @@ existing entity. Treat it as the expected reservation collision only when the
 request, external dependency, subsequent checkpoints, and absence of an
 application exception all confirm that handled path.
 
-Alert on sustained webhook `503` responses, dependency failures, and missing
+The deployed operations rules alert on webhook `5xx` responses, permanent
+processing failures such as a rejected Slack destination, sustained Slack or
+Table dependency failures, and availability failures. Also investigate missing
 successful deliveries when an incident is expected.
 
 ### Update routing
@@ -2271,7 +2285,7 @@ the minimum evidence required before calling another deployment operational:
 | Gate | Accepted evidence |
 |---|---|
 | Workstation | Python 3.12, Azure CLI 2.81.0, Azure CLI-managed Bicep 0.46.1, AZD 1.31.0, Docker client/server 28.3.3, and Git 2.43.0 responded successfully. |
-| Repository | 351 tests, Flake8, dependency audit, both Bicep build/lint graphs, Docker build, and AZD packaging passed after the operational fixes documented here. |
+| Repository | 368 tests, Flake8, dependency audit, both Bicep build/lint graphs, Docker build, and AZD packaging passed after the operational fixes documented here. |
 | Infrastructure preview | Infrastructure-only preview showed the expected phase-one resources and no Container App, Action Group, or alert before bootstrap. |
 | Bootstrap | The hidden `xoxb-` transfer completed, Key Vault held an enabled latest version, local plaintext was absent, migration marker was set, and temporary firewall/RBAC/lock/journal state was restored. |
 | Workload | `azd deploy` published the application image and Container Apps single revision mode converged to exactly one healthy active revision. |

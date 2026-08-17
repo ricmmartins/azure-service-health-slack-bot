@@ -112,7 +112,7 @@ resource webhookFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01'
   location: location
   tags: tags
   properties: {
-    displayName: 'Service Health webhook 5xx failures'
+    displayName: 'Service Health webhook processing failures'
     description: 'Runbook: README.md#operations'
     severity: 1
     enabled: true
@@ -124,7 +124,7 @@ resource webhookFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01'
     criteria: {
       allOf: [
         {
-          query: 'AppRequests | where Url endswith "/api/service-health" | where Success == false and ResultCode startswith "5"'
+          query: 'union (AppRequests | where Url endswith "/api/service-health" | where Success == false and ResultCode startswith "5" | project TimeGenerated), (AppTraces | where Message == "Permanent Service Health processing failure" | project TimeGenerated)'
           timeAggregation: 'Count'
           operator: 'GreaterThan'
           threshold: 0

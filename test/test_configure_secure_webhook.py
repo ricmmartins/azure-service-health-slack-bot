@@ -93,7 +93,6 @@ def _preview_project(
     values = {
         "AZURE_ENV_NAME": environment_name,
         "AZURE_LOCATION": "eastus",
-        "AZURE_MANAGEMENT_GROUP_ID": "",
         "AZURE_SUBSCRIPTION_ID": PREVIEW_SUBSCRIPTION_ID,
         "AZURE_TENANT_ID": PREVIEW_TENANT_ID,
         "SERVICE_HEALTH_API_CLIENT_ID": APP_ID,

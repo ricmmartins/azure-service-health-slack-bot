@@ -716,16 +716,22 @@ def test_delete_guards_cannot_be_bypassed(
 
 def test_orphan_cleanup_deletes_only_action_group():
     orphan = scope_member(orphan=True)
+    events = []
 
     def handler(args):
         if args[:2] == ("resource", "show"):
             return action_group_resource(orphan)
         if args[:4] == ("monitor", "activity-log", "alert", "list"):
             return []
+        if args[:2] == ("resource", "delete"):
+            events.append("delete")
         return None
 
     azure = FakeAzure(handler)
     instance = manager(azure, scopes=[orphan])
+    instance.assert_operation_membership_unchanged = (
+        lambda: events.append("revalidate")
+    )
 
     instance.remove_scope_resources(orphan)
 
@@ -735,6 +741,7 @@ def test_orphan_cleanup_deletes_only_action_group():
         "--ids",
         orphan["ActionGroupId"],
     )
+    assert events[-2:] == ["revalidate", "delete"]
 
 
 def test_action_group_delete_revalidates_ownership_and_all_alert_references():

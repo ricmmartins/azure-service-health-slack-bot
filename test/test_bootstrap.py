@@ -81,3 +81,28 @@ def test_runtime_requires_table_endpoint():
     }
     with pytest.raises(InvalidServiceHealthConfiguration):
         create_service_health_runtime(MagicMock(), environ=environ)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "not-a-url",
+        "http://example.table.core.windows.net",
+        "https://table.core.windows.net",
+        "https://example.table.core.windows.net/path",
+        "https://example.table.core.windows.net?query=value",
+        "https://user@example.table.core.windows.net",
+    ],
+)
+def test_runtime_rejects_malformed_table_endpoint(endpoint):
+    environ = {
+        **BASE_ENV,
+        "AZURE_TABLE_ENDPOINT": endpoint,
+        "APP_ENV": "development",
+    }
+
+    with pytest.raises(
+        InvalidServiceHealthConfiguration,
+        match="Azure public cloud Table endpoint",
+    ):
+        create_service_health_runtime(MagicMock(), environ=environ)

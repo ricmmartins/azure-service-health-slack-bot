@@ -1,4 +1,5 @@
 import copy
+import io
 import json
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -103,6 +104,26 @@ def test_parser_normalizes_lifecycle(stage, status, expected):
     assert event.lifecycle_status == expected
     assert event.subscription_id == SUBSCRIPTION_ID
     assert event.impacted_services[0].regions == ("East US",)
+
+
+@pytest.mark.parametrize(
+    ("stage", "expected"),
+    [
+        ("Planned", LifecycleStatus.ACTIVE),
+        ("InProgress", LifecycleStatus.UPDATED),
+        ("Rescheduled", LifecycleStatus.UPDATED),
+        ("Complete", LifecycleStatus.RESOLVED),
+        ("Canceled", LifecycleStatus.RESOLVED),
+        ("Cancelled", LifecycleStatus.RESOLVED),
+    ],
+)
+def test_parser_normalizes_documented_maintenance_stages(stage, expected):
+    payload = common_alert(stage=stage, status="Active")
+    payload["data"]["alertContext"]["properties"]["incidentType"] = "Maintenance"
+
+    event = parse_service_health_alert(payload)
+
+    assert event.lifecycle_status == expected
 
 
 def test_parser_accepts_numeric_source_and_level():
@@ -429,6 +450,24 @@ def test_table_store_create_finalize_duplicate_and_update():
         "123.789",
     )
     assert table.entity["threadReplyTs"] == "123.789"
+
+
+def test_table_store_bounds_event_strings_by_utf16_code_units():
+    now = datetime(2025, 6, 1, 12, tzinfo=timezone.utc)
+    table = FakeTableClient()
+    store = AzureTableIncidentStore(table, now=lambda: now)
+    event = replace(
+        parse_service_health_alert(common_alert()),
+        communication="😀" * 40_000,
+    )
+
+    store.begin(event, "CDEFAULT")
+
+    assert len(table.entity["communication"]) == 16_000
+    assert (
+        len(table.entity["communication"].encode("utf-16-le"))
+        == 64_000
+    )
 
 
 def test_table_store_resumes_reply_without_regressing_root_watermark():
@@ -779,6 +818,36 @@ def test_flask_endpoint_maps_invalid_payload_to_422():
         json={"schemaId": "wrong"},
     )
     assert response.status_code == 422
+
+
+def test_flask_endpoint_limits_chunked_body_without_content_length():
+    settings = ServiceHealthSettings(
+        table_endpoint="https://example.table.core.windows.net",
+        table_name="ServiceHealthIncidents",
+        routing=RoutingConfig.from_dict({
+            "default_channel_id": "CDEFAULT",
+            "rules": [],
+        }),
+        app_environment="test",
+        max_payload_bytes=32,
+    )
+    runtime = SimpleNamespace(settings=settings, processor=StubProcessor())
+    flask_app = Flask(__name__)
+    flask_app.register_blueprint(
+        create_service_health_blueprint(lambda: runtime))
+
+    response = flask_app.test_client().open(
+        "/api/service-health",
+        method="POST",
+        input_stream=io.BytesIO(json.dumps(common_alert()).encode()),
+        content_type="application/json",
+        content_length=None,
+        headers={"Transfer-Encoding": "chunked"},
+        environ_overrides={"wsgi.input_terminated": True},
+    )
+
+    assert response.status_code == 413
+    assert response.json["error"] == "payload_too_large"
 
 
 def test_flask_endpoint_requires_easy_auth_in_production():
