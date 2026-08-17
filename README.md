@@ -1951,6 +1951,13 @@ python scripts/manage_alert_scopes.py migrate-to-management-group \
   --management-group-id "platform" \
   --environment-name "$AZURE_ENV_NAME" \
   --execution-fingerprint "<fingerprint-from-reviewed-what-if>"
+python scripts/manage_alert_scopes.py remove-management-group \
+  --management-group-id "platform" \
+  --environment-name "$AZURE_ENV_NAME" --what-if --json
+python scripts/manage_alert_scopes.py remove-management-group \
+  --management-group-id "platform" \
+  --environment-name "$AZURE_ENV_NAME" \
+  --execution-fingerprint "<fresh-reviewed-fingerprint>"
 ```
 
 Use the immutable Management Group **ID**, not its display name. Start with
@@ -1984,7 +1991,11 @@ it cannot prove membership or coverage.
 
 Each new path is deployed disabled, tested through Azure Monitor's signed
 Secure Webhook test, and enabled only after the test succeeds. The AZD-owned
-baseline alert remains outside day-2 ownership.
+baseline alert remains outside day-2 ownership. There is no separate day-2
+`test` command: both `add-subscription` and `add-management-group` perform this
+signed test as part of their fail-closed execution. Removal does not send a new
+notification; it requires a fresh reviewed fingerprint and revalidates current
+membership, ownership, and Action Group references immediately before deletion.
 
 Scope management creates alert resources; it does not edit the central routing
 document. The required default channel receives a newly added subscription
