@@ -84,6 +84,11 @@ The central deployment owns one immutable baseline subscription alert. Day-2
 commands safely manage additional subscriptions or the descendants of a
 non-overlapping Management Group.
 
+- You do not need to choose a Management Group during the initial deployment.
+- Start with individual subscriptions and migrate them later with
+  `migrate-to-management-group`, without a coverage gap.
+- When an uncovered subscription is added to an existing managed group, rerun
+  `add-management-group` to create and validate its subscription-scoped path.
 - Every mutation requires a fresh fingerprint from a reviewed
   `--what-if --json` preview.
 - Add operations create disabled alerts, send an official signed Action Group
