@@ -42,6 +42,32 @@ def test_readme_is_a_concise_landing_page_for_the_complete_runbook():
     assert "Management Groups are logical input only" in overview
 
 
+def test_scope_docs_explain_incremental_management_group_adoption():
+    readme = read("README.md")
+    runbook = read(RUNBOOK)
+    normalized_runbook = re.sub(r"\s+", " ", runbook)
+
+    assert "You do not need to choose a Management Group" in readme
+    assert "`migrate-to-management-group`" in readme
+    assert "### Choose the scope command" in runbook
+    assert "Add a second, third, or other independent subscription" in runbook
+    assert "Rerun `add-management-group`" in runbook
+    assert "Rerun `migrate-to-management-group`" in runbook
+    assert "Management Group membership changes do not create" in runbook
+    assert (
+        "rebuilding the central deployment is not required"
+        in normalized_runbook
+    )
+    for command in (
+        "add-subscription",
+        "add-management-group",
+        "migrate-to-management-group",
+        "migrate-from-management-group",
+        "remove-management-group",
+    ):
+        assert command in runbook
+
+
 def markdown_section(markdown: str, heading: str) -> str:
     marker = f"### {heading}\n"
     start = markdown.index(marker) + len(marker)
