@@ -1878,6 +1878,35 @@ Recovery:
 The initial deployment creates one alert for its subscription. Pin the central
 environment and Azure CLI context before every day-2 command:
 
+You do not need to decide between individual subscriptions and a Management
+Group during the initial deployment. Start with the central subscription, add
+independent subscriptions as needed, and migrate them to a non-overlapping
+Management Group later without a coverage gap.
+
+### Choose the scope command
+
+| Current state | Goal | Command |
+|---|---|---|
+| Central deployment only | Add a second, third, or other independent subscription | `add-subscription` |
+| No managed descendant overlaps | Add all currently accessible descendants of a Management Group | `add-management-group` |
+| One or more descendants already have individual managed alerts | Replace those individual paths with Management Group-managed paths | `migrate-to-management-group` |
+| An uncovered subscription was added to an already managed Management Group | Reconcile membership and create the missing subscription-scoped path | Rerun `add-management-group` |
+| A newly added descendant already has an individual managed alert | Move that alert under the existing Management Group-managed scope | Rerun `migrate-to-management-group` |
+| Management Group coverage should become individual coverage | Create, test, and enable individual replacements before retiring the group path | `migrate-from-management-group` |
+| Management Group coverage is no longer required and alternate coverage already exists | Remove the group-owned paths | `remove-management-group` |
+
+Management Group membership changes do not create Azure Monitor resources by
+themselves. Rerun the appropriate preview and execution after adding or moving
+a subscription in the Azure hierarchy. `add-management-group` repairs missing
+uncovered descendants; use `migrate-to-management-group` instead when a new
+descendant overlaps an existing individual managed alert.
+
+Each logical Management Group remains a day-2 input only. The CLI enumerates
+its visible descendants and deploys one Activity Log Alert and Action Group
+path per subscription. You can therefore adopt Management Group management
+after operating with one or more individual subscriptions; rebuilding the
+central deployment is not required.
+
 ```bash
 export AZURE_ENV_NAME="<environment-name>"
 TARGET_TENANT_ID="$(
