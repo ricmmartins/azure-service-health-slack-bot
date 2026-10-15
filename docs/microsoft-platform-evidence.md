@@ -129,7 +129,7 @@ complete certainty where the platform contract is incomplete.
 
 | Documentation claim | Evidence | Classification and limit |
 |---|---|---|
-| ETags and a short processing lease coordinate concurrent replicas. | `service_health/state.py`, `service_health/routes.py`, and concurrency tests | Implementation-specific. |
+| ETags and a short processing lease coordinate concurrent replicas. | `service_health/storage.py`, `service_health/routes.py`, and concurrency tests | Implementation-specific. |
 | Slack and Table Storage do not participate in one atomic transaction. | `service_health/routes.py` and Slack state-transition tests | Implementation-specific. A crash after a Slack write but before the Table checkpoint can leave an untracked root or duplicate a reply. |
-| The initial routing decision is sticky for an incident. | `service_health/routing.py`, `service_health/state.py`, and routing tests | Implementation-specific. |
+| The initial routing decision is sticky for an incident. | `service_health/routing.py`, `service_health/storage.py`, and routing tests | Implementation-specific. |
 | The service returns retryable `503` responses for classified transient Slack or Storage failures. | `service_health/slack.py`, `service_health/routes.py`, and error-mapping tests | Implementation-specific and aligned with the documented Action Group retry status list. |
