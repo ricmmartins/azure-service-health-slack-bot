@@ -157,6 +157,23 @@ def render_incident_message(event: ServiceHealthEvent, lifecycle_status):
         f"({_escape_mrkdwn(event.tracking_id)})",
         4000,
     )
+    incident_type_text = _truncate(
+        f"*Incident type*\n"
+        f"{_escape_mrkdwn(event.incident_type or 'Service issue')}",
+        2000,
+    )
+    subscription_text = _truncate(
+        f"*Subscription*\n"
+        f"`{_escape_code_span(event.subscription_id)}`",
+        2000,
+    )
+    footer_text = _truncate(
+        f"Tracking ID: `{_escape_code_span(event.tracking_id)}` · "
+        f"Updated "
+        f"{event.submission_time.strftime('%Y-%m-%d %H:%M UTC')} · "
+        f"<{portal_url}|Open Azure Service Health>",
+        3000,
+    )
 
     blocks = [
         {
@@ -176,10 +193,7 @@ def render_incident_message(event: ServiceHealthEvent, lifecycle_status):
                 },
                 {
                     "type": "mrkdwn",
-                    "text": (
-                        f"*Incident type*\n"
-                        f"{_escape_mrkdwn(event.incident_type or 'Service issue')}"
-                    ),
+                    "text": incident_type_text,
                 },
                 {
                     "type": "mrkdwn",
@@ -190,10 +204,7 @@ def render_incident_message(event: ServiceHealthEvent, lifecycle_status):
                 },
                 {
                     "type": "mrkdwn",
-                    "text": (
-                        f"*Subscription*\n"
-                        f"`{_escape_code_span(event.subscription_id)}`"
-                    ),
+                    "text": subscription_text,
                 },
             ],
         },
@@ -216,12 +227,7 @@ def render_incident_message(event: ServiceHealthEvent, lifecycle_status):
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": (
-                        f"Tracking ID: `{_escape_code_span(event.tracking_id)}` · "
-                        f"Updated "
-                        f"{event.submission_time.strftime('%Y-%m-%d %H:%M UTC')} · "
-                        f"<{portal_url}|Open Azure Service Health>"
-                    ),
+                    "text": footer_text,
                 }
             ],
         },
@@ -245,6 +251,13 @@ def render_incident_update(event: ServiceHealthEvent, lifecycle_status):
         f"{_escape_mrkdwn(event.communication)}",
         4000,
     )
+    footer_text = _truncate(
+        f"Tracking ID: `{_escape_code_span(event.tracking_id)}` · "
+        f"Updated "
+        f"{event.submission_time.strftime('%Y-%m-%d %H:%M UTC')} · "
+        f"<{portal_url}|Open Azure Service Health>",
+        3000,
+    )
     blocks = [
         {
             "type": "section",
@@ -258,12 +271,7 @@ def render_incident_update(event: ServiceHealthEvent, lifecycle_status):
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": (
-                        f"Tracking ID: `{_escape_code_span(event.tracking_id)}` · "
-                        f"Updated "
-                        f"{event.submission_time.strftime('%Y-%m-%d %H:%M UTC')} · "
-                        f"<{portal_url}|Open Azure Service Health>"
-                    ),
+                    "text": footer_text,
                 }
             ],
         },

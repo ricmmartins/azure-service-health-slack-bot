@@ -11,7 +11,7 @@ _configured = False
 
 def configure_telemetry(environ=None):
     global _configured
-    environ = environ or os.environ
+    environ = os.environ if environ is None else environ
     connection_string = environ.get(
         "APPLICATIONINSIGHTS_CONNECTION_STRING", "").strip()
     if _configured or not connection_string:
