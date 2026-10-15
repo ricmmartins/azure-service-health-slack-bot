@@ -35,6 +35,7 @@ def create_service_health_blueprint(get_runtime):
         try:
             get_runtime()
         except InvalidServiceHealthConfiguration:
+            logger.exception("Service Health readiness check failed")
             return jsonify({"status": "not_ready"}), 503
         return jsonify({"status": "ready"}), 200
 
