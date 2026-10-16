@@ -15,7 +15,9 @@ reading the complete runbook from top to bottom.
 - [Prerequisites](deployment-and-operations.md#prerequisites)
 - [Local development](deployment-and-operations.md#local-development)
 - [End-to-end Azure Developer CLI deployment](deployment-and-operations.md#deploy-with-azure-developer-cli)
+- [Safe shell and repository setup](deployment-and-operations.md#safe-shell-and-repository-setup)
 - [Signed Service Health acceptance test](deployment-and-operations.md#stage-9-send-the-signed-service-health-test)
+- [Authorize baseline coverage](deployment-and-operations.md#authorize-and-enable-baseline-coverage)
 
 ## Expand coverage
 
@@ -25,6 +27,7 @@ reading the complete runbook from top to bottom.
 
 ## Operate
 
+- [Existing-environment setup](deployment-and-operations.md#existing-environment-setup)
 - [Application Insights queries](deployment-and-operations.md#application-insights-queries)
 - [Rotate the Slack token](deployment-and-operations.md#rotate-the-slack-token)
 - [Recover an abandoned operation lock](deployment-and-operations.md#recover-an-abandoned-operation-lock)
@@ -33,5 +36,5 @@ reading the complete runbook from top to bottom.
 - [Decommission](deployment-and-operations.md#decommission)
 
 The [complete deployment and operations runbook](deployment-and-operations.md)
-preserves all validated commands, safety gates, recovery procedures, and
+contains the staged commands, safety gates, recovery procedures, and
 acceptance evidence in one auditable document.
