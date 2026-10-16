@@ -245,7 +245,7 @@ a sovereign cloud.
 For deployment:
 
 - Python 3.12 or 3.13 for local tooling; the production image is pinned to
-  Python 3.13
+  Python 3.14
 - current stable [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
   with its managed Bicep CLI at `0.46.1` or later and the `log-analytics`
   extension
@@ -412,7 +412,8 @@ git --version
 Expected state:
 
 - Python reports `3.12.x` or `3.13.x`. The operator hook and CLI were verified
-  with Ubuntu Python 3.12, while CI and the deployed container use Python 3.13.
+  with Ubuntu Python 3.12, while CI validates 3.12 and 3.13 and the deployed
+  container image is pinned to Python 3.14.
 - `az bicep version` reports the Azure CLI-managed Bicep CLI at `0.46.1` or
   later, `bicep.use_binary_from_path` is exactly `false`, and both repository
   template graphs build and lint with that exact installed version. `0.46.1` is
