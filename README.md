@@ -29,7 +29,7 @@ Management Group.
 | Goal | Documentation |
 |---|---|
 | Understand the design | [Architecture and resources](docs/deployment-and-operations.md#architecture) |
-| Deploy end to end | [Validated AZD deployment](docs/deployment-and-operations.md#deploy-with-azure-developer-cli) |
+| Deploy end to end | [Staged AZD deployment](docs/deployment-and-operations.md#deploy-with-azure-developer-cli) |
 | Add or remove subscriptions | [Manage alert scopes](docs/deployment-and-operations.md#manage-alert-scopes) |
 | Use a Management Group | [Management Group operations](docs/deployment-and-operations.md#manage-alert-scopes) |
 | Operate or troubleshoot | [Operations runbook](docs/deployment-and-operations.md#operations) |
@@ -44,7 +44,7 @@ Linux filesystem. The complete runbook is deliberately fail-closed and is the
 source of truth for required permissions, versions, previews, and acceptance
 evidence.
 
-1. Validate Azure CLI, AZD, Bicep, Docker, Python, quotas, and providers.
+1. Start the safe child shell, clone and enter the repository, isolate CLI profiles, then validate the tools.
 2. Select and pin the tenant, subscription, location, and AZD environment.
 3. Create or authorize the Slack app and record its channel ID.
 4. Install runtime, operational, and test dependencies.
@@ -53,10 +53,10 @@ evidence.
 7. Provision phase one and transfer the Slack token directly to Key Vault.
 8. Build and deploy the Container App.
 9. Verify health, authentication rejection, signed delivery, telemetry, and
-   receipt in Slack.
+   receipt in Slack; authorize and verify baseline alert enablement.
 
 Begin with
-[Stage 0: verify the workstation](docs/deployment-and-operations.md#stage-0-verify-the-workstation).
+[safe shell and repository setup](docs/deployment-and-operations.md#safe-shell-and-repository-setup).
 Do not skip directly to `azd up`: the staged process prevents accidental
 deployment to the wrong tenant or subscription and keeps the Slack token out of
 shell history, AZD state, ARM parameters, and source control.

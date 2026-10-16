@@ -1,6 +1,6 @@
 # Deployment and operations runbook
 
-This is the complete, validated implementation guide for the
+This is the deployment and operations guide for the
 [Azure Service Health Slack Bot](../README.md). It intentionally includes
 production safeguards, recovery procedures, day-2 scope management, and
 decommissioning steps that are not part of the short project overview.
@@ -245,7 +245,7 @@ a sovereign cloud.
 For deployment:
 
 - Python 3.12 or 3.13 for local tooling; the production image is pinned to
-  Python 3.13
+  Python 3.14
 - current stable [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
   with its managed Bicep CLI at `0.46.1` or later and the `log-analytics`
   extension
@@ -263,13 +263,16 @@ runtime image. Install both `requirements.txt` and `requirements-ops.txt` in the
 same active virtual environment used to run `configure_secure_webhook.py`,
 `manage_slack_token.py`, and `manage_alert_scopes.py`.
 
-The documented Bash commands work in Linux, macOS where the command syntax is
-available, and Ubuntu on WSL. On WSL, keep the repository in the Linux file
+The deployment and operations commands require Bash 4.4 or later on Linux
+or Ubuntu on WSL, with Linux-native Python, Azure CLI, and AZD executables.
+The default macOS Bash and native Windows shells are not supported by these
+examples. On WSL, keep the repository in the Linux file
 system, such as `~/src`, rather than a mounted Windows drive. Microsoft
 documents that the DrvFS automount root is configurable and Linux permission
 metadata is not enabled there by default, so a path-prefix check and
-`chmod 600` alone are insufficient. Stage 4 checks the actual mount metadata
-before reading the token. See
+`chmod 600` alone are insufficient. Stage 0 checks the actual mount type
+before any deployment work; `runbook_require_target` checks ownership, private
+permissions, symlinks, and the AZD state mount without reading file contents. See
 [Advanced settings configuration in WSL](https://learn.microsoft.com/windows/wsl/wsl-config#automount-settings)
 and [File Permissions for WSL](https://learn.microsoft.com/windows/wsl/file-permissions).
 Stage 1 pins the Azure subscription and AZD environment before registering the
@@ -280,13 +283,19 @@ not a general Container Apps prerequisite for this deployment.
 
 ## Local development
 
-Create a virtual environment and install dependencies:
+First complete [safe shell and repository setup](#safe-shell-and-repository-setup),
+then create a virtual environment and install dependencies:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_repo
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+}
 ```
 
 On Windows, use Ubuntu on WSL and run the Bash commands above. Native Windows
@@ -309,14 +318,24 @@ The example routing file uses synthetic channel and subscription IDs. For local
 Table access, sign in with an identity that has Storage Table data permissions:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_repo
 az login
 python app.py
+}
 ```
 
 Build the production image with:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_repo
 docker build -t azure-service-health-slack-bot .
+}
 ```
 
 The Docker build retries package download through Microsoft's Python package
@@ -328,6 +347,81 @@ network policy.
 
 Use the stages in order. Each checkpoint is a stop/go decision. Do not continue
 when a checkpoint fails, even if a later command appears able to run.
+Hold one approved exclusive change window for the environment through all
+mutations. Raw AZD hooks, provision, deploy, rollback, and down do not acquire
+the lifecycle/day-2 Blob mutex. A successful `lock-status` is only a point-in-time
+check, not protection against a concurrent raw AZD command. Freeze other
+operators and automation; never delete or bypass an active lock.
+
+### Safe shell and repository setup
+
+From an existing interactive terminal, start a **child Bash** with this command
+alone. Do not use `exec`, source these commands in your login shell, or paste
+multiple blocks at once:
+
+```console
+bash --noprofile --norc
+```
+
+All Bash blocks below are complete brace groups. They enable strict error
+handling, including command substitutions. A failed command or explicit `exit`
+ends only this child shell and discards its state; your original interactive
+terminal stays open. The braces prevent the remaining lines of a failed paste
+from running in that original terminal. Successful blocks keep their working
+directory, functions, ordinary variables, exports, and virtual environment in
+the same child shell. Keep it open through Stage 9. Never enable `set -x`.
+Use `exit` alone to leave it after finishing.
+
+On failure, stop. Start a new child shell, enter the existing checkout, source
+`scripts/runbook_guard.sh`, restore the dedicated profile exports below,
+activate `.venv` if it exists, and reload only the approved nonsecret target
+values. Follow the failed stage's recovery procedure; do not rerun clone,
+`azd env new`, or the Stage 4 disabled-first initialization on an existing
+deployment. Operations use the [existing-environment setup](#existing-environment-setup).
+
+For a first checkout, run this block **before Stage 0**. An existing destination
+is a stop condition, not permission to overwrite it. For an existing checkout,
+replace **both lines** of the `git clone` command with
+`test -d "$HOME/src/azure-service-health-slack-bot/.git"`
+(a linked worktree can have a `.git` file; use `test -e` there).
+
+```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+test "${BASH_VERSINFO[0]}" -gt 4 ||
+  { test "${BASH_VERSINFO[0]}" -eq 4 && test "${BASH_VERSINFO[1]}" -ge 4; } ||
+  { echo "Use Bash 4.4 or later." >&2; exit 1; }
+test "$(uname -s)" = Linux
+umask 077
+mkdir -p "$HOME/src"
+git clone https://github.com/ricmmartins/azure-service-health-slack-bot.git \
+  "$HOME/src/azure-service-health-slack-bot"
+cd "$HOME/src/azure-service-health-slack-bot"
+source scripts/runbook_guard.sh
+runbook_require_repo
+
+export AZURE_CONFIG_DIR="$HOME/.config/azure-service-health-slack-bot/azure"
+export AZD_CONFIG_DIR="$HOME/.config/azure-service-health-slack-bot/azd"
+mkdir -p "$AZURE_CONFIG_DIR" "$AZD_CONFIG_DIR"
+chmod 700 "$AZURE_CONFIG_DIR" "$AZD_CONFIG_DIR"
+echo "repository-and-isolated-profiles-ready"
+}
+```
+
+These dedicated profiles isolate this walkthrough from a Windows or Linux
+corporate CLI session. Do not copy token caches into them or sign them into
+another tenant. They contain authentication data: never commit, print, or share
+them. `AZURE_CONFIG_DIR` also isolates Bicep, extensions, and Azure CLI settings;
+the first use needs its own Bicep installation. `AZD_CONFIG_DIR` isolates AZD
+settings. See Microsoft's [Azure CLI configuration](https://learn.microsoft.com/cli/azure/azure-cli-configuration)
+and [AZD configuration](https://learn.microsoft.com/azure/developer/azure-developer-cli/azd-config).
+
+If the target guard rejects permissions on an existing checkout, inspect only
+ownership and mode with `stat`, not file contents. With owner approval, use
+`chmod 700 .azure ".azure/$AZURE_ENV_NAME"` and
+`chmod 600 ".azure/$AZURE_ENV_NAME/.env"` on those exact paths, then repeat the
+guard. Do not weaken the guard for a shared or Windows-mounted environment.
 
 The examples use placeholders. Set them only in your local shell and AZD
 environment. Do not add real tenant IDs, subscription IDs, user names, Slack
@@ -337,22 +431,45 @@ tokens, or channel IDs to tracked files.
 
 Prerequisites:
 
-- Bash on Linux, macOS, or Ubuntu on WSL
+- the safe child shell and repository setup above, with Bash 4.4+ on Linux/WSL
 - Python 3.12 or 3.13
 - current stable Azure CLI with its managed Bicep CLI `0.46.1` or later
 - Azure CLI `log-analytics` extension
 - current stable Azure Developer CLI
 - Docker with a running Linux container engine
 - Git
+- `findmnt` from `util-linux` for the Linux filesystem gate
 
 Run:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_repo
+case "$(findmnt -T "$(pwd -P)" -n -o FSTYPE)" in
+  ext2|ext3|ext4|xfs|btrfs|zfs|overlay|tmpfs) ;;
+  *) echo "Stop: use a Linux filesystem, not DrvFS/9p/CIFS." >&2; exit 1 ;;
+esac
+for tool in python3 az azd; do
+  TOOL_PATH="$(command -v "$tool")"
+  test -x "$TOOL_PATH"
+  case "$TOOL_PATH" in
+    /mnt/*|*.exe|*.cmd|*.bat)
+      echo "Stop: $tool must be a Linux executable." >&2; exit 1 ;;
+  esac
+done
+runbook_require_profiles
+test -r scripts/configure_secure_webhook.py
+test -r scripts/manage_slack_token.py
+test -r scripts/manage_alert_scopes.py
 BICEP_MIN_VERSION="0.46.1"
 BICEP_TESTED_VERSION="0.46.1"
 
 python3 --version
+python3 -c 'import sys; assert sys.version_info[:2] in ((3, 12), (3, 13)), "Use Python 3.12 or 3.13"'
 az version
+az config set bicep.use_binary_from_path=false
 BICEP_FROM_PATH="$(az config get bicep.use_binary_from_path \
   --query value -o tsv 2>/dev/null)" || {
   echo "Could not verify the Azure CLI Bicep binary source; stop." >&2
@@ -399,20 +516,28 @@ az bicep lint --file infra/day2/service-health-alert-scope.bicep || {
   exit 1
 }
 az extension add --name log-analytics --upgrade --yes
+az extension add --name containerapp --upgrade --yes
 az extension show --name log-analytics \
   --query '{name:name,version:version}' -o table
 command -v azd
 type -a azd
 azd version
+AZD_VERSION_OUTPUT="$(azd version)"
+[[ "$AZD_VERSION_OUTPUT" == *"(stable)"* ]]
+AZD_VERSION="$(printf '%s\n' "$AZD_VERSION_OUTPUT" | sed -nE 's/^azd version ([0-9]+\.[0-9]+\.[0-9]+) .*/\1/p')"
+python3 -c 'import sys; assert tuple(map(int, sys.argv[1].split("."))) >= (1, 31, 0), "Use stable AZD 1.31.0 or later"' "$AZD_VERSION"
 docker version --format 'client={{.Client.Version}} server={{.Server.Version}}'
 docker info --format 'os={{.OSType}}'
+test "$(docker info --format '{{.OSType}}')" = linux
 git --version
+}
 ```
 
 Expected state:
 
 - Python reports `3.12.x` or `3.13.x`. The operator hook and CLI were verified
-  with Ubuntu Python 3.12, while CI and the deployed container use Python 3.13.
+  with Ubuntu Python 3.12, while CI validates 3.12 and 3.13 and the deployed
+  container image is pinned to Python 3.14.
 - `az bicep version` reports the Azure CLI-managed Bicep CLI at `0.46.1` or
   later, `bicep.use_binary_from_path` is exactly `false`, and both repository
   template graphs build and lint with that exact installed version. `0.46.1` is
@@ -487,23 +612,39 @@ Prerequisites:
 Choose a short environment name with lowercase letters, numbers, and hyphens.
 Keep it between 3 and 20 characters and begin and end with a letter or number.
 
-Clone the repository, then replace every angle-bracket placeholder:
+Stay in the checkout established before Stage 0. Replace every angle-bracket
+placeholder; this block does not clone another repository:
 
 ```bash
-mkdir -p "$HOME/src"
-cd "$HOME/src"
-git clone https://github.com/ricmmartins/azure-service-health-slack-bot.git
-cd azure-service-health-slack-bot
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_repo
 
 export TARGET_TENANT_ID="<tenant-id>"
 export TARGET_SUBSCRIPTION_ID="<subscription-id>"
 export AZURE_LOCATION="<azure-region>"
 export AZURE_ENV_NAME="<environment-name>"
 
+runbook_require_profiles
+python3 - <<'PY'
+import os
+import re
+import uuid
+
+for key in ("TARGET_TENANT_ID", "TARGET_SUBSCRIPTION_ID"):
+    assert str(uuid.UUID(os.environ[key])) == os.environ[key].lower(), key
+assert re.fullmatch(r"[a-z0-9][a-z0-9-]{1,18}[a-z0-9]", os.environ["AZURE_ENV_NAME"])
+assert re.fullmatch(r"[a-z0-9]+", os.environ["AZURE_LOCATION"])
+PY
 azd config set auth.useAzCliAuth true
+test "$(az cloud show --query name -o tsv)" = AzureCloud
 az login --tenant "$TARGET_TENANT_ID"
 az account set --subscription "$TARGET_SUBSCRIPTION_ID"
 azd auth login --check-status --no-prompt
+GRAPH_TENANT="$(az account get-access-token --resource-type ms-graph \
+  --query tenant -o tsv)"
+test "${GRAPH_TENANT,,}" = "${TARGET_TENANT_ID,,}"
 
 if [[ -e ".azure/$AZURE_ENV_NAME" ]]; then
   echo "AZD environment already exists; stop and follow recovery." >&2
@@ -535,12 +676,18 @@ az role assignment list \
   --include-inherited \
   --query '[].{role:roleDefinitionName,scope:scope}' \
   -o table
+}
 ```
 
 Expected state:
 
 - `tenant` and `subscription` match the values you supplied.
 - `isDefault` is `True`.
+- The default Microsoft Graph token metadata reports the approved tenant.
+  `--subscription` on a Graph request is not a tenant pin. An ARM account
+  match alone does not authorize a Graph write. If the metadata check fails,
+  stop and reauthenticate only the dedicated profile with
+  `az login --tenant "$TARGET_TENANT_ID"`; never clear the corporate profile.
 - AZD delegates authentication to the current Azure CLI identity and reports
   that identity as authenticated in the same tenant.
 - AZD lists `AZURE_ENV_NAME` as the selected environment.
@@ -556,6 +703,10 @@ Verify both tools point to the same target before making any subscription or
 directory change:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 if ! (
   test "$(az account show --query tenantId -o tsv | \
     tr '[:upper:]' '[:lower:]')" = "${TARGET_TENANT_ID,,}" &&
@@ -576,28 +727,39 @@ if ! (
   exit 1
 fi
 echo "deployment-target-pinned"
+}
 ```
 
 Proceed only when the final line is `deployment-target-pinned`. Register and
 check the Container Apps providers only after this checkpoint:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 az provider register --namespace Microsoft.App --wait
 az provider register --namespace Microsoft.OperationalInsights --wait
 az provider show --namespace Microsoft.App \
   --query '{namespace:namespace,state:registrationState}' -o table
 az provider show --namespace Microsoft.OperationalInsights \
   --query '{namespace:namespace,state:registrationState}' -o table
+}
 ```
 
 Checkpoint:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 test "$(az provider show --namespace Microsoft.App \
   --query registrationState -o tsv)" = "Registered" &&
 test "$(az provider show --namespace Microsoft.OperationalInsights \
   --query registrationState -o tsv)" = "Registered" &&
-echo "azure-context-ready"
+echo "azure-context-ready" || { echo "Provider checkpoint failed." >&2; exit 1; }
+}
 ```
 
 Proceed only when the final line is `azure-context-ready`.
@@ -608,6 +770,10 @@ return an empty result or a stale `Microsoft.Quota` registration error even
 after the provider reports `Registered`:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 check_capacity() {
   local provider="$1"
   local api_version="$2"
@@ -663,7 +829,8 @@ check_capacity Microsoft.Network 2024-05-01 \
   VirtualNetworks 1 &&
 check_capacity Microsoft.Network 2024-05-01 \
   PrivateEndpoints 2 &&
-echo "deployment-capacity-ready"
+echo "deployment-capacity-ready" || { echo "Capacity checkpoint failed." >&2; exit 1; }
+}
 ```
 
 Proceed only when all four usage rows print and the final line is
@@ -678,11 +845,16 @@ List policy assignments visible from the target subscription boundary,
 including inherited and child-scope assignments:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 az policy assignment list \
   --scope "/subscriptions/$TARGET_SUBSCRIPTION_ID" \
   --disable-scope-strict-match true \
   --query '[].{name:name,scope:scope,enforcementMode:enforcementMode}' \
   -o table
+}
 ```
 
 Review assignments at the subscription or an ancestor scope for restrictions
@@ -779,6 +951,10 @@ Prerequisites: stages 0 through 2 are complete.
 Run:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_repo
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
@@ -787,9 +963,11 @@ python -m pip install -r requirements-ops.txt
 python -c \
   'from azure.keyvault.secrets import SecretClient; from azure.storage.blob import BlobServiceClient; print("operations-sdk-ready")'
 
+test ! -e config/service_health_routes.json
 cp config/service_health_routes.example.json \
   config/service_health_routes.json
 vi config/service_health_routes.json
+}
 ```
 
 Replace every synthetic channel and subscription ID. Keep
@@ -797,12 +975,17 @@ Replace every synthetic channel and subscription ID. Keep
 application routing contract:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_repo
 python -m json.tool config/service_health_routes.json >/dev/null &&
 python -c 'import json; from pathlib import Path; from service_health.routing import RoutingConfig; RoutingConfig.from_dict(json.loads(Path("config/service_health_routes.json").read_text())); print("routing-valid")' &&
 ! grep -Eq \
   'C0123456789|C1111111111|C2222222222|00000000-0000-0000-0000-000000000000' \
   config/service_health_routes.json &&
-echo "routing-checkpoint-passed"
+echo "routing-checkpoint-passed" || { echo "Routing validation failed." >&2; exit 1; }
+}
 ```
 
 Expected state: the parser prints `routing-valid`, the placeholder scan is
@@ -843,17 +1026,22 @@ than a personal address when policy permits, do not enable shell tracing, and
 do not paste the real address into the repository or shared command output:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 export OPERATIONS_RESOURCE_GROUP="<separate-operations-resource-group>"
 export OPERATIONS_LOCATION="<azure-region>"
 export OPERATIONS_ACTION_GROUP_NAME="<operations-action-group-name>"
 export OPERATIONS_ACTION_GROUP_SHORT_NAME="<short-display-name>"
 export OPERATIONS_EMAIL_ADDRESS="<approved-on-call-email-address>"
-readonly OPERATIONS_EMAIL_RECEIVER_NAME="primary-on-call-email"
+OPERATIONS_EMAIL_RECEIVER_NAME="primary-on-call-email"
 
 export OPERATIONS_PRIMARY_OWNER="<primary-owner-role-or-alias>"
 export OPERATIONS_BACKUP_OWNER="<different-backup-owner-role-or-alias>"
 export OPERATIONS_ON_CALL_DESTINATION="email-receiver:primary-on-call-email"
 export OPERATIONS_RUNBOOK_URI="https://<approved-runbook>"
+}
 ```
 
 Fail closed before creating anything. The selected AZD environment, its
@@ -861,6 +1049,10 @@ explicit name, Azure CLI tenant/subscription, and the proposed independent
 resource group must all match the intended target:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 : "${AZURE_ENV_NAME:?Set the explicit AZD environment name from stage 1.}"
 : "${TARGET_TENANT_ID:?Set the target tenant from stage 1.}"
 : "${TARGET_SUBSCRIPTION_ID:?Set the target subscription from stage 1.}"
@@ -914,6 +1106,7 @@ if ! (
   exit 1
 fi
 echo "operations-action-group-target-confirmed"
+}
 ```
 
 Stop unless the final line is
@@ -926,6 +1119,10 @@ this exact resource group and Action Group name until post-create verification
 finishes:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 if ! OPERATIONS_GROUP_EXISTS="$(
   az group exists \
     --name "$OPERATIONS_RESOURCE_GROUP" \
@@ -1065,6 +1262,7 @@ if ! (
   exit 1
 fi
 echo "operations-action-group-created"
+}
 ```
 
 Azure sends a one-time-passcode request for a new email receiver. Microsoft
@@ -1075,6 +1273,10 @@ receiver. The CLI requires the receiver definition even though the saved Action
 Group already contains it:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 if ! az monitor action-group test-notifications create \
     --resource-group "$OPERATIONS_RESOURCE_GROUP" \
     --action-group-name "$OPERATIONS_ACTION_GROUP_NAME" \
@@ -1135,6 +1337,7 @@ print(json.dumps({
 }, separators=(",", ":")))
 PY
 )"
+}
 ```
 
 This synthetic test proves that Azure Monitor dispatched the selected sample
@@ -1163,6 +1366,10 @@ receiver changes and at least every 90 days.
 Load only routing and operational settings into AZD:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 ROUTES_B64="$(
   python -c 'import base64, pathlib; print(base64.b64encode(pathlib.Path("config/service_health_routes.json").read_bytes()).decode())'
 )"
@@ -1174,8 +1381,10 @@ azd env set SERVICE_HEALTH_DEPLOY_WORKLOAD false \
   -e "$AZURE_ENV_NAME" --no-prompt
 azd env set SERVICE_HEALTH_BASELINE_ALERT_ENABLED false \
   -e "$AZURE_ENV_NAME" --no-prompt
+EXPECTED_BASELINE_ENABLED=false
 azd env set SERVICE_HEALTH_SECRET_VERSION "" \
   -e "$AZURE_ENV_NAME" --no-prompt
+}
 ```
 
 For production, set `SERVICE_HEALTH_ENVIRONMENT_CLASS=production` and configure
@@ -1183,6 +1392,10 @@ all readiness metadata from the confirmed test before bootstrap can enable the
 workload:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 azd env set SERVICE_HEALTH_ENVIRONMENT_CLASS production -e "$AZURE_ENV_NAME" --no-prompt
 azd env set SERVICE_HEALTH_OPERATIONS_ACTION_GROUP_ID \
   "$OPERATIONS_ACTION_GROUP_ID" -e "$AZURE_ENV_NAME" --no-prompt
@@ -1198,6 +1411,7 @@ azd env set SERVICE_HEALTH_OPERATIONS_RECEIVER_TEST_EVIDENCE \
   "$OPERATIONS_RECEIVER_TEST_EVIDENCE" -e "$AZURE_ENV_NAME" --no-prompt
 
 unset OPERATIONS_EMAIL_ADDRESS OPERATIONS_RECEIVER_CONFIRMATION
+}
 ```
 
 Record receiver evidence only after a real test reaches the independent
@@ -1219,8 +1433,13 @@ before setting the container's plain JSON
 Checkpoint:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 python scripts/manage_slack_token.py status \
   --environment-name "$AZURE_ENV_NAME" --json
+}
 ```
 
 For a new environment before the phase-one infrastructure provision, the
@@ -1265,6 +1484,10 @@ change Microsoft Entra. Set and verify the Azure CLI subscription again, then
 reselect the AZD environment before running it:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 az account set --subscription "$TARGET_SUBSCRIPTION_ID"
 azd env select "$AZURE_ENV_NAME" --no-prompt
 if ! (
@@ -1284,15 +1507,21 @@ if ! (
   exit 1
 fi
 echo "entra-mutation-target-confirmed"
+}
 ```
 
 Do not run the hook unless the final line is
 `entra-mutation-target-confirmed`. Run the project hook explicitly:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 azd hooks run preprovision \
   -e "$AZURE_ENV_NAME" \
   --no-prompt
+}
 ```
 
 Expected state: the hook exits with status `0` after creating or reconciling the
@@ -1308,18 +1537,27 @@ transaction and therefore remain intentionally single-operator.
 Check the nonsecret hook outputs without printing the local Slack token:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 test -n "$(azd env get-value SERVICE_HEALTH_API_CLIENT_ID \
   -e "$AZURE_ENV_NAME" --no-prompt)" &&
 test -n "$(azd env get-value SERVICE_HEALTH_API_OBJECT_ID \
   -e "$AZURE_ENV_NAME" --no-prompt)" &&
 test -n "$(azd env get-value SERVICE_HEALTH_API_IDENTIFIER_URI \
   -e "$AZURE_ENV_NAME" --no-prompt)" &&
-echo "entra-hook-ready"
+echo "entra-hook-ready" || { echo "Entra output checkpoint failed." >&2; exit 1; }
+}
 ```
 
 Preview the Azure Resource Manager changes:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 : "${AZURE_ENV_NAME:?Set the explicit AZD environment name from stage 1.}"
 SELECTED_AZD_ENV_NAME="$(
   azd env get-value AZURE_ENV_NAME --no-prompt
@@ -1348,6 +1586,7 @@ SERVICE_HEALTH_READ_ONLY_PREVIEW=true \
     --subscription "$TARGET_SUBSCRIPTION_ID" \
     --location "$AZURE_LOCATION" \
     --environment "$AZURE_ENV_NAME"
+}
 ```
 
 This procedure requires the adopter to name the current environment explicitly
@@ -1409,6 +1648,10 @@ approved.
 Run:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 azd provision \
   -e "$AZURE_ENV_NAME" \
   --subscription "$TARGET_SUBSCRIPTION_ID" \
@@ -1492,6 +1735,7 @@ echo "bootstrap-target-confirmed"
 
 python scripts/manage_slack_token.py bootstrap \
   --environment-name "$AZURE_ENV_NAME"
+}
 ```
 
 Run the lifecycle CLI with the virtual environment's `python`. A system Python
@@ -1500,6 +1744,13 @@ without `requirements-ops.txt` fails before secret persistence with
 activate `.venv`, install both requirements files from Stage 3, confirm
 `operations-sdk-ready`, verify `status` still reports `Bootstrapped: false`, and
 then retry.
+
+`bootstrap` deliberately repeats the infrastructure-only provision internally
+before its hidden prompt, even when the first command above already succeeded.
+This is an idempotent safety phase, not another credential transfer. Its final
+check proves a provisioned Container App with a ready revision, not signed
+Slack/Table acceptance; that evidence comes from Stages 8 and 9 after the real
+application image is deployed.
 
 The first command creates only the network, private endpoints, Log Analytics,
 Application Insights, Key Vault, application Storage account/table, isolated
@@ -1550,6 +1801,10 @@ operations Action Group ID was supplied.
 Capture outputs and inspect the central resources:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 RESOURCE_GROUP="$(azd env get-value AZURE_RESOURCE_GROUP \
   -e "$AZURE_ENV_NAME" --no-prompt)"
 APP_NAME="$(azd env get-value SERVICE_APP_NAME \
@@ -1572,11 +1827,16 @@ az monitor action-group show \
   --name "$ACTION_GROUP" \
   --query '{location:location,enabled:enabled,aad:webhookReceivers[0].useAadAuth,commonSchema:webhookReceivers[0].useCommonAlertSchema}' \
   -o table
+}
 ```
 
 Run the machine checkpoint:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 test -n "$RESOURCE_GROUP" &&
 test -n "$APP_NAME" &&
 test -n "$APP_URI" &&
@@ -1599,7 +1859,8 @@ test "$(az monitor action-group show --resource-group "$RESOURCE_GROUP" \
 test "$(az monitor action-group show --resource-group "$RESOURCE_GROUP" \
   --name "$ACTION_GROUP" \
   --query 'webhookReceivers[0].useCommonAlertSchema' -o tsv)" = "true" &&
-echo "azure-resources-ready"
+echo "azure-resources-ready" || { echo "Azure resource checkpoint failed." >&2; exit 1; }
+}
 ```
 
 Expected checkpoint values:
@@ -1616,8 +1877,13 @@ success alone is not enough if the Action Group contract is wrong.
 Run the structured status checkpoint again:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 python scripts/manage_slack_token.py status \
   --environment-name "$AZURE_ENV_NAME" --json
+}
 ```
 
 For the new environment after infrastructure provision and successful
@@ -1647,6 +1913,10 @@ fields in the status JSON.
 Run an independent nonsecret cleanup checkpoint:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 KEY_VAULT_NAME="$(azd env get-value SERVICE_HEALTH_KEY_VAULT_NAME \
   -e "$AZURE_ENV_NAME" --no-prompt)"
 KEY_VAULT_ID="$(az keyvault show --name "$KEY_VAULT_NAME" \
@@ -1666,7 +1936,8 @@ test "$(az role assignment list --scope "$KEY_VAULT_ID" \
   --assignee-object-id "$CALLER_OBJECT_ID" \
   --query "length([?roleDefinitionName=='Key Vault Secrets Officer'])" \
   -o tsv)" = "0" &&
-echo "bootstrap-cleanup-proven"
+echo "bootstrap-cleanup-proven" || { echo "Bootstrap cleanup checkpoint failed." >&2; exit 1; }
+}
 ```
 
 If the vault intentionally had pre-existing IP rules or the operator already
@@ -1703,9 +1974,14 @@ Prerequisites:
 Run:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 docker info --format 'os={{.OSType}}'
-command -v docker-credential-desktop.exe >/dev/null 2>&1 || true
+test "$(docker info --format '{{.OSType}}')" = linux
 azd deploy -e "$AZURE_ENV_NAME" --no-prompt
+}
 ```
 
 On WSL with Docker Desktop, do not replace `PATH` with a minimal Linux-only
@@ -1720,6 +1996,10 @@ updates the Container App, and reports a successful service deployment.
 Inspect active revisions:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 az containerapp revision list \
   --resource-group "$RESOURCE_GROUP" \
   --name "$APP_NAME" \
@@ -1730,11 +2010,24 @@ test "$(az containerapp revision list \
   --resource-group "$RESOURCE_GROUP" \
   --name "$APP_NAME" \
   --query 'length([?properties.active])' -o tsv)" = "1" &&
+echo "application-revision-count-ready" || { echo "Revision checkpoint failed." >&2; exit 1; }
+LATEST_REVISION="$(az containerapp show --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" --query properties.latestRevisionName -o tsv)"
+READY_REVISION="$(az containerapp show --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" --query properties.latestReadyRevisionName -o tsv)"
+test -n "$LATEST_REVISION"
+test "$LATEST_REVISION" = "$READY_REVISION"
+test "$(az containerapp revision show --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" --revision "$READY_REVISION" \
+  --query properties.healthState -o tsv)" = Healthy
 echo "application-revision-ready"
+}
 ```
 
 Checkpoint: single revision mode must show exactly one active revision and its
-`active` value must be `True`. The final line must be
+`active` value must be `True`. The latest revision must be the latest ready
+revision and report `Healthy`, so a still-running older revision cannot hide
+a failed rollout. The final line must be
 `application-revision-ready`.
 
 Recovery:
@@ -1754,15 +2047,23 @@ Prerequisites: stage 7 shows one active revision.
 Run:
 
 ```bash
-test "$(curl -fsS "$APP_URI/healthz")" = '{"status":"healthy"}' &&
-test "$(curl -fsS "$APP_URI/readyz")" = '{"status":"ready"}' &&
-HTTP_CODE="$(curl -sS -o /tmp/service-health-response.json -w '%{http_code}' \
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
+RESPONSE_FILE="$(mktemp)"
+trap 'rm -f "$RESPONSE_FILE"' EXIT
+test "$(curl --connect-timeout 10 --max-time 60 -fsS "$APP_URI/healthz")" = '{"status":"healthy"}' &&
+test "$(curl --connect-timeout 10 --max-time 60 -fsS "$APP_URI/readyz")" = '{"status":"ready"}' &&
+HTTP_CODE="$(curl --connect-timeout 10 --max-time 60 -sS -o "$RESPONSE_FILE" -w '%{http_code}' \
   -X POST -H 'Content-Type: application/json' --data '{}' \
   "$APP_URI/api/service-health")" &&
 test "$HTTP_CODE" = "401" &&
-python3 -m json.tool /tmp/service-health-response.json &&
-rm -f /tmp/service-health-response.json &&
-echo "ingress-auth-checkpoint-passed"
+python3 -m json.tool "$RESPONSE_FILE" &&
+echo "ingress-auth-checkpoint-passed" || { echo "Ingress checkpoint failed." >&2; exit 1; }
+rm -f "$RESPONSE_FILE"
+trap - EXIT
+}
 ```
 
 Expected state:
@@ -1793,9 +2094,18 @@ Prerequisites:
 - the operator can invoke Action Group test notifications.
 
 The Azure CLI test requires the receiver definition even though the Action
-Group already exists:
+Group already exists. The baseline alert must still be disabled; the Action
+Group itself must be enabled so the synthetic test can run:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
+test "$(az monitor activity-log alert show \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "ala-$AZURE_ENV_NAME-service-health" \
+  --query enabled -o tsv)" = "${EXPECTED_BASELINE_ENABLED:-false}"
 URI="$(az monitor action-group show \
   --resource-group "$RESOURCE_GROUP" \
   --name "$ACTION_GROUP" \
@@ -1809,6 +2119,7 @@ IDENTIFIER_URI="$(az monitor action-group show \
   --name "$ACTION_GROUP" \
   --query 'webhookReceivers[0].identifierUri' -o tsv)"
 
+SIGNED_TEST_RESULT="$(
 test -n "$URI" &&
 test -n "$OBJECT_ID" &&
 test -n "$IDENTIFIER_URI" &&
@@ -1820,6 +2131,24 @@ az monitor action-group test-notifications create \
     useaadauth "$OBJECT_ID" "$IDENTIFIER_URI" usecommonalertschema \
   --only-show-errors \
   -o json
+)" || { echo "Signed test failed." >&2; exit 1; }
+SIGNED_TEST_RESULT="$SIGNED_TEST_RESULT" python - <<'PY'
+import json
+import os
+
+result = json.loads(os.environ["SIGNED_TEST_RESULT"])
+data = result.get("properties", result)
+actions = [item for item in data.get("actionDetails", [])
+           if item.get("Name") == "slack-service-health"
+           and item.get("MechanismType") == "SecureWebhook"]
+assert data.get("state") in ("Complete", "Completed"), "Test did not complete"
+assert len(actions) == 1, "Secure Webhook receiver result missing or ambiguous"
+assert actions[0].get("Status") in ("Succeeded", "Completed"), "Receiver failed"
+print("signed-test-dispatched")
+PY
+unset SIGNED_TEST_RESULT
+SIGNED_TEST_AT="$(date -u +%s)"
+}
 ```
 
 Expected state: the Azure operation completes, the receiver succeeds, the
@@ -1840,11 +2169,16 @@ allow custom lifecycle payloads.
 Inspect recent application logs:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 az containerapp logs show \
   --resource-group "$RESOURCE_GROUP" \
   --name "$APP_NAME" \
   --type console \
   --tail 100
+}
 ```
 
 Checkpoint: deployment is accepted only when the signed test succeeds and the
@@ -1859,6 +2193,58 @@ HTTP `200` and `Service Health incident processed`. Finally, a human must
 confirm that the formatted message appeared in the configured Slack channel.
 The Azure-owned synthetic subscription and tracking IDs in that message are
 expected and are not production incident data.
+
+### Authorize and enable baseline coverage
+
+Bootstrap and image deployment do **not** enable the baseline. Until this
+cutover completes, real Service Health events in the central subscription do
+not reach the bot. After the signed test above, inspect the logs and
+[workspace telemetry](#application-insights-queries), and have the primary and
+backup owners authorize cutover. Run this block in the same child shell within
+15 minutes of the successful test. If it is older, repeat Stage 9 first.
+
+```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
+: "${SIGNED_TEST_AT:?Run the signed Stage 9 test first.}"
+test "$(( $(date -u +%s) - SIGNED_TEST_AT ))" -ge 0
+test "$(( $(date -u +%s) - SIGNED_TEST_AT ))" -le 900
+read -r -p "Type ACCEPTED only after Slack receipt, HTTP 200, Table/Slack telemetry and owner approval: " ACCEPTANCE
+test "$ACCEPTANCE" = ACCEPTED
+test "$(python scripts/manage_slack_token.py lock-status \
+  --environment-name "$AZURE_ENV_NAME" --json |
+  python -c 'import json,sys; print(json.load(sys.stdin)["Status"])')" = Unlocked
+azd env set SERVICE_HEALTH_BASELINE_ALERT_ENABLED true \
+  -e "$AZURE_ENV_NAME" --no-prompt
+SERVICE_HEALTH_READ_ONLY_PREVIEW=true azd hooks run preprovision \
+  -e "$AZURE_ENV_NAME" --no-prompt
+SERVICE_HEALTH_READ_ONLY_PREVIEW=true azd provision --preview \
+  -e "$AZURE_ENV_NAME" --subscription "$TARGET_SUBSCRIPTION_ID" \
+  --location "$AZURE_LOCATION" --no-prompt
+read -r -p "Type ENABLE only if preview enables only the baseline, without image/secret changes: " CUTOVER
+test "$CUTOVER" = ENABLE
+runbook_require_target
+azd provision -e "$AZURE_ENV_NAME" \
+  --subscription "$TARGET_SUBSCRIPTION_ID" \
+  --location "$AZURE_LOCATION" --no-prompt
+test "$(az monitor activity-log alert show \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "ala-$AZURE_ENV_NAME-service-health" \
+  --query enabled -o tsv)" = true
+echo "baseline-coverage-enabled"
+EXPECTED_BASELINE_ENABLED=true
+}
+```
+
+The final line is the coverage checkpoint, separate from signed-test acceptance.
+If preview is rejected or provisioning fails, keep the change window open and
+set `SERVICE_HEALTH_BASELINE_ALERT_ENABLED` back to `false` in this explicit
+environment. Review a fresh read-only preview and provision it to verify the
+actual alert is disabled before recording rollback. A local AZD value alone
+does not change Azure. Never reset `SERVICE_HEALTH_DEPLOY_WORKLOAD` to `false`
+on an accepted deployment as a rollback shortcut.
 
 Recovery:
 
@@ -1875,8 +2261,39 @@ Recovery:
 
 ## Manage alert scopes
 
-The initial deployment creates one alert for its subscription. Pin the central
-environment and Azure CLI context before every day-2 command:
+The initial deployment creates one alert for its subscription and leaves it
+disabled until the Stage 9 cutover. Complete
+[existing-environment setup](#existing-environment-setup) before every new
+operations session, then pin the central environment before every day-2 command:
+
+You do not need to decide between individual subscriptions and a Management
+Group during the initial deployment. Start with the central subscription, add
+independent subscriptions as needed, and migrate them to a non-overlapping
+Management Group later without a coverage gap.
+
+### Choose the scope command
+
+| Current state | Goal | Command |
+|---|---|---|
+| Central deployment only | Add a second, third, or other independent subscription | `add-subscription` |
+| No managed descendant overlaps | Add all currently accessible descendants of a Management Group | `add-management-group` |
+| One or more descendants already have individual managed alerts | Replace those individual paths with Management Group-managed paths | `migrate-to-management-group` |
+| An uncovered subscription was added to an already managed Management Group | Reconcile membership and create the missing subscription-scoped path | Rerun `add-management-group` |
+| A newly added descendant already has an individual managed alert | Move that alert under the existing Management Group-managed scope | Rerun `migrate-to-management-group` |
+| Management Group coverage should become individual coverage | Create, test, and enable individual replacements before retiring the group path | `migrate-from-management-group` |
+| Management Group coverage is no longer required and alternate coverage already exists | Remove the group-owned paths | `remove-management-group` |
+
+Management Group membership changes do not create Azure Monitor resources by
+themselves. Rerun the appropriate preview and execution after adding or moving
+a subscription in the Azure hierarchy. `add-management-group` repairs missing
+uncovered descendants; use `migrate-to-management-group` instead when a new
+descendant overlaps an existing individual managed alert.
+
+Each logical Management Group remains a day-2 input only. The CLI enumerates
+its visible descendants and deploys one Activity Log Alert and Action Group
+path per subscription. You can therefore adopt Management Group management
+after operating with one or more individual subscriptions; rebuilding the
+central deployment is not required.
 
 You do not need to decide between individual subscriptions and a Management
 Group during the initial deployment. Start with the central subscription, add
@@ -1908,7 +2325,10 @@ after operating with one or more individual subscriptions; rebuilding the
 central deployment is not required.
 
 ```bash
-export AZURE_ENV_NAME="<environment-name>"
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 TARGET_TENANT_ID="$(
   azd env get-value AZURE_TENANT_ID \
     -e "$AZURE_ENV_NAME" --no-prompt
@@ -1917,6 +2337,7 @@ TARGET_SUBSCRIPTION_ID="$(
   azd env get-value AZURE_SUBSCRIPTION_ID \
     -e "$AZURE_ENV_NAME" --no-prompt
 )"
+AZURE_LOCATION="$(azd env get-value AZURE_LOCATION -e "$AZURE_ENV_NAME" --no-prompt)"
 az account set --subscription "$TARGET_SUBSCRIPTION_ID"
 if ! (
   test "$(az account show --query tenantId -o tsv | \
@@ -1931,6 +2352,8 @@ if ! (
 fi
 echo "day2-target-confirmed"
 source .venv/bin/activate
+runbook_require_target
+}
 ```
 
 Stop unless `day2-target-confirmed` prints. If Azure CLI is signed into another
@@ -1939,15 +2362,30 @@ check. List coverage or add a subscription with the environment name supplied
 explicitly:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 python scripts/manage_alert_scopes.py list \
   --environment-name "$AZURE_ENV_NAME"
 python scripts/manage_alert_scopes.py add-subscription \
   --subscription-id "00000000-0000-0000-0000-000000000000" \
   --environment-name "$AZURE_ENV_NAME" --what-if --json
+}
+```
+
+Review the preview and replace the fingerprint before pasting execution:
+
+```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 python scripts/manage_alert_scopes.py add-subscription \
   --subscription-id "00000000-0000-0000-0000-000000000000" \
   --environment-name "$AZURE_ENV_NAME" \
   --execution-fingerprint "<fingerprint-from-reviewed-what-if>"
+}
 ```
 
 The execution creates the target resource group, Action Group, and disabled
@@ -1957,48 +2395,65 @@ and review a fresh destructive fingerprint, then execute the exact reviewed
 operation:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 python scripts/manage_alert_scopes.py remove-subscription \
   --subscription-id "00000000-0000-0000-0000-000000000000" \
   --environment-name "$AZURE_ENV_NAME" --what-if --json
+}
+```
+
+After review:
+
+```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 python scripts/manage_alert_scopes.py remove-subscription \
   --subscription-id "00000000-0000-0000-0000-000000000000" \
   --environment-name "$AZURE_ENV_NAME" \
   --execution-fingerprint "<fresh-reviewed-fingerprint>"
+}
 ```
 
 Management Group commands expand accessible descendants into managed
-subscription alert paths:
+subscription alert paths. Choose **one** operation from the table above;
+do not run all migration and removal commands in sequence:
 
 ```bash
-python scripts/manage_alert_scopes.py add-management-group \
-  --management-group-id "platform" \
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
+SCOPE_COMMAND="add-management-group"
+MANAGEMENT_GROUP_ID="<management-group-id>"
+case "$SCOPE_COMMAND" in
+  add-management-group|migrate-to-management-group|migrate-from-management-group|remove-management-group) ;;
+  *) echo "Choose a supported Management Group operation." >&2; exit 1 ;;
+esac
+test -n "$MANAGEMENT_GROUP_ID"
+[[ "$MANAGEMENT_GROUP_ID" != *'<'* ]]
+python scripts/manage_alert_scopes.py "$SCOPE_COMMAND" \
+  --management-group-id "$MANAGEMENT_GROUP_ID" \
   --environment-name "$AZURE_ENV_NAME" --what-if --json
-python scripts/manage_alert_scopes.py add-management-group \
-  --management-group-id "platform" \
-  --environment-name "$AZURE_ENV_NAME" \
-  --execution-fingerprint "<fingerprint-from-reviewed-what-if>"
-python scripts/manage_alert_scopes.py migrate-to-management-group \
-  --management-group-id "platform" \
-  --environment-name "$AZURE_ENV_NAME" \
-  --what-if --json
-python scripts/manage_alert_scopes.py migrate-to-management-group \
-  --management-group-id "platform" \
-  --environment-name "$AZURE_ENV_NAME" \
-  --execution-fingerprint "<fingerprint-from-reviewed-what-if>"
-python scripts/manage_alert_scopes.py migrate-from-management-group \
-  --management-group-id "platform" \
-  --environment-name "$AZURE_ENV_NAME" --what-if --json
-python scripts/manage_alert_scopes.py migrate-from-management-group \
-  --management-group-id "platform" \
-  --environment-name "$AZURE_ENV_NAME" \
-  --execution-fingerprint "<fingerprint-from-reviewed-what-if>"
-python scripts/manage_alert_scopes.py remove-management-group \
-  --management-group-id "platform" \
-  --environment-name "$AZURE_ENV_NAME" --what-if --json
-python scripts/manage_alert_scopes.py remove-management-group \
-  --management-group-id "platform" \
+}
+```
+
+Review that one operation, then supply its fresh fingerprint:
+
+```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
+python scripts/manage_alert_scopes.py "$SCOPE_COMMAND" \
+  --management-group-id "$MANAGEMENT_GROUP_ID" \
   --environment-name "$AZURE_ENV_NAME" \
   --execution-fingerprint "<fresh-reviewed-fingerprint>"
+}
 ```
 
 Use the immutable Management Group **ID**, not its display name. Start with
@@ -2057,6 +2512,62 @@ precedence.
 
 ## Operations
 
+### Existing-environment setup
+
+For day-2, routing, rotation, recovery, rollback, or decommission in a new
+terminal, first start the child Bash from
+[safe shell setup](#safe-shell-and-repository-setup), then run this block.
+Use the existing checkout and the same dedicated CLI profiles used for
+deployment. Do not clone over it or initialize a new environment. Set tenant,
+subscription, and region from the approved deployment record, not from an
+unverified current CLI default:
+
+```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+umask 077
+cd "$HOME/src/azure-service-health-slack-bot"
+source scripts/runbook_guard.sh
+runbook_require_repo
+export AZURE_CONFIG_DIR="$HOME/.config/azure-service-health-slack-bot/azure"
+export AZD_CONFIG_DIR="$HOME/.config/azure-service-health-slack-bot/azd"
+test -d "$AZURE_CONFIG_DIR"
+test -d "$AZD_CONFIG_DIR"
+export AZURE_ENV_NAME="<environment-name>"
+export TARGET_TENANT_ID="<approved-tenant-id>"
+export TARGET_SUBSCRIPTION_ID="<approved-subscription-id>"
+export AZURE_LOCATION="<approved-region>"
+az login --tenant "$TARGET_TENANT_ID"
+az account set --subscription "$TARGET_SUBSCRIPTION_ID"
+azd auth login --check-status --no-prompt
+azd env select "$AZURE_ENV_NAME" --no-prompt
+source .venv/bin/activate
+runbook_require_target
+RESOURCE_GROUP="$(azd env get-value AZURE_RESOURCE_GROUP -e "$AZURE_ENV_NAME" --no-prompt)"
+APP_NAME="$(azd env get-value SERVICE_APP_NAME -e "$AZURE_ENV_NAME" --no-prompt)"
+APP_URI="$(azd env get-value SERVICE_APP_URI -e "$AZURE_ENV_NAME" --no-prompt)"
+EXPECTED_BASELINE_ENABLED="$(azd env get-value SERVICE_HEALTH_BASELINE_ALERT_ENABLED -e "$AZURE_ENV_NAME" --no-prompt)"
+case "$EXPECTED_BASELINE_ENABLED" in
+  true|false) ;;
+  *) echo "Missing approved baseline state; inspect the deployment record." >&2; exit 1 ;;
+esac
+ACTION_GROUP="ag-${AZURE_ENV_NAME}-service-health"
+test -n "$RESOURCE_GROUP"
+echo "existing-environment-ready"
+}
+```
+
+`EXPECTED_BASELINE_ENABLED` lets the Stage 9 signed test run against an already
+accepted enabled baseline without disabling coverage or editing the test.
+The test checks the observed state against that persisted expectation.
+Run `runbook_require_target` at each operation boundary as shown below. It
+checks the physical repository root and origin, dedicated profiles, ARM target,
+default Graph token tenant metadata, selected AZD environment, and all four
+nonsecret AZD bindings. It neither reads local secret values nor performs
+Graph writes. For expired authentication, repeat this setup. If the
+workstation or checkout moved, repeat Stage 0's tool and filesystem checks.
+
 ### Application Insights queries
 
 The application configures the Azure Monitor OpenTelemetry Distro with
@@ -2084,15 +2595,22 @@ Insights. If the Application Insights Logs view appears empty immediately after
 a signed test, query the workspace directly:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
+test -n "$RESOURCE_GROUP"
 WORKSPACE_ID="$(az monitor log-analytics workspace list \
   --resource-group "$RESOURCE_GROUP" \
   --query '[0].customerId' -o tsv)"
+test -n "$WORKSPACE_ID"
 
 az monitor log-analytics query \
   --workspace "$WORKSPACE_ID" \
   --analytics-query \
   'AppDependencies | where TimeGenerated > ago(1h) | where Target =~ "slack.com" or Target contains ".table.core.windows.net" | project TimeGenerated, Name, Target, ResultCode, Success | order by TimeGenerated desc' \
   -o table
+}
 ```
 
 Correlated repeat processing can emit a failed in-process
@@ -2113,7 +2631,10 @@ Routing is revision configuration, not image content. Confirm the tenant,
 subscription, environment, and location immediately before changing it:
 
 ```bash
-export AZURE_ENV_NAME="<environment-name>"
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 TARGET_TENANT_ID="$(
   azd env get-value AZURE_TENANT_ID \
     -e "$AZURE_ENV_NAME" --no-prompt
@@ -2140,6 +2661,13 @@ if ! (
   exit 1
 fi
 echo "routing-target-confirmed"
+runbook_require_target
+python -m json.tool config/service_health_routes.json >/dev/null
+python -c 'import json; from pathlib import Path; from service_health.routing import RoutingConfig; RoutingConfig.from_dict(json.loads(Path("config/service_health_routes.json").read_text()))'
+if grep -Eq 'C0123456789|C1111111111|C2222222222|00000000-0000-0000-0000-000000000000' config/service_health_routes.json; then
+  echo "Replace the routing example identifiers." >&2
+  exit 1
+fi
 
 if ! ROUTES_B64="$(
   python -c 'import base64, pathlib; print(base64.b64encode(pathlib.Path("config/service_health_routes.json").read_bytes()).decode())'
@@ -2155,22 +2683,30 @@ if ! azd env set SERVICE_HEALTH_ROUTES_JSON_B64 "$ROUTES_B64" \
 fi
 unset ROUTES_B64
 
-azd provision --preview \
+SERVICE_HEALTH_READ_ONLY_PREVIEW=true azd hooks run preprovision \
+  -e "$AZURE_ENV_NAME" --no-prompt
+SERVICE_HEALTH_READ_ONLY_PREVIEW=true azd provision --preview \
   -e "$AZURE_ENV_NAME" \
   --subscription "$TARGET_SUBSCRIPTION_ID" \
   --location "$AZURE_LOCATION" \
   --no-prompt
+}
 ```
 
 Proceed only when preview succeeds and contains the intended routing change.
 Provision the same explicit environment:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 azd provision \
   -e "$AZURE_ENV_NAME" \
   --subscription "$TARGET_SUBSCRIPTION_ID" \
   --location "$AZURE_LOCATION" \
   --no-prompt
+}
 ```
 
 Stop unless `routing-target-confirmed` prints. Routing preview and provision are
@@ -2189,11 +2725,15 @@ Key Vault version through the data plane, clears the emergency pin, performs a
 token-free provision/restart, and runs the configured acceptance checks:
 
 ```bash
-export AZURE_ENV_NAME="<environment-name>"
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 python scripts/manage_slack_token.py status \
   --environment-name "$AZURE_ENV_NAME" --json
 python scripts/manage_slack_token.py rotate \
   --environment-name "$AZURE_ENV_NAME"
+}
 ```
 
 Do not revoke the prior Slack credential until the primary and backup owners
@@ -2205,18 +2745,25 @@ not paste either credential into AZD.
 Roll back the secret reference with the recorded nonsecret version:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 python scripts/manage_slack_token.py rollback \
   --environment-name "$AZURE_ENV_NAME"
+}
 ```
 
 This sets only `SERVICE_HEALTH_SECRET_VERSION`, performs a token-free provision,
-and enters the deliberate `ROLLBACK_PINNED` state. After repair and complete
-acceptance, rotate again to return to the versionless reference.
+and leaves an explicit version pin. The CLI reports `Status: ROLLED_BACK` only
+after its automated acceptance checks pass; human Slack receipt and dependency
+telemetry remain required. After repair and complete acceptance, rotate again
+to return to the versionless reference.
 
 ### Migrate an existing deployment
 
 Existing environments that retain `SLACK_BOT_TOKEN` are blocked from ordinary
-preview and provision. For `service-health-mgmt-test`, first capture the current
+preview and provision. First capture the current
 revision, versioned secret URI, Secure Webhook receiver, baseline/day-2 alert
 states, vault network/RBAC state, and independent operations receiver. Review a
 what-if showing no deletions, replacements, or unintended alert changes.
@@ -2224,10 +2771,15 @@ what-if showing no deletions, replacements, or unintended alert changes.
 Freeze AZD, routing, token, and day-2 mutations, then run:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 python scripts/manage_slack_token.py status \
-  --environment-name service-health-mgmt-test --json
+  --environment-name "$AZURE_ENV_NAME" --json
 python scripts/manage_slack_token.py migrate \
-  --environment-name service-health-mgmt-test
+  --environment-name "$AZURE_ENV_NAME"
+}
 ```
 
 Migration reads the exact local legacy entry directly under a private file lock;
@@ -2239,8 +2791,17 @@ token-free versionless provision.
 Acceptance requires the original alert and Secure Webhook lifecycle to remain
 intact, one healthy active revision, successful signed Slack/Table delivery, an
 empty emergency pin, no local token line, and no temporary RBAC/firewall/lock/
-journal residue. A failure after local cleanup must be retried from Key Vault;
-never restore plaintext.
+journal residue. After local cleanup, `migrate` cannot be rerun: it requires the
+legacy local entry that has already been removed. Never restore plaintext.
+If cleanup was proven and the migration marker, latest version metadata, and
+selected target are intact, use the Stage 5 **read-only preview block**, review
+the unchanged image, secret reference, and baseline state, then run the
+standalone token-free provision block in
+[Update routing](#update-routing) without rerunning its routing-input block.
+Repeat Stages 7's revision checkpoint, 8, and 9 against the expected baseline
+state. Do not call the migration successful until those gates pass. Missing
+metadata, temporary-access residue, or an ambiguous partial state requires the
+primary and backup owners to reconcile the preserved journal first.
 
 ### Recover an abandoned operation lock
 
@@ -2257,10 +2818,25 @@ ARM deployment or lifecycle/day-2 command is active. Then run the explicit
 recovery:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 python scripts/manage_slack_token.py lock-status \
   --environment-name "$AZURE_ENV_NAME" --json
+}
+```
+
+Only after reviewing `StaleBlocking` and excluding active operations:
+
+```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 python scripts/manage_slack_token.py recover-lock \
   --environment-name "$AZURE_ENV_NAME" --force
+}
 ```
 
 Recovery performs its own read-only status check and refuses an active lease.
@@ -2277,12 +2853,17 @@ environment, metadata expiry, lease state, and final absence.
 
 ### Roll back application code
 
-The Container App uses single revision mode. Confirm the target and load the
-resource names from that explicit environment before activating a known-good
-revision:
+The Container App uses single revision mode. Do not use revision activation as
+an image rollback: activation does not establish which image the latest
+single-mode template will run. Select an approved previous revision, retrieve
+only its image reference, and deploy that image as a new revision. This leaves
+current routing, secret references, authentication, and scale settings intact:
 
 ```bash
-export AZURE_ENV_NAME="<environment-name>"
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 TARGET_TENANT_ID="$(
   azd env get-value AZURE_TENANT_ID \
     -e "$AZURE_ENV_NAME" --no-prompt
@@ -2316,13 +2897,30 @@ az containerapp revision list \
   --query '[].{name:name,active:properties.active,created:properties.createdTime}' \
   -o table
 
-az containerapp revision activate \
+read -r -p "Approved known-good revision name: " KNOWN_GOOD_REVISION
+test -n "$KNOWN_GOOD_REVISION"
+KNOWN_GOOD_IMAGE="$(az containerapp revision show \
   --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
-  --revision "<known-good-revision>"
+  --revision "$KNOWN_GOOD_REVISION" \
+  --query 'properties.template.containers[0].image' -o tsv)"
+test -n "$KNOWN_GOOD_IMAGE"
+read -r -p "Type ROLLBACK after confirming this revision's image in the change record: " ROLLBACK
+test "$ROLLBACK" = ROLLBACK
+runbook_require_target
+az containerapp update \
+  --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
+  --image "$KNOWN_GOOD_IMAGE" --output none
+test "$(az containerapp show \
+  --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
+  --query 'properties.template.containers[0].image' -o tsv)" = "$KNOWN_GOOD_IMAGE"
+}
 ```
 
-Stop unless `rollback-target-confirmed` prints. For routing or token rollback,
-restore the previous value through the explicit routing or rotation procedure.
+Stop unless `rollback-target-confirmed` prints. Repeat Stages 7's revision
+checkpoint, 8, and the signed test in 9. Existing-environment setup preserves
+the expected enabled baseline state for those retests. Record the actual image
+digest and active revision before releasing the change window. For routing or
+token rollback, use the explicit routing or secret rollback procedure.
 
 ### Troubleshooting
 
@@ -2353,7 +2951,7 @@ restore the previous value through the explicit routing or rotation procedure.
 ## End-to-end acceptance record
 
 The following path was exercised from a clean environment on 2026-08-15. It is
-the minimum evidence required before calling another deployment operational:
+a historical deployment record, not validation of every current runbook block:
 
 | Gate | Accepted evidence |
 |---|---|
@@ -2369,6 +2967,12 @@ the minimum evidence required before calling another deployment operational:
 Do not copy environment-specific IDs from another deployment. Reproduce every
 gate with the target tenant, subscription, region, Slack workspace, channel, and
 approved Management Group hierarchy.
+This historical record does not establish that the central baseline was
+enabled. New acceptance also requires the explicit Stage 9 cutover and
+`baseline-coverage-enabled`, with the actual enabled state in the change record.
+The offline Bash regression suite validates ordering, state, and failure
+handling with command doubles; it does not replace live signed-delivery,
+private-network, permission-propagation, or human receipt evidence.
 
 ## Official Microsoft references
 
@@ -2427,7 +3031,10 @@ after Azure resources are gone. Keep the same shell open through the complete
 procedure:
 
 ```bash
-export AZURE_ENV_NAME="<environment-name>"
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 azd env select "$AZURE_ENV_NAME" --no-prompt
 TARGET_TENANT_ID="$(azd env get-value AZURE_TENANT_ID \
   -e "$AZURE_ENV_NAME" --no-prompt)"
@@ -2437,6 +3044,7 @@ DEPLOYMENT_LOCATION="$(azd env get-value AZURE_LOCATION \
   -e "$AZURE_ENV_NAME" --no-prompt)"
 az login --tenant "$TARGET_TENANT_ID"
 az account set --subscription "$TARGET_SUBSCRIPTION_ID"
+runbook_require_target
 if ! (
   test "$(az account show --query tenantId -o tsv | \
     tr '[:upper:]' '[:lower:]')" = "${TARGET_TENANT_ID,,}" &&
@@ -2546,8 +3154,34 @@ readonly DECOMMISSION_API_DISPLAY_NAME="$EXPECTED_API_DISPLAY_NAME"
 readonly DECOMMISSION_REPOSITORY_PATH="$REPOSITORY_PATH"
 readonly DECOMMISSION_LOCAL_ENV_PATH="$LOCAL_ENV_PATH"
 readonly DECOMMISSION_PROVENANCE="$DECOMMISSION_ENV_NAME|$DECOMMISSION_TENANT_ID|$DECOMMISSION_SUBSCRIPTION_ID|$DECOMMISSION_LOCATION|$DECOMMISSION_RESOURCE_GROUP|$DECOMMISSION_API_OBJECT_ID|$DECOMMISSION_API_CLIENT_ID|$DECOMMISSION_API_IDENTIFIER_URI|$DECOMMISSION_REPOSITORY_PATH"
+DECOMMISSION_RECORD_DIR="$HOME/.local/state/azure-service-health-slack-bot"
+mkdir -p "$DECOMMISSION_RECORD_DIR"
+chmod 700 "$DECOMMISSION_RECORD_DIR"
+DECOMMISSION_RECORD="$DECOMMISSION_RECORD_DIR/decommission-$AZURE_ENV_NAME.json"
+python - "$DECOMMISSION_RECORD" \
+  "$DECOMMISSION_ENV_NAME" "$DECOMMISSION_TENANT_ID" \
+  "$DECOMMISSION_SUBSCRIPTION_ID" "$DECOMMISSION_LOCATION" \
+  "$DECOMMISSION_RESOURCE_GROUP" "$DECOMMISSION_API_CLIENT_ID" \
+  "$DECOMMISSION_API_OBJECT_ID" "$DECOMMISSION_API_IDENTIFIER_URI" \
+  "$DECOMMISSION_API_DISPLAY_NAME" "$DECOMMISSION_REPOSITORY_PATH" \
+  "$DECOMMISSION_LOCAL_ENV_PATH" "$DECOMMISSION_PROVENANCE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+names = (
+    "ENV_NAME", "TENANT_ID", "SUBSCRIPTION_ID", "LOCATION", "RESOURCE_GROUP",
+    "API_CLIENT_ID", "API_OBJECT_ID", "API_IDENTIFIER_URI", "API_DISPLAY_NAME",
+    "REPOSITORY_PATH", "LOCAL_ENV_PATH", "PROVENANCE",
+)
+record = dict(zip(names, sys.argv[2:], strict=True))
+with Path(sys.argv[1]).open("x", encoding="utf-8") as handle:
+    json.dump(record, handle, indent=2)
+    handle.write("\n")
+PY
 unset ACTION_GROUP_JSON GRAPH_APP_JSON
 echo "decommission-identifiers-retained"
+}
 ```
 
 Do not continue unless both inventory checkpoints print. The provenance
@@ -2561,6 +3195,19 @@ deployed Action Group. The current hook does not persist a creation-only marker.
 A missing, duplicate, adopted, or legacy app without independent creation
 evidence is a stop condition.
 
+The private JSON recovery record contains only these nonsecret identifiers,
+not the AZD environment or credentials. Preserve it in the approved change
+record before deletion. An existing file is a stop condition: do not overwrite
+prior provenance. The strict shell discards variables on failure, so this
+record, rather than shell history, is the recovery source after a partial
+decommission. Start a fresh child shell with existing-environment setup while
+local AZD state remains available. Reconfirm the approved tenant and inspect
+which Azure resource group, Graph application, and local environment still
+exist before resuming only the unfinished phase. Do not rerun the original
+inventory after its Action Group has been deleted, and do not repeat a Graph
+delete merely because a previous verification failed. If the state cannot be
+proven, stop for the primary and backup owners to reconcile the saved record.
+
 The day-2 remove commands preserve Service Health coverage and are not a
 full-decommission switch. If you intend to end coverage, verify the
 `service-health-managed-by=manage-alert-scopes` tags and manually delete only
@@ -2573,6 +3220,10 @@ central Azure resources and the project-created app registration. The explicit
 environment keeps `azd down` on the selected deployment:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
 if ! (
   test "$(pwd -P)" = "$DECOMMISSION_REPOSITORY_PATH" &&
   test "$AZURE_ENV_NAME" = "$DECOMMISSION_ENV_NAME" &&
@@ -2602,6 +3253,8 @@ if ! (
   exit 1
 fi
 echo "decommission-delete-target-confirmed"
+read -r -p "Type DELETE after approved peripheral cleanup and central/Entra deletion review: " DELETE_CONFIRMATION
+test "$DELETE_CONFIRMATION" = DELETE
 
 if ! azd down -e "$DECOMMISSION_ENV_NAME" --force --no-prompt; then
   echo "AZD reported incomplete Azure resource deletion." >&2
@@ -2626,6 +3279,7 @@ if ! (
   exit 1
 fi
 
+runbook_require_target
 GRAPH_APP_JSON="$(az rest --method get \
   --url "https://graph.microsoft.com/v1.0/applications/$DECOMMISSION_API_OBJECT_ID?\$select=id,appId,displayName,identifierUris" \
   -o json)"
@@ -2667,9 +3321,15 @@ if [ "$POST_DELETE_MATCH_COUNT" != "0" ]; then
   exit 1
 fi
 echo "decommission-cloud-resources-removed"
+}
 ```
 
 Do not delete Microsoft's AzNS AAD Webhook service principal.
+The app deletion checkpoint proves absence from the active Graph application
+collection, not permanent erasure. Microsoft Entra normally retains deleted
+applications for 30 days. Do not purge the deleted application or service
+principal as part of this procedure; permanent deletion requires separate
+approval. See [restore a deleted application](https://learn.microsoft.com/entra/identity-platform/howto-restore-app).
 
 For the recommended dedicated Slack app, uninstall or delete the app through
 Slack administration, remove it from the project channels, and delete its
@@ -2691,6 +3351,10 @@ Remove the local environment separately, then verify the directory is absent
 without reading or printing any value:
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_repo
 if [[ "$(pwd -P)" != "$DECOMMISSION_REPOSITORY_PATH" ]]; then
   echo "Return to the captured repository before local cleanup." >&2
   exit 1
@@ -2705,11 +3369,19 @@ if [[ -e "$DECOMMISSION_LOCAL_ENV_PATH" ]]; then
   exit 1
 fi
 echo "decommission-local-credentials-removed"
+}
 ```
 
 The final line must be `decommission-local-credentials-removed`. If another
 environment is intentionally retained, remove or rotate its credential before
 accepting the decommission checkpoint.
+This checkpoint covers the local AZD environment only. The dedicated
+`AZURE_CONFIG_DIR` and `AZD_CONFIG_DIR` profiles still contain CLI login state.
+After all approved verification is finished, sign out of the dedicated Azure
+CLI profile with `az logout` in this child shell, then exit it. Do not sign out
+of, clear, or delete the shared corporate profile. Retain or remove the two
+dedicated directories only under the workstation credential-retention policy;
+never include them in a support bundle.
 
 This deployment enables Key Vault purge protection with a 90-day retention
 period. The deleted vault cannot be purged or have its name reused until that
@@ -2720,6 +3392,10 @@ recovery procedure and recreate the deleted integrations and role assignments.
 ## Tests
 
 ```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_repo
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 python -m pip install -r requirements-ops.txt
@@ -2734,6 +3410,7 @@ az bicep lint --file infra/day2/service-health-alert-scope.bicep
 python scripts/manage_alert_scopes.py --help >/dev/null
 python scripts/manage_slack_token.py --help >/dev/null
 python scripts/configure_secure_webhook.py --help >/dev/null
+}
 ```
 
 The test suite covers payload parsing, routing, authorization, Table Storage

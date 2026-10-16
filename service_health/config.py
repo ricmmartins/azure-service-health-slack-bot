@@ -55,7 +55,7 @@ class ServiceHealthSettings:
 
     @classmethod
     def from_env(cls, environ=None):
-        environ = environ or os.environ
+        environ = os.environ if environ is None else environ
         endpoint = environ.get("AZURE_TABLE_ENDPOINT", "").strip()
         if not endpoint:
             raise InvalidServiceHealthConfiguration(

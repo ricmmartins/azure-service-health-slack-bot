@@ -32,13 +32,17 @@ class RoutingRule:
             self.subscriptions, self.services, self.regions))
 
     def matches(self, event: ServiceHealthEvent):
-        return (
-            (not self.subscriptions
-             or event.subscription_id.casefold() in self.subscriptions)
-            and (not self.services
-                 or bool(event.service_names & self.services))
-            and (not self.regions
-                 or bool(event.region_names & self.regions))
+        if (self.subscriptions
+                and event.subscription_id.casefold() not in self.subscriptions):
+            return False
+        if not self.services and not self.regions:
+            return True
+        return any(
+            (not self.services or item.name.casefold() in self.services)
+            and (not self.regions or bool(
+                {region.casefold() for region in item.regions}
+                & self.regions))
+            for item in event.impacted_services
         )
 
 

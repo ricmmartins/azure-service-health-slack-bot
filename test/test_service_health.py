@@ -1,6 +1,7 @@
 import copy
 import io
 import json
+import logging
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ from urllib.error import URLError
 
 import pytest
 import service_health.service as service_module
+import service_health.telemetry as telemetry_module
 from azure.core.exceptions import ResourceExistsError
 from flask import Flask
 from slack_sdk.errors import SlackApiError
@@ -19,8 +21,11 @@ from service_health.auth import (
     authorize_easy_auth,
     encode_test_principal,
 )
-from service_health.config import ServiceHealthSettings
-from service_health.models import AlertLevel, LifecycleStatus
+from service_health.config import (
+    InvalidServiceHealthConfiguration,
+    ServiceHealthSettings,
+)
+from service_health.models import AlertLevel, ImpactedService, LifecycleStatus
 from service_health.parser import (
     InvalidServiceHealthPayload,
     parse_service_health_alert,
@@ -226,6 +231,58 @@ def test_routing_uses_priority_specificity_and_fallback():
     assert routing.channel_for(other) == "CDEFAULT"
 
 
+def test_routing_rule_does_not_cross_contaminate_service_and_region():
+    # Two impacted items in the same event: one matches the rule's service
+    # but not its region, the other matches the region but not the service.
+    # Neither individual item satisfies both filters, so the rule must not
+    # match even though the *union* of services/regions across all items
+    # would incorrectly satisfy it.
+    event = replace(
+        parse_service_health_alert(common_alert()),
+        impacted_services=(
+            ImpactedService("Azure Kubernetes Service", ("East US",)),
+            ImpactedService("Azure SQL Database", ("West US",)),
+        ),
+    )
+    routing = RoutingConfig.from_dict({
+        "default_channel_id": "CDEFAULT",
+        "rules": [
+            {
+                "channel_id": "CCROSS",
+                "priority": 10,
+                "services": ["Azure Kubernetes Service"],
+                "regions": ["West US"],
+            },
+        ],
+    })
+
+    assert routing.channel_for(event) == "CDEFAULT"
+
+
+def test_routing_rule_matches_when_service_and_region_share_one_item():
+    event = replace(
+        parse_service_health_alert(common_alert()),
+        impacted_services=(
+            ImpactedService("Azure Kubernetes Service", ("East US",)),
+            ImpactedService(
+                "Azure Kubernetes Service", ("West US", "East US")),
+        ),
+    )
+    routing = RoutingConfig.from_dict({
+        "default_channel_id": "CDEFAULT",
+        "rules": [
+            {
+                "channel_id": "CMATCH",
+                "priority": 10,
+                "services": ["Azure Kubernetes Service"],
+                "regions": ["West US"],
+            },
+        ],
+    })
+
+    assert routing.channel_for(event) == "CMATCH"
+
+
 def test_easy_auth_requires_app_audience_and_role():
     audience = "api://service-health"
     headers = {
@@ -305,6 +362,50 @@ def test_slack_rendering_truncates_complete_resolved_header():
     )
     _, blocks = render_incident_message(event, LifecycleStatus.RESOLVED)
     assert len(blocks[0]["text"]["text"]) == 150
+
+
+def test_slack_rendering_truncates_incident_type_and_subscription_fields():
+    event = replace(
+        parse_service_health_alert(common_alert()),
+        incident_type="I" * 5000,
+        subscription_id="S" * 5000,
+    )
+
+    _, blocks = render_incident_message(event, LifecycleStatus.ACTIVE)
+
+    fields = blocks[1]["fields"]
+    incident_type_field = fields[1]["text"]
+    subscription_field = fields[3]["text"]
+    assert len(incident_type_field) <= 2000
+    assert incident_type_field.endswith("…")
+    assert len(subscription_field) <= 2000
+    assert subscription_field.endswith("…")
+
+
+def test_slack_rendering_truncates_context_footer():
+    event = replace(
+        parse_service_health_alert(common_alert()),
+        tracking_id="T" * 5000,
+    )
+
+    _, blocks = render_incident_message(event, LifecycleStatus.ACTIVE)
+
+    footer = blocks[-1]["elements"][0]["text"]
+    assert len(footer) <= 3000
+    assert footer.endswith("…")
+
+
+def test_slack_thread_update_truncates_context_footer():
+    event = replace(
+        parse_service_health_alert(common_alert()),
+        tracking_id="T" * 5000,
+    )
+
+    _, blocks = render_incident_update(event, LifecycleStatus.UPDATED)
+
+    footer = blocks[-1]["elements"][0]["text"]
+    assert len(footer) <= 3000
+    assert footer.endswith("…")
 
 
 def test_slack_thread_update_is_accessible_and_concise():
@@ -873,6 +974,53 @@ def test_flask_endpoint_parses_and_processes_common_schema():
     assert response.json["result"] == "created"
     assert response.headers["X-Correlation-ID"] == "test-correlation"
     assert len(processor.events) == 1
+
+
+def test_from_env_does_not_fall_back_to_os_environ_for_empty_dict(monkeypatch):
+    monkeypatch.setenv(
+        "AZURE_TABLE_ENDPOINT", "https://example.table.core.windows.net")
+    monkeypatch.setenv("SERVICE_HEALTH_ROUTES_JSON", json.dumps({
+        "default_channel_id": "CDEFAULT",
+        "rules": [],
+    }))
+
+    with pytest.raises(InvalidServiceHealthConfiguration):
+        ServiceHealthSettings.from_env(environ={})
+
+
+def test_configure_telemetry_does_not_fall_back_to_os_environ_for_empty_dict(
+        monkeypatch):
+    monkeypatch.setenv(
+        "APPLICATIONINSIGHTS_CONNECTION_STRING", "InstrumentationKey=test")
+    telemetry_module._configured = False
+
+    try:
+        configured = telemetry_module.configure_telemetry(environ={})
+    finally:
+        telemetry_module._configured = False
+
+    assert configured is False
+
+
+def test_readyz_logs_exception_on_invalid_configuration(caplog):
+    def broken_runtime():
+        raise InvalidServiceHealthConfiguration("missing TABLE_ENDPOINT")
+
+    flask_app = Flask(__name__)
+    flask_app.register_blueprint(
+        create_service_health_blueprint(broken_runtime))
+
+    with caplog.at_level(logging.ERROR, logger="service_health.routes"):
+        response = flask_app.test_client().get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json["status"] == "not_ready"
+    assert any(
+        record.levelno == logging.ERROR
+        and "Service Health readiness check failed" in record.message
+        and record.exc_info is not None
+        for record in caplog.records
+    )
 
 
 def test_flask_endpoint_maps_invalid_payload_to_422():
