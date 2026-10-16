@@ -220,8 +220,8 @@
     <use href="#icon-alerts" x="1025" y="195" width="34" height="34"/>
     <text class="node-title compact-title" x="1068" y="198">Operations</text>
     <text class="node-title compact-title" x="1068" y="214">alerts</text>
-    <text class="tiny" x="1068" y="235">Independent Action Group</text>
-    <text class="tiny" x="1068" y="251">Failures + availability</text>
+    <text class="tiny" x="1068" y="230"><tspan x="1068">Independent </tspan><tspan x="1068" dy="14">Action Group</tspan></text>
+    <text class="tiny" x="1068" y="258">Failures + availability</text>
   </g>
 
   <g>
