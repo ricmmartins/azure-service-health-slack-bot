@@ -27,15 +27,21 @@ def read(relative_path: str) -> str:
 def test_readme_is_a_concise_landing_page_for_the_complete_runbook():
     readme = read("README.md")
     runbook = read(RUNBOOK)
+    docs_index = read("docs/README.md")
     overview = read("img/architecture-overview.svg")
     detailed = read("img/architecture-flow.svg")
 
     assert len(readme.splitlines()) <= 250
-    assert "(docs/deployment-and-operations.md#deploy-with-azure-developer-cli)" in readme
+    assert "(docs/deployment-and-operations.md#first-deployment-path)" in readme
+    assert "(docs/deployment-and-operations.md#resume-after-a-stopped-stage)" in readme
+    assert "(docs/deployment-and-operations.md#existing-environment-setup)" in readme
+    assert "(docs/deployment-and-operations.md#decommission)" in readme
     assert "(docs/deployment-and-operations.md#manage-alert-scopes)" in readme
-    assert "(docs/deployment-and-operations.md#operations)" in readme
     assert "(img/architecture-overview.svg)" in readme
     assert "(../img/architecture-flow.svg)" in runbook
+    assert "Install from scratch" in docs_index
+    assert "Resume after a stage stopped" in docs_index
+    assert "Update or operate an existing deployment" in docs_index
     assert "One alert path per subscription" in detailed
     assert "MGs expand to descendants" in detailed
     assert "Operation lock storage" in detailed
@@ -49,7 +55,7 @@ def test_scope_docs_explain_incremental_management_group_adoption():
 
     assert "You do not need to choose a Management Group" in readme
     assert "`migrate-to-management-group`" in readme
-    assert "### Choose the scope command" in runbook
+    assert runbook.count("### Choose the scope command") == 1
     assert "Add a second, third, or other independent subscription" in runbook
     assert "Rerun `add-management-group`" in runbook
     assert "Rerun `migrate-to-management-group`" in runbook
@@ -66,6 +72,33 @@ def test_scope_docs_explain_incremental_management_group_adoption():
         "remove-management-group",
     ):
         assert command in runbook
+
+
+def test_docs_separate_fresh_existing_and_resume_paths():
+    readme = read("README.md")
+    runbook = read(RUNBOOK)
+    docs_index = read("docs/README.md")
+    setup = markdown_section(runbook, "Safe shell and repository setup")
+
+    assert "You do not need to know or edit Bicep" in readme
+    assert "You do not need to author or understand Bicep" in runbook
+    assert "#### Fresh checkout" in setup
+    assert "#### Existing checkout" in setup
+    assert setup.count(
+        'export AZURE_CONFIG_DIR="$HOME/.config/'
+        'azure-service-health-slack-bot/azure"'
+    ) == 2
+    assert setup.count(
+        'export AZD_CONFIG_DIR="$HOME/.config/'
+        'azure-service-health-slack-bot/azd"'
+    ) == 2
+    assert (
+        "The two dedicated profile paths must remain exactly"
+        in re.sub(r"\s+", " ", setup)
+    )
+    assert "### Resume after a stopped stage" in runbook
+    assert "do not run `azd env new` again" in runbook
+    assert "Copy its Bash blocks directly" in docs_index
 
 
 def markdown_section(markdown: str, heading: str) -> str:

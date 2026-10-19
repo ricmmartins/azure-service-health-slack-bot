@@ -1,21 +1,30 @@
 # Documentation
 
-Use this index to move from evaluation to deployment and operations without
-reading the complete runbook from top to bottom.
+Choose the task you are performing. You do not need to read the complete
+runbook from top to bottom.
 
-## Evaluate
+| Task | Start here |
+|---|---|
+| Install from scratch | [First deployment path](deployment-and-operations.md#first-deployment-path) |
+| Resume after a stage stopped | [Resume after a stopped stage](deployment-and-operations.md#resume-after-a-stopped-stage) |
+| Update or operate an existing deployment | [Existing-environment setup](deployment-and-operations.md#existing-environment-setup) |
+| Add subscriptions or adopt a Management Group | [Manage alert scopes](deployment-and-operations.md#manage-alert-scopes) |
+| Remove the solution | [Decommission](deployment-and-operations.md#decommission) |
+| Develop locally | [Local development](deployment-and-operations.md#local-development) |
+
+## Understand the solution
 
 - [Architecture](deployment-and-operations.md#architecture)
 - [Security model](deployment-and-operations.md#security-model)
 - [Known limits](deployment-and-operations.md#known-limits)
 - [Microsoft platform evidence](microsoft-platform-evidence.md)
 
-## Deploy
+## Install and accept
 
 - [Prerequisites](deployment-and-operations.md#prerequisites)
-- [Local development](deployment-and-operations.md#local-development)
-- [End-to-end Azure Developer CLI deployment](deployment-and-operations.md#deploy-with-azure-developer-cli)
-- [Safe shell and repository setup](deployment-and-operations.md#safe-shell-and-repository-setup)
+- [First deployment path](deployment-and-operations.md#first-deployment-path)
+- [Fresh checkout](deployment-and-operations.md#fresh-checkout)
+- [Existing checkout](deployment-and-operations.md#existing-checkout)
 - [Signed Service Health acceptance test](deployment-and-operations.md#stage-9-send-the-signed-service-health-test)
 - [Authorize baseline coverage](deployment-and-operations.md#authorize-and-enable-baseline-coverage)
 
@@ -36,5 +45,6 @@ reading the complete runbook from top to bottom.
 - [Decommission](deployment-and-operations.md#decommission)
 
 The [complete deployment and operations runbook](deployment-and-operations.md)
-contains the staged commands, safety gates, recovery procedures, and
-acceptance evidence in one auditable document.
+is the command source of truth. Copy its Bash blocks directly; do not copy
+rendered command text from chat, email, or rich-text editors that may escape
+underscores or alter quotes.
