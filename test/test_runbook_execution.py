@@ -436,6 +436,10 @@ def initial_setup():
     return blocks("Safe shell and repository setup")[0]
 
 
+def existing_checkout_setup():
+    return blocks("Safe shell and repository setup")[1]
+
+
 def stage0():
     return blocks("Stage 0: verify the workstation")[0]
 
@@ -476,6 +480,22 @@ printf 'state-survived\\n'
     assert log.index(next(row for row in log if row[1][0] == "clone")) < (
         log.index(builds[0])
     )
+
+
+@LINUX
+def test_existing_checkout_setup_reuses_profiles_without_clone(workstation):
+    home, checkout, env = workstation
+    azure_profile = home / ".config" / "azure-service-health-slack-bot" / "azure"
+    azd_profile = home / ".config" / "azure-service-health-slack-bot" / "azd"
+    azure_profile.mkdir(parents=True, mode=0o700)
+    azd_profile.mkdir(parents=True, mode=0o700)
+
+    result = run_bash(existing_checkout_setup(), cwd=home, env=env)
+
+    assert result.returncode == 0, result.stderr.decode()
+    assert b"existing-checkout-ready" in result.stdout
+    assert not any(row[1] and row[1][0] == "clone" for row in commands(env))
+    assert checkout == home / "src" / "azure-service-health-slack-bot"
 
 
 @LINUX

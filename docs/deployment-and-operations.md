@@ -18,13 +18,23 @@ requests, receive Slack events, or replace an incident management system.
 
 | Goal | Read |
 |---|---|
-| Evaluate the design | [Architecture](#architecture), [Security model](#security-model), and [Known limits](#known-limits) |
+| Install for the first time | [First deployment path](#first-deployment-path) |
+| Resume after a command stopped | [Resume after a stopped stage](#resume-after-a-stopped-stage) |
+| Update or operate an existing deployment | [Existing-environment setup](#existing-environment-setup) |
+| Add subscriptions or adopt a Management Group | [Manage alert scopes](#manage-alert-scopes) |
+| Remove the solution | [Decommission](#decommission) |
 | Run locally | [Local development](#local-development) |
-| Deploy | [Deploy with Azure Developer CLI](#deploy-with-azure-developer-cli) |
-| Add subscriptions | [Manage alert scopes](#manage-alert-scopes) |
-| Operate or troubleshoot | [Operations](#operations) |
+| Evaluate the design | [Architecture](#architecture), [Security model](#security-model), and [Known limits](#known-limits) |
 | Confirm deployment acceptance | [End-to-end acceptance record](#end-to-end-acceptance-record) |
-| Check the Microsoft platform evidence | [Microsoft platform evidence](microsoft-platform-evidence.md) |
+
+This guide is written for Bash, Azure CLI, and Azure Developer CLI (`azd`).
+You do not need to author or understand Bicep to deploy the solution. Bicep is
+the repository's internal infrastructure format; Stage 0 only asks Azure CLI to
+compile the checked-in templates before any deployment.
+
+Copy commands from the fenced blocks in this file. Do not copy rendered command
+text from chat, email, or another rich-text editor: it may add escapes such as
+`runbook\_require\_repo`, replace quotes, or truncate a pasted block.
 
 ## Architecture
 
@@ -353,6 +363,33 @@ the lifecycle/day-2 Blob mutex. A successful `lock-status` is only a point-in-ti
 check, not protection against a concurrent raw AZD command. Freeze other
 operators and automation; never delete or bypass an active lock.
 
+### First deployment path
+
+Use this path only for a new installation. An existing deployment uses
+[existing-environment setup](#existing-environment-setup), not Stage 1 or
+`azd env new`.
+
+Before opening the deployment shell, collect:
+
+| Input or access | Why it is needed |
+|---|---|
+| Tenant ID, subscription ID, Azure region | Pins every Azure and Graph operation to the intended target. |
+| New AZD environment name | Separates local state and Azure resource names from previous installations. |
+| Azure `Owner`, or `Contributor` plus `User Access Administrator` | Creates resources and role assignments. |
+| Temporary Microsoft Entra `Application Administrator` | Creates and authorizes the Secure Webhook application. |
+| Slack workspace ID, channel ID, and dedicated `xoxb-` bot token | Configures and validates the Slack destination. |
+| Independent operations Action Group receiver | Receives availability and dependency alerts outside this bot. |
+| Primary owner, backup owner, on-call destination, and HTTPS runbook URL | Satisfies the production-readiness gate. |
+| Operator public IPv4, unless using an approved private path | Allows the one-time, default-deny Key Vault token transfer. |
+
+The deployment sequence is:
+
+1. Complete [safe shell and repository setup](#safe-shell-and-repository-setup).
+2. Run Stages 0 through 9 in order.
+3. Stop at the first failed checkpoint and use that stage's recovery guidance.
+4. Enable baseline coverage only after the signed test, telemetry checks, Slack
+   receipt, and owner approval.
+
 ### Safe shell and repository setup
 
 From an existing interactive terminal, start a **child Bash** with this command
@@ -379,11 +416,15 @@ values. Follow the failed stage's recovery procedure; do not rerun clone,
 `azd env new`, or the Stage 4 disabled-first initialization on an existing
 deployment. Operations use the [existing-environment setup](#existing-environment-setup).
 
-For a first checkout, run this block **before Stage 0**. An existing destination
-is a stop condition, not permission to overwrite it. For an existing checkout,
-replace **both lines** of the `git clone` command with
-`test -d "$HOME/src/azure-service-health-slack-bot/.git"`
-(a linked worktree can have a `.git` file; use `test -e` there).
+The repository checkout may use another Linux path. The two dedicated profile
+paths must remain exactly as documented because the guard verifies them.
+
+#### Fresh checkout
+
+Use this block for a new checkout. If the destination already exists, `git
+clone` stops safely. Do not delete or overwrite it: use the
+[existing checkout](#existing-checkout) block, or change only
+`REPOSITORY_PATH` below to a new Linux-filesystem destination.
 
 ```bash
 {
@@ -395,9 +436,10 @@ test "${BASH_VERSINFO[0]}" -gt 4 ||
 test "$(uname -s)" = Linux
 umask 077
 mkdir -p "$HOME/src"
+REPOSITORY_PATH="$HOME/src/azure-service-health-slack-bot"
 git clone https://github.com/ricmmartins/azure-service-health-slack-bot.git \
-  "$HOME/src/azure-service-health-slack-bot"
-cd "$HOME/src/azure-service-health-slack-bot"
+  "$REPOSITORY_PATH"
+cd "$REPOSITORY_PATH"
 source scripts/runbook_guard.sh
 runbook_require_repo
 
@@ -405,7 +447,42 @@ export AZURE_CONFIG_DIR="$HOME/.config/azure-service-health-slack-bot/azure"
 export AZD_CONFIG_DIR="$HOME/.config/azure-service-health-slack-bot/azd"
 mkdir -p "$AZURE_CONFIG_DIR" "$AZD_CONFIG_DIR"
 chmod 700 "$AZURE_CONFIG_DIR" "$AZD_CONFIG_DIR"
+runbook_require_profiles
 echo "repository-and-isolated-profiles-ready"
+}
+```
+
+#### Existing checkout
+
+Use this block when the repository already exists, including after a stopped
+paste. Change only `REPOSITORY_PATH` when the checkout is elsewhere. This block
+does not pull, switch branches, create an AZD environment, or mutate Azure.
+
+```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+test "${BASH_VERSINFO[0]}" -gt 4 ||
+  { test "${BASH_VERSINFO[0]}" -eq 4 && test "${BASH_VERSINFO[1]}" -ge 4; } ||
+  { echo "Use Bash 4.4 or later." >&2; exit 1; }
+test "$(uname -s)" = Linux
+umask 077
+REPOSITORY_PATH="$HOME/src/azure-service-health-slack-bot"
+test -e "$REPOSITORY_PATH/.git" || {
+  echo "Stop: REPOSITORY_PATH is not a Git checkout." >&2
+  exit 1
+}
+cd "$REPOSITORY_PATH"
+source scripts/runbook_guard.sh
+runbook_require_repo
+
+export AZURE_CONFIG_DIR="$HOME/.config/azure-service-health-slack-bot/azure"
+export AZD_CONFIG_DIR="$HOME/.config/azure-service-health-slack-bot/azd"
+test -d "$AZURE_CONFIG_DIR"
+test -d "$AZD_CONFIG_DIR"
+chmod 700 "$AZURE_CONFIG_DIR" "$AZD_CONFIG_DIR"
+runbook_require_profiles
+echo "existing-checkout-ready"
 }
 ```
 
@@ -426,6 +503,24 @@ guard. Do not weaken the guard for a shared or Windows-mounted environment.
 The examples use placeholders. Set them only in your local shell and AZD
 environment. Do not add real tenant IDs, subscription IDs, user names, Slack
 tokens, or channel IDs to tracked files.
+
+### Resume after a stopped stage
+
+A stopped block is a safety result, not permission to skip forward. Start a new
+child Bash, run the [existing checkout](#existing-checkout) block, and return to
+the stage that stopped:
+
+- before Stage 1 created an AZD environment, rerun the complete failed stage;
+- after Stage 1 created an environment, do not run `azd env new` again; follow
+  that stage's recovery text and reload only the approved nonsecret values;
+- after infrastructure exists, use
+  [existing-environment setup](#existing-environment-setup), then follow the
+  failed stage's recovery procedure;
+- for routing, token, scope, rollback, or removal work, always begin with
+  [existing-environment setup](#existing-environment-setup).
+
+Never paste a Slack token into a command, shell variable, chat, issue, or
+tracked file. The supported token commands prompt for it without echo.
 
 ### Stage 0: verify the workstation
 
@@ -2295,35 +2390,6 @@ path per subscription. You can therefore adopt Management Group management
 after operating with one or more individual subscriptions; rebuilding the
 central deployment is not required.
 
-You do not need to decide between individual subscriptions and a Management
-Group during the initial deployment. Start with the central subscription, add
-independent subscriptions as needed, and migrate them to a non-overlapping
-Management Group later without a coverage gap.
-
-### Choose the scope command
-
-| Current state | Goal | Command |
-|---|---|---|
-| Central deployment only | Add a second, third, or other independent subscription | `add-subscription` |
-| No managed descendant overlaps | Add all currently accessible descendants of a Management Group | `add-management-group` |
-| One or more descendants already have individual managed alerts | Replace those individual paths with Management Group-managed paths | `migrate-to-management-group` |
-| An uncovered subscription was added to an already managed Management Group | Reconcile membership and create the missing subscription-scoped path | Rerun `add-management-group` |
-| A newly added descendant already has an individual managed alert | Move that alert under the existing Management Group-managed scope | Rerun `migrate-to-management-group` |
-| Management Group coverage should become individual coverage | Create, test, and enable individual replacements before retiring the group path | `migrate-from-management-group` |
-| Management Group coverage is no longer required and alternate coverage already exists | Remove the group-owned paths | `remove-management-group` |
-
-Management Group membership changes do not create Azure Monitor resources by
-themselves. Rerun the appropriate preview and execution after adding or moving
-a subscription in the Azure hierarchy. `add-management-group` repairs missing
-uncovered descendants; use `migrate-to-management-group` instead when a new
-descendant overlaps an existing individual managed alert.
-
-Each logical Management Group remains a day-2 input only. The CLI enumerates
-its visible descendants and deploys one Activity Log Alert and Action Group
-path per subscription. You can therefore adopt Management Group management
-after operating with one or more individual subscriptions; rebuilding the
-central deployment is not required.
-
 ```bash
 {
 set -eEuo pipefail
@@ -2518,16 +2584,19 @@ For day-2, routing, rotation, recovery, rollback, or decommission in a new
 terminal, first start the child Bash from
 [safe shell setup](#safe-shell-and-repository-setup), then run this block.
 Use the existing checkout and the same dedicated CLI profiles used for
-deployment. Do not clone over it or initialize a new environment. Set tenant,
-subscription, and region from the approved deployment record, not from an
-unverified current CLI default:
+deployment. Change `REPOSITORY_PATH` if the deployment checkout is elsewhere.
+Do not clone over it, pull an unreviewed revision, or initialize a new
+environment. Set tenant, subscription, and region from the approved deployment
+record, not from an unverified current CLI default:
 
 ```bash
 {
 set -eEuo pipefail
 shopt -s inherit_errexit
 umask 077
-cd "$HOME/src/azure-service-health-slack-bot"
+REPOSITORY_PATH="$HOME/src/azure-service-health-slack-bot"
+test -e "$REPOSITORY_PATH/.git"
+cd "$REPOSITORY_PATH"
 source scripts/runbook_guard.sh
 runbook_require_repo
 export AZURE_CONFIG_DIR="$HOME/.config/azure-service-health-slack-bot/azure"
@@ -2956,7 +3025,7 @@ a historical deployment record, not validation of every current runbook block:
 | Gate | Accepted evidence |
 |---|---|
 | Workstation | Python 3.12, Azure CLI 2.81.0, Azure CLI-managed Bicep 0.46.1, AZD 1.31.0, Docker client/server 28.3.3, and Git 2.43.0 responded successfully. |
-| Repository | 381 tests, Flake8, dependency audit, both Bicep build/lint graphs, Docker build, and AZD packaging passed after the operational fixes documented here. |
+| Repository | The full test suite, Flake8, dependency audit, both Bicep build/lint graphs, Docker build, and AZD packaging passed after the operational fixes documented here. |
 | Infrastructure preview | Infrastructure-only preview showed the expected phase-one resources and no Container App, Action Group, or alert before bootstrap. |
 | Bootstrap | The hidden `xoxb-` transfer completed, Key Vault held an enabled latest version, local plaintext was absent, migration marker was set, and temporary firewall/RBAC/lock/journal state was restored. |
 | Workload | `azd deploy` published the application image and Container Apps single revision mode converged to exactly one healthy active revision. |

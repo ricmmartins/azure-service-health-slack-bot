@@ -28,13 +28,15 @@ Management Group.
 
 | Goal | Documentation |
 |---|---|
-| Understand the design | [Architecture and resources](docs/deployment-and-operations.md#architecture) |
-| Deploy end to end | [Staged AZD deployment](docs/deployment-and-operations.md#deploy-with-azure-developer-cli) |
+| Install for the first time | [First deployment](docs/deployment-and-operations.md#first-deployment-path) |
+| Resume an interrupted deployment | [Resume safely](docs/deployment-and-operations.md#resume-after-a-stopped-stage) |
+| Operate or update an existing deployment | [Existing-environment setup](docs/deployment-and-operations.md#existing-environment-setup) |
 | Add or remove subscriptions | [Manage alert scopes](docs/deployment-and-operations.md#manage-alert-scopes) |
 | Use a Management Group | [Management Group operations](docs/deployment-and-operations.md#manage-alert-scopes) |
-| Operate or troubleshoot | [Operations runbook](docs/deployment-and-operations.md#operations) |
+| Remove the deployment | [Decommission](docs/deployment-and-operations.md#decommission) |
+| Understand the design | [Architecture and resources](docs/deployment-and-operations.md#architecture) |
+| Troubleshoot | [Troubleshooting](docs/deployment-and-operations.md#troubleshooting) |
 | Review security controls | [Security model](docs/deployment-and-operations.md#security-model) |
-| Verify Microsoft claims | [Microsoft platform evidence](docs/microsoft-platform-evidence.md) |
 | Browse all documentation | [Documentation index](docs/README.md) |
 
 ## Deployment at a glance
@@ -42,7 +44,18 @@ Management Group.
 The supported deployment path uses Azure Developer CLI (`azd`) from a WSL
 Linux filesystem. The complete runbook is deliberately fail-closed and is the
 source of truth for required permissions, versions, previews, and acceptance
-evidence.
+evidence. You do not need to know or edit Bicep: the repository owns the
+templates, while Azure CLI compiles them as a compatibility check.
+
+Have these ready before starting:
+
+- tenant ID, subscription ID, Azure region, and a new AZD environment name;
+- Azure `Owner`, or `Contributor` plus `User Access Administrator`;
+- temporary Microsoft Entra `Application Administrator`;
+- a dedicated Slack app, bot token, workspace ID, and destination channel ID;
+- an independent operations Action Group receiver and its primary/backup
+  owners;
+- Docker Desktop with WSL integration and the supported Linux-native CLI tools.
 
 1. Start the safe child shell, clone and enter the repository, isolate CLI profiles, then validate the tools.
 2. Select and pin the tenant, subscription, location, and AZD environment.
@@ -55,8 +68,8 @@ evidence.
 9. Verify health, authentication rejection, signed delivery, telemetry, and
    receipt in Slack; authorize and verify baseline alert enablement.
 
-Begin with
-[safe shell and repository setup](docs/deployment-and-operations.md#safe-shell-and-repository-setup).
+Begin with the
+[first deployment path](docs/deployment-and-operations.md#first-deployment-path).
 Do not skip directly to `azd up`: the staged process prevents accidental
 deployment to the wrong tenant or subscription and keeps the Slack token out of
 shell history, AZD state, ARM parameters, and source control.
