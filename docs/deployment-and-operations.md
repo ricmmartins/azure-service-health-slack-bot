@@ -212,6 +212,7 @@ common first-run cases are:
 |---|---|
 | Checkout destination already exists | Use [Existing checkout](#existing-checkout); do not clone over it. |
 | Internal template tooling is absent | Rerun Stage 0; it installs and validates the tested tooling automatically. |
+| `runbook_require_repo: command not found` | The terminal was restarted and lost its state. Follow [Resume after a stopped stage](#resume-after-a-stopped-stage), then reload your values as in [Stage 3 recovery](runbook/stage-3.md). |
 | Docker is unavailable | Start the Linux container engine and verify `docker info`. |
 | A command stopped | Follow [Resume after a stopped stage](#resume-after-a-stopped-stage). |
 | Signed test succeeds but Slack is empty | Verify token, `chat:write`, channel ID, and bot membership. |
