@@ -137,7 +137,7 @@ If bootstrap stops with `KeyBasedAuthenticationNotPermitted`, a subscription
 policy disabled shared-key access on the lock Storage account. Nothing was
 written. The CLI then authenticates with your `az login` identity, which needs
 the **Storage Blob Data Contributor** role on that account. Grant it, wait a
-few minutes for propagation, and rerun only the bootstrap command:
+few minutes for propagation, and rerun only the bootstrap command. This only works when the policy turned off keys but left the account's network reachable:
 
 ```text
 LOCK_SA="$(az storage account list -g "rg-$AZURE_ENV_NAME" \
@@ -145,6 +145,15 @@ LOCK_SA="$(az storage account list -g "rg-$AZURE_ENV_NAME" \
 az role assignment create --assignee "$(az ad signed-in-user show --query id -o tsv)" \
   --role "Storage Blob Data Contributor" --scope "$LOCK_SA"
 ```
+
+Check the account with `az storage account show -g "rg-$AZURE_ENV_NAME" -n <lock-account>
+--query "{sharedKey:allowSharedKeyAccess,publicNetwork:publicNetworkAccess}"`. If it
+also reports `publicNetwork: Disabled` and re-enabling it is reverted, a
+subscription policy (typically a Modify effect on corporate subscriptions)
+forces the account private, and the central lock is unreachable from outside
+the network. Standard subscriptions do not have this restriction. Stop, and
+either request a policy exemption for the lock Storage account or deploy in a
+subscription without these policies. Nothing was written to Key Vault.
 
 The hidden token prompt accepts only the Slack **Bot User OAuth Token**, whose
 value starts with `xoxb-`. Copy it from **OAuth & Permissions**, paste it
