@@ -26,7 +26,24 @@ vi config/service_health_routes.json
 
 Replace every synthetic channel and subscription ID. Keep
 `default_channel_id`; it is required. Then validate both JSON syntax and the
-application routing contract:
+application routing contract.
+
+How the file works:
+
+- `channel_id` is a Slack channel ID (starts with `C`). In Slack, open the
+  channel, select its name, and copy the Channel ID at the bottom of the
+  details window. `subscription_ids` are Azure subscription IDs.
+- `default_channel_id` receives every alert that matches no rule.
+- Each entry in `rules` sends matching alerts to its own channel. The example
+  routes Azure Kubernetes Service alerts in East US for one subscription to
+  one channel, and all Azure Storage alerts to another. The services are only
+  examples. `subscription_ids`, `services`, and `regions` are optional filters
+  that must all match.
+- If several rules match, the highest `priority` wins, then the most specific
+  rule, then the first in the file.
+- Simplest setup: set only `default_channel_id` and use `"rules": []`.
+
+Validate both JSON syntax and the application routing contract:
 
 ```bash
 {
@@ -51,6 +68,22 @@ belong to the intended tenant and its channel IDs belong to the intended Slack
 workspace.
 
 Recovery:
+
+- `runbook_require_repo: command not found` means the terminal was restarted
+  and lost its state. Start the child shell from
+  [safe shell setup](00-setup.md#safe-shell-and-repository-setup), run the
+  [existing checkout](00-setup.md#existing-checkout) block, then restore the
+  Stage 1 values and the virtual environment (use your own values) and rerun
+  the failed block:
+
+  ```text
+  export AZURE_ENV_NAME="<environment-name>"
+  export TARGET_TENANT_ID="<tenant-id>"
+  export TARGET_SUBSCRIPTION_ID="<subscription-id>"
+  export AZURE_LOCATION="<region>"
+  source .venv/bin/activate
+  runbook_require_target
+  ```
 
 - A `JSONDecodeError` identifies malformed JSON. Correct the indicated line and
   rerun both validators.
