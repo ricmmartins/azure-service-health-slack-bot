@@ -264,9 +264,10 @@ def default_public_ip_resolver() -> str:
     happens in `_TemporaryVaultNetworkAccess`."""
     value = input(
         "Enter your current public IPv4 address for the temporary Key "
-        "Vault network exception (explicit /32; not auto-discovered): "
+        "Vault network exception (address only, for example 203.0.113.10; "
+        "the /32 is added for you; not auto-discovered): "
     ).strip()
-    return value
+    return value.removesuffix("/32")
 
 
 def default_prompt_token() -> str:
