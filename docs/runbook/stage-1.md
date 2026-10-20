@@ -12,8 +12,20 @@ Prerequisites:
 - an active Microsoft Entra `Application Administrator` directory role for the
   operator who runs the Secure Webhook hook.
 
-Choose a short environment name with lowercase letters, numbers, and hyphens.
-Keep it between 3 and 20 characters and begin and end with a letter or number.
+**Region (`AZURE_LOCATION`).** Use the Azure region *name*: lowercase, no
+spaces, such as `eastus2` (not `East US 2`). List valid names with
+`az account list-locations --query "[].name" -o tsv`
+([reference](https://learn.microsoft.com/cli/azure/account#az-account-list-locations);
+[region names and availability](https://learn.microsoft.com/azure/reliability/regions-list)).
+All regional resources are created there.
+
+**Environment name (`AZURE_ENV_NAME`).** A short label you choose for this one
+deployment, not a tag you create by hand. `azd` uses it for the local state
+folder `.azure/<name>`, the resource group `rg-<name>`, the `azd-env-name`
+resource tag, and to derive unique resource names. Use 3 to 20 lowercase
+letters, numbers, and hyphens, beginning and ending with a letter or number
+(for example `service-health-prod`). Pick a new name for every installation;
+see [AZD environments](https://learn.microsoft.com/azure/developer/azure-developer-cli/manage-environment-variables).
 
 Stay in the checkout established before Stage 0. Replace every angle-bracket
 placeholder; this block does not clone another repository:

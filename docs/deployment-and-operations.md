@@ -48,7 +48,7 @@ automatically. Do not install or invoke Bicep separately.
 
 Have these ready before starting:
 
-- tenant ID, subscription ID, Azure region, and a new AZD environment name;
+- tenant ID, subscription ID, Azure region name (for example astus2), and a new AZD environment name (a short label for this deployment, such as service-health-prod; see [Stage 1](runbook/stage-1.md));
 - Azure `Owner`, or `Contributor` plus `User Access Administrator`;
 - temporary Microsoft Entra `Application Administrator`;
 - a dedicated Slack app with `chat:write`, token rotation disabled, an
