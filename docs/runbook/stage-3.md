@@ -42,6 +42,9 @@ How the file works:
 - If several rules match, the highest `priority` wins, then the most specific
   rule, then the first in the file.
 - Simplest setup: set only `default_channel_id` and use `"rules": []`.
+  The copied example also contains example channel IDs inside `rules`. Replace
+  each with a real channel, or remove the rules if you use a single channel;
+  the check below stops while any example ID remains.
 
 Validate both JSON syntax and the application routing contract:
 
