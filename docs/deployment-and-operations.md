@@ -6,7 +6,7 @@ edit, or run Bicep: `azd` uses the repository infrastructure templates
 internally.
 
 The exact copy/paste command blocks live in the
-[validated command reference](deployment-reference.md). This page tells you
+[validated command reference](runbook/README.md). This page tells you
 which path and command block to use.
 
 ## Choose a path
@@ -72,23 +72,23 @@ checkpoint: stop on an error and do not skip ahead.
    - New clone: [Fresh checkout](#fresh-checkout).
    - Existing clone: [Existing checkout](#existing-checkout).
 2. **Validate the workstation.**
-   Run [Stage 0](deployment-reference.md#stage-0-verify-the-workstation).
+   Run [Stage 0](runbook/stage-0.md#stage-0-verify-the-workstation).
 3. **Pin the Azure target.**
-   Run [Stage 1](deployment-reference.md#stage-1-pin-the-azure-and-azd-deployment-target).
+   Run [Stage 1](runbook/stage-1.md#stage-1-pin-the-azure-and-azd-deployment-target).
 4. **Create the Slack app.**
-   Complete [Stage 2](deployment-reference.md#stage-2-create-and-authorize-the-slack-app).
+   Complete [Stage 2](runbook/stage-2.md#stage-2-create-and-authorize-the-slack-app).
 5. **Install dependencies.**
-   Run [Stage 3](deployment-reference.md#stage-3-install-dependencies-and-validate-the-routing-file).
+   Run [Stage 3](runbook/stage-3.md#stage-3-install-dependencies-and-validate-the-routing-file).
 6. **Load nonsecret configuration and test the independent receiver.**
-   Run [Stage 4](deployment-reference.md#stage-4-load-nonsecret-inputs).
+   Run [Stage 4](runbook/stage-4.md#stage-4-load-nonsecret-inputs).
 7. **Review the identity and Azure preview.**
-   Run [Stage 5](deployment-reference.md#stage-5-reconcile-microsoft-entra-and-preview-azure-changes).
+   Run [Stage 5](runbook/stage-5.md#stage-5-reconcile-microsoft-entra-and-preview-azure-changes).
 8. **Provision infrastructure and transfer the Slack token.**
-   Run [Stage 6](deployment-reference.md#stage-6-provision-infrastructure-and-transfer-the-slack-token).
+   Run [Stage 6](runbook/stage-6.md#stage-6-provision-infrastructure-and-transfer-the-slack-token).
 9. **Build and deploy the application.**
-   Run [Stage 7](deployment-reference.md#stage-7-build-and-deploy-the-application).
+   Run [Stage 7](runbook/stage-7.md#stage-7-build-and-deploy-the-application).
 10. **Verify health and authentication.**
-    Run [Stage 8](deployment-reference.md#stage-8-verify-probes-and-the-authentication-boundary).
+    Run [Stage 8](runbook/stage-8.md#stage-8-verify-probes-and-the-authentication-boundary).
 11. **Send the signed test and accept the deployment.**
     Run [Stage 9](#stage-9-send-the-signed-service-health-test), then
     [authorize baseline coverage](#authorize-and-enable-baseline-coverage).
@@ -106,14 +106,14 @@ bash --noprofile --norc
 ```
 
 Then copy the single
-[fresh-checkout block](deployment-reference.md#fresh-checkout). If its
+[fresh-checkout block](runbook/00-setup.md#fresh-checkout). If its
 destination already exists, use [Existing checkout](#existing-checkout);
 do not delete or overwrite it.
 
 ### Existing checkout
 
 Start a new child Bash and copy the
-[existing-checkout block](deployment-reference.md#existing-checkout). Change
+[existing-checkout block](runbook/00-setup.md#existing-checkout). Change
 only `REPOSITORY_PATH` if your checkout uses another local path. The dedicated
 Azure CLI and AZD profile paths must remain unchanged.
 
@@ -127,7 +127,7 @@ the failed stage using its **Recovery** guidance. Do not repeat `git clone`,
 
 ### Stage 9: send the signed Service Health test
 
-Use the [signed test command](deployment-reference.md#stage-9-send-the-signed-service-health-test).
+Use the [signed test command](runbook/stage-9.md#stage-9-send-the-signed-service-health-test).
 The deployment is not accepted until:
 
 - the Action Group test reports a successful Secure Webhook action;
@@ -141,7 +141,7 @@ authenticated delivery, not subscription-specific routing.
 ### Authorize and enable baseline coverage
 
 After the signed test, follow the
-[baseline cutover](deployment-reference.md#authorize-and-enable-baseline-coverage).
+[baseline cutover](runbook/stage-9.md#authorize-and-enable-baseline-coverage).
 Real Service Health delivery remains disabled until the explicit acceptance and
 preview gates pass.
 
@@ -161,7 +161,7 @@ operation and does not require redeploying the central application.
 Management Groups are logical input only. The CLI creates one Activity Log
 Alert and Action Group path per accessible descendant subscription.
 
-Run the [validated scope procedure](deployment-reference.md#manage-alert-scopes).
+Run the [validated scope procedure](runbook/scopes.md#manage-alert-scopes).
 Every mutation requires a fresh reviewed `--what-if --json` fingerprint.
 
 ## Operations
@@ -169,41 +169,41 @@ Every mutation requires a fresh reviewed `--what-if --json` fingerprint.
 ### Existing-environment setup
 
 Every new operations terminal starts with the
-[existing-environment setup block](deployment-reference.md#existing-environment-setup).
+[existing-environment setup block](runbook/operations.md#existing-environment-setup).
 It restores the approved tenant, subscription, region, AZD environment,
 virtual environment, and resource names before any mutation.
 
 ### Update routing
 
-Use [Update routing](deployment-reference.md#update-routing). Invite the bot to
+Use [Update routing](runbook/operations.md#update-routing). Invite the bot to
 the destination channel before provisioning the new routing configuration.
 
 ### Rotate the Slack token
 
-Use [Rotate the Slack token](deployment-reference.md#rotate-the-slack-token).
+Use [Rotate the Slack token](runbook/operations.md#rotate-the-slack-token).
 The command receives the replacement token through a hidden prompt and validates
 the new revision before completing.
 
 ### Application Insights queries
 
 Use the
-[Application Insights queries](deployment-reference.md#application-insights-queries)
+[Application Insights queries](runbook/operations.md#application-insights-queries)
 for request, dependency, and Service Health processing evidence.
 
 ### Recover an abandoned operation lock
 
-Use [lock recovery](deployment-reference.md#recover-an-abandoned-operation-lock)
+Use [lock recovery](runbook/operations.md#recover-an-abandoned-operation-lock)
 only after proving that no deployment or operational command is still active.
 
 ### Roll back application code
 
-Use [Roll back application code](deployment-reference.md#roll-back-application-code)
+Use [Roll back application code](runbook/operations.md#roll-back-application-code)
 to select a known-good revision image, then repeat probes and the signed test.
 
 ## Troubleshooting
 
 Start with the
-[troubleshooting table](deployment-reference.md#troubleshooting). The most
+[troubleshooting table](runbook/operations.md#troubleshooting). The most
 common first-run cases are:
 
 | Symptom | Action |
@@ -217,7 +217,7 @@ common first-run cases are:
 
 ## Decommission
 
-Use the [validated decommission procedure](deployment-reference.md#decommission).
+Use the [validated decommission procedure](runbook/decommission.md#decommission).
 It inventories day-2 coverage, confirms the exact target, removes Azure
 resources, verifies the protected Entra application identity before deletion,
 and removes local AZD state separately.
@@ -227,7 +227,7 @@ deployment must use a new AZD environment name.
 
 ## Local development
 
-Use the [local development procedure](deployment-reference.md#local-development).
+Use the [local development procedure](local-development.md#local-development).
 Local development may use a `.env` file; production secret transfer must use
 the hidden Key Vault lifecycle prompt.
 
@@ -238,7 +238,7 @@ Entra-authenticated Container Apps webhook. The application validates the
 caller, routes and deduplicates the event, stores incident state in Azure Table
 Storage, and creates or updates the Slack incident thread.
 
-See the [architecture reference](deployment-reference.md#architecture) and the
+See the [architecture reference](design.md#architecture) and the
 [architecture diagram](../img/architecture-flow.svg).
 
 ## Security model
@@ -251,7 +251,7 @@ See the [architecture reference](deployment-reference.md#architecture) and the
 - disabled alerts until signed acceptance;
 - target, ownership, preview, fingerprint, and operation-lock guards.
 
-See the [complete security model](deployment-reference.md#security-model).
+See the [complete security model](design.md#security-model).
 
 ## Known limits
 
@@ -263,14 +263,14 @@ See the [complete security model](deployment-reference.md#security-model).
 - The Tenant Root Group is rejected when it overlaps the central baseline.
 - Only one mutating deployment or operation may run per environment at a time.
 
-See [all known limits](deployment-reference.md#known-limits).
+See [all known limits](design.md#known-limits).
 
 ## Tests
 
 The repository validates application behavior, operational CLIs, the published
 Bash command blocks, Bicep templates used internally by `azd`, the Docker image,
 and documentation contracts. Run the
-[test commands](deployment-reference.md#tests).
+[test commands](runbook/99-acceptance-and-tests.md#tests).
 
 Repository tests cannot prove permissions, policies, quotas, regional
 availability, Entra propagation, or Slack receipt in your tenant. Stages 8 and
