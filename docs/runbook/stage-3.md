@@ -36,15 +36,14 @@ How the file works:
 - `default_channel_id` receives every alert that matches no rule.
 - Each entry in `rules` sends matching alerts to its own channel. The example
   routes Azure Kubernetes Service alerts in East US for one subscription to
-  one channel, and all Azure Storage alerts to another. The services are only
-  examples. `subscription_ids`, `services`, and `regions` are optional filters
+  one channel. The service and region are only examples. `subscription_ids`, `services`, and `regions` are optional filters
   that must all match.
 - If several rules match, the highest `priority` wins, then the most specific
   rule, then the first in the file.
 - Simplest setup: set only `default_channel_id` and use `"rules": []`.
-  The copied example also contains example channel IDs inside `rules`. Replace
-  each with a real channel, or remove the rules if you use a single channel;
-  the check below stops while any example ID remains.
+  The copied example also contains one example channel ID and subscription ID
+  inside `rules`. Replace them, or remove the rule if you use a single channel;
+  the check below stops while any example value remains.
 
 Validate both JSON syntax and the application routing contract:
 
@@ -56,7 +55,7 @@ runbook_require_repo
 python -m json.tool config/service_health_routes.json >/dev/null &&
 python -c 'import json; from pathlib import Path; from service_health.routing import RoutingConfig; RoutingConfig.from_dict(json.loads(Path("config/service_health_routes.json").read_text())); print("routing-valid")' &&
 ! grep -nE \
-  'C0123456789|C1111111111|C2222222222|00000000-0000-0000-0000-000000000000' \
+  'C0123456789|C1111111111|00000000-0000-0000-0000-000000000000' \
   config/service_health_routes.json &&
 echo "routing-checkpoint-passed" || { echo "Routing validation failed; replace any example value listed above." >&2; exit 1; }
 }
