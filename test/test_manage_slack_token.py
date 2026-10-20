@@ -1789,6 +1789,7 @@ def test_default_public_ip_resolver_never_performs_network_io(monkeypatch):
     monkeypatch.setattr("builtins.input", lambda prompt="": " 203.0.113.9/32 ")
     assert module.default_public_ip_resolver() == "203.0.113.9"
 
+
 def test_temporary_vault_network_access_uses_only_the_injected_resolver():
     """No implicit fallback to any network call: the resolver is always
     the explicitly injected callable, never a module-level network probe."""
