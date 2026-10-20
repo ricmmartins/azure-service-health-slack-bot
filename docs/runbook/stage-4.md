@@ -130,7 +130,76 @@ independent receiver. An existing operations resource group is acceptable, but
 the Action Group name must be new; this procedure refuses to overwrite an
 existing receiver configuration. Hold an exclusive approved change window for
 this exact resource group and Action Group name until post-create verification
-finishes:
+finishes.
+
+Load the receiver verifier. It only defines a function and changes nothing in
+Azure. Rerun it in any restarted shell before the receiver test:
+
+```bash
+{
+set -eEuo pipefail
+shopt -s inherit_errexit
+runbook_require_target
+verify_operations_action_group() {
+  local action_group_json
+  if ! action_group_json="$(
+    az monitor action-group show \
+    --resource-group "$OPERATIONS_RESOURCE_GROUP" \
+    --name "$OPERATIONS_ACTION_GROUP_NAME" \
+    --subscription "$TARGET_SUBSCRIPTION_ID" \
+    --only-show-errors \
+    -o json
+  )"; then
+    return 1
+  fi
+  ACTION_GROUP_JSON="$action_group_json" \
+  EXPECTED_ACTION_GROUP_ID="$OPERATIONS_ACTION_GROUP_ID" \
+  EXPECTED_EMAIL_ADDRESS="$OPERATIONS_EMAIL_ADDRESS" \
+  EXPECTED_EMAIL_RECEIVER_NAME="$OPERATIONS_EMAIL_RECEIVER_NAME" \
+  python3 - <<'PY'
+import json
+import os
+
+data = json.loads(os.environ["ACTION_GROUP_JSON"])
+receivers = data.get("emailReceivers") or []
+other_receiver_keys = (
+    "armRoleReceivers",
+    "automationRunbookReceivers",
+    "azureAppPushReceivers",
+    "azureFunctionReceivers",
+    "eventHubReceivers",
+    "incidentReceivers",
+    "itsmReceivers",
+    "logicAppReceivers",
+    "smsReceivers",
+    "voiceReceivers",
+    "webhookReceivers",
+)
+valid_receivers = [
+    receiver for receiver in receivers
+    if str(receiver.get("name", "")).casefold()
+       == os.environ["EXPECTED_EMAIL_RECEIVER_NAME"].casefold()
+    and str(receiver.get("emailAddress", "")).casefold()
+       == os.environ["EXPECTED_EMAIL_ADDRESS"].casefold()
+    and receiver.get("useCommonAlertSchema") is True
+]
+valid = (
+    str(data.get("id", "")).casefold()
+    == os.environ["EXPECTED_ACTION_GROUP_ID"].casefold()
+    and str(data.get("location", "")).casefold() == "global"
+    and data.get("enabled") is True
+    and len(receivers) == 1
+    and len(valid_receivers) == 1
+    and all(not (data.get(key) or []) for key in other_receiver_keys)
+)
+raise SystemExit(0 if valid else 1)
+PY
+}
+echo "operations-verifier-ready"
+}
+```
+
+Then create the Action Group:
 
 ```bash
 {
@@ -211,61 +280,7 @@ OPERATIONS_ACTION_GROUP_ID="$(
 )"
 BOT_ACTION_GROUP_ID="/subscriptions/$TARGET_SUBSCRIPTION_ID/resourceGroups/rg-$AZURE_ENV_NAME/providers/Microsoft.Insights/actionGroups/ag-$AZURE_ENV_NAME-service-health"
 
-verify_operations_action_group() {
-  local action_group_json
-  if ! action_group_json="$(
-    az monitor action-group show \
-    --resource-group "$OPERATIONS_RESOURCE_GROUP" \
-    --name "$OPERATIONS_ACTION_GROUP_NAME" \
-    --subscription "$TARGET_SUBSCRIPTION_ID" \
-    --only-show-errors \
-    -o json
-  )"; then
-    return 1
-  fi
-  ACTION_GROUP_JSON="$action_group_json" \
-  EXPECTED_ACTION_GROUP_ID="$OPERATIONS_ACTION_GROUP_ID" \
-  EXPECTED_EMAIL_ADDRESS="$OPERATIONS_EMAIL_ADDRESS" \
-  EXPECTED_EMAIL_RECEIVER_NAME="$OPERATIONS_EMAIL_RECEIVER_NAME" \
-  python3 - <<'PY'
-import json
-import os
 
-data = json.loads(os.environ["ACTION_GROUP_JSON"])
-receivers = data.get("emailReceivers") or []
-other_receiver_keys = (
-    "armRoleReceivers",
-    "automationRunbookReceivers",
-    "azureAppPushReceivers",
-    "azureFunctionReceivers",
-    "eventHubReceivers",
-    "incidentReceivers",
-    "itsmReceivers",
-    "logicAppReceivers",
-    "smsReceivers",
-    "voiceReceivers",
-    "webhookReceivers",
-)
-valid_receivers = [
-    receiver for receiver in receivers
-    if str(receiver.get("name", "")).casefold()
-       == os.environ["EXPECTED_EMAIL_RECEIVER_NAME"].casefold()
-    and str(receiver.get("emailAddress", "")).casefold()
-       == os.environ["EXPECTED_EMAIL_ADDRESS"].casefold()
-    and receiver.get("useCommonAlertSchema") is True
-]
-valid = (
-    str(data.get("id", "")).casefold()
-    == os.environ["EXPECTED_ACTION_GROUP_ID"].casefold()
-    and str(data.get("location", "")).casefold() == "global"
-    and data.get("enabled") is True
-    and len(receivers) == 1
-    and len(valid_receivers) == 1
-    and all(not (data.get(key) or []) for key in other_receiver_keys)
-)
-raise SystemExit(0 if valid else 1)
-PY
-}
 
 if ! (
   test -n "$OPERATIONS_ACTION_GROUP_ID" &&
@@ -279,18 +294,34 @@ echo "operations-action-group-created"
 }
 ```
 
-Azure sends a one-time-passcode request for a new email receiver. Microsoft
+Azure sends a one-time-passcode (OTP) confirmation email to a new email
+receiver. **Open that email and confirm the address first, and wait a few
+minutes.** Until the receiver is confirmed, the test fails with
+`There are no valid receivers in the request`. If that happens, confirm the
+address, start a new child shell, run the [existing checkout](00-setup.md#existing-checkout)
+block, restore the Stage 1 values and the variables from the first Stage 4
+block, run the verifier block above, and rerun only the test below. Microsoft
 documents that an unverified receiver cannot receive alerts or test
-notifications after enforcement is active. Have the receiver owner complete
-that verification, then send a real Action Group test to the configured
-receiver. The CLI requires the receiver definition even though the saved Action
-Group already contains it:
+notifications after enforcement is active. Then send a real Action Group test
+to the configured receiver. The CLI requires the receiver definition even
+though the saved Action Group already contains it:
 
 ```bash
 {
 set -eEuo pipefail
 shopt -s inherit_errexit
 runbook_require_target
+declare -F verify_operations_action_group >/dev/null || {
+  echo "Run the receiver verifier block first." >&2
+  exit 1
+}
+OPERATIONS_ACTION_GROUP_ID="$(
+  az monitor action-group show \
+    --resource-group "$OPERATIONS_RESOURCE_GROUP" \
+    --name "$OPERATIONS_ACTION_GROUP_NAME" \
+    --subscription "$TARGET_SUBSCRIPTION_ID" \
+    --query id -o tsv
+)"
 if ! az monitor action-group test-notifications create \
     --resource-group "$OPERATIONS_RESOURCE_GROUP" \
     --action-group-name "$OPERATIONS_ACTION_GROUP_NAME" \
