@@ -506,21 +506,12 @@ tokens, or channel IDs to tracked files.
 
 ### Resume after a stopped stage
 
-A stopped block is a safety result, not permission to skip forward. Start a new
-child Bash, run the [existing checkout](#existing-checkout) block, and return to
-the stage that stopped:
-
-- before Stage 1 created an AZD environment, rerun the complete failed stage;
-- after Stage 1 created an environment, do not run `azd env new` again; follow
-  that stage's recovery text and reload only the approved nonsecret values;
-- after infrastructure exists, use
-  [existing-environment setup](#existing-environment-setup), then follow the
-  failed stage's recovery procedure;
-- for routing, token, scope, rollback, or removal work, always begin with
-  [existing-environment setup](#existing-environment-setup).
-
-Never paste a Slack token into a command, shell variable, chat, issue, or
-tracked file. The supported token commands prompt for it without echo.
+Do not skip forward. Start a new child Bash and run
+[existing checkout](#existing-checkout). If the AZD environment or Azure
+resources already exist, continue with
+[existing-environment setup](#existing-environment-setup) and repeat only the
+failed stage using its **Recovery** guidance. Do not repeat `git clone`,
+`azd env new`, or token bootstrap for an existing environment.
 
 ### Stage 0: verify the workstation
 

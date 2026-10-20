@@ -97,7 +97,8 @@ def test_docs_separate_fresh_existing_and_resume_paths():
         in re.sub(r"\s+", " ", setup)
     )
     assert "### Resume after a stopped stage" in runbook
-    assert "do not run `azd env new` again" in runbook
+    assert "Do not repeat `git clone`" in runbook
+    assert "`azd env new`, or token bootstrap" in runbook
     assert "Copy its Bash blocks directly" in docs_index
 
 
