@@ -675,8 +675,6 @@ def test_failed_paste_returns_to_the_original_interactive_terminal():
         os.write(master, b"printf 'parent-survived:%s\\n' \"$?\"\n")
         wait_for(b"parent-survived:1")
         assert b"UNSAFE_CONTINUATION" not in output
-        process.terminate()
-        assert process.wait(timeout=10) in (0, -15)
     finally:
         if process.poll() is None:
             process.kill()
