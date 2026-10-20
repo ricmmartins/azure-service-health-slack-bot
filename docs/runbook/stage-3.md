@@ -76,7 +76,7 @@ Recovery:
   Stage 1 values and the virtual environment (use your own values) and rerun
   the failed block:
 
-  ```bash
+  ```text
   export AZURE_ENV_NAME="<environment-name>"
   export TARGET_TENANT_ID="<tenant-id>"
   export TARGET_SUBSCRIPTION_ID="<subscription-id>"
