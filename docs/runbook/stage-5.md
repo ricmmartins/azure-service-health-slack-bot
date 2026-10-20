@@ -1,4 +1,4 @@
-### Stage 5: reconcile Microsoft Entra and preview Azure changes
+# Stage 5: reconcile Microsoft Entra and preview Azure changes
 
 Prerequisites:
 
