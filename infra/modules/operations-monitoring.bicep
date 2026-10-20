@@ -135,6 +135,7 @@ resource webhookFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01'
         }
       ]
     }
+    skipQueryValidation: true
     autoMitigate: true
     actions: {
       actionGroups: [
@@ -172,6 +173,7 @@ resource dependencyFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-
         }
       ]
     }
+    skipQueryValidation: true
     autoMitigate: true
     actions: {
       actionGroups: [
@@ -209,6 +211,7 @@ resource availabilityFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-1
         }
       ]
     }
+    skipQueryValidation: true
     autoMitigate: true
     actions: {
       actionGroups: [
