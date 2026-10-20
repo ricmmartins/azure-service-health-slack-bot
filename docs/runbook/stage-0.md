@@ -102,8 +102,12 @@ az extension add --name log-analytics --upgrade --yes
 az extension add --name containerapp --upgrade --yes
 az extension show --name log-analytics \
   --query '{name:name,version:version}' -o table
+export AZD_SKIP_UPDATE_CHECK=true
 command -v azd
 type -a azd
+AZD_PATH_COUNT="$(type -ap azd | awk '!seen[$0]++' | wc -l)"
+test "$AZD_PATH_COUNT" -eq 1 ||
+  echo "Warning: several azd installations are on PATH; the first one is used (see Recovery)." >&2
 azd version
 AZD_VERSION_OUTPUT="$(azd version)"
 [[ "$AZD_VERSION_OUTPUT" == *"(stable)"* ]]
@@ -169,6 +173,11 @@ Recovery:
   place it in Azure CLI's `.azure/bin` location. Then rerun the complete Stage 0
   block. If the reviewed binary or its published digest cannot be obtained,
   remain stopped; do not substitute an unrelated standalone executable.
+- If the block warns that several AZD installations are on `PATH`, run
+  `type -a azd` and `<path> version` for each path. The first one is used. To
+  remove an older copy (for example `rm ~/.local/bin/azd`), run `hash -r` and
+  rerun the complete Stage 0 block. The block also sets `AZD_SKIP_UPDATE_CHECK=true` so AZD does not print
+  its update notice on every command; updating AZD is optional.
 - If an older AZD installation shadows the current one, put the current
   installation directory before the older directory in `PATH`, start a new
   shell, and repeat `command -v azd`, `type -a azd`, and `azd version`.
