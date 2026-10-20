@@ -241,19 +241,34 @@ class OperationLock:
             or nested(details, "properties", "primaryEndpoints", "blob")
             or ""
         )
-        keys = self.azure.invoke(
-            "storage",
-            "account",
-            "keys",
-            "list",
-            "--subscription",
-            self.subscription_id,
-            "--resource-group",
-            self.resource_group,
-            "--account-name",
-            account_name,
+        shared_key_allowed = member(
+            details, "allowSharedKeyAccess", None
         )
-        key = str(member((keys or [{}])[0], "value", "") or "")
+        if shared_key_allowed is None:
+            shared_key_allowed = nested(
+                details, "properties", "allowSharedKeyAccess"
+            )
+        key: Any = ""
+        if shared_key_allowed is False:
+            # Policy turned off account keys; use the operator's Entra
+            # identity (needs Storage Blob Data Contributor on the account).
+            from azure.identity import AzureCliCredential
+
+            key = AzureCliCredential()
+        else:
+            keys = self.azure.invoke(
+                "storage",
+                "account",
+                "keys",
+                "list",
+                "--subscription",
+                self.subscription_id,
+                "--resource-group",
+                self.resource_group,
+                "--account-name",
+                account_name,
+            )
+            key = str(member((keys or [{}])[0], "value", "") or "")
         if not endpoint or not key:
             raise OperationLockError(
                 "Operation-lock storage endpoint or access key is unavailable."
