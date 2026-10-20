@@ -58,3 +58,7 @@ Recovery:
   invalid priority.
 - If the placeholder scan stops the command before the final line, replace the
   remaining example value.
+
+---
+
+[Previous: Stage 2](stage-2.md) | [Next: Stage 4](stage-4.md)

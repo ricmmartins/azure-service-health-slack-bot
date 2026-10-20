@@ -44,3 +44,7 @@ Recovery:
   new token.
 - If the app is shared, record every owner and consumer before proceeding.
   Prefer replacing it with a dedicated app for this deployment.
+
+---
+
+[Previous: Stage 1](stage-1.md) | [Next: Stage 3](stage-3.md)

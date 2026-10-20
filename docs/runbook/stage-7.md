@@ -74,3 +74,7 @@ Recovery:
 - If the new revision does not become active, inspect
   `az containerapp logs show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --type system --tail 100`
   before retrying or activating a known-good revision.
+
+---
+
+[Previous: Stage 6](stage-6.md) | [Next: Stage 8](stage-8.md)

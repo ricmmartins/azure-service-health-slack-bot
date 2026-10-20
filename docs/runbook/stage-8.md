@@ -42,3 +42,7 @@ Recovery:
   construction failure.
 - A webhook response other than `401` requires inspection of Container Apps
   authentication and Flask authorization before proceeding.
+
+---
+
+[Previous: Stage 7](stage-7.md) | [Next: Stage 9](stage-9.md)
