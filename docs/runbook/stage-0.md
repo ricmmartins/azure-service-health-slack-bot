@@ -177,3 +177,7 @@ Recovery:
 - If the Log Analytics extension cannot be installed, correct Azure CLI
   extension policy or network access before deployment; do not rely on an
   interactive dynamic-install prompt during incident troubleshooting.
+
+---
+
+[Previous: Setup and checkout](00-setup.md) | [Next: Stage 1](stage-1.md)

@@ -463,3 +463,7 @@ The status object is diagnostic and does not contain tenant, subscription, or
 resource-group identity, so it must never authorize a mutating lifecycle
 command. Stage 6 performs a separate target and uniqueness gate before
 bootstrap.
+
+---
+
+[Previous: Stage 3](stage-3.md) | [Next: Stage 5](stage-5.md)
