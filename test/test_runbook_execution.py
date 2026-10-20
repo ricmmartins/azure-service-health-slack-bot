@@ -1,7 +1,7 @@
 """Execute the published Bash, not a separately maintained walkthrough.
 
-Linux tests use a private checkout and fail-closed CLI doubles. No real Azure,
-Graph, Slack, Docker, or AZD operation is reachable through these doubles.
+Linux and macOS tests use a private checkout and fail-closed CLI doubles. No
+real Azure, Graph, Slack, Docker, or AZD operation is reachable through them.
 """
 
 import json
@@ -18,10 +18,32 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parent.parent
-DOC = ROOT / "docs" / "deployment-and-operations.md"
-BASH = shutil.which("bash")
-LINUX = pytest.mark.skipif(
-    sys.platform != "linux", reason="The operational walkthrough targets Linux/WSL"
+DOC = ROOT / "docs" / "deployment-reference.md"
+
+
+def supported_bash():
+    candidates = (
+        os.environ.get("RUNBOOK_BASH"),
+        "/opt/homebrew/bin/bash",
+        "/usr/local/bin/bash",
+        shutil.which("bash"),
+    )
+    for candidate in candidates:
+        if not candidate or not Path(candidate).is_file():
+            continue
+        result = subprocess.run(
+            [candidate, "-c", 'test "${BASH_VERSINFO[0]}" -ge 4'],
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            return candidate
+    return None
+
+
+BASH = supported_bash()
+SUPPORTED_POSIX = pytest.mark.skipif(
+    sys.platform not in {"linux", "darwin"} or not BASH,
+    reason="The operational walkthrough requires Bash 4.4+ on Linux or macOS",
 )
 
 
@@ -112,8 +134,8 @@ def test_cutover_is_explicit_after_signed_acceptance_and_persists_enabled_state(
 
 @pytest.fixture
 def workstation(tmp_path):
-    if sys.platform != "linux":
-        pytest.skip("Linux/WSL execution fixture")
+    if sys.platform not in {"linux", "darwin"} or not BASH:
+        pytest.skip("Linux/macOS execution fixture")
     home = tmp_path / "operator home with spaces"
     home.mkdir()
     checkout = home / "src" / "azure-service-health-slack-bot"
@@ -463,7 +485,7 @@ def commands(env):
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-@LINUX
+@SUPPORTED_POSIX
 def test_first_run_from_home_clones_before_compiling_and_retains_state(workstation):
     home, checkout, env = workstation
     body = initial_setup() + stage0() + stage1() + """
@@ -488,7 +510,7 @@ printf 'state-survived\\n'
     )
 
 
-@LINUX
+@SUPPORTED_POSIX
 def test_existing_checkout_setup_reuses_profiles_without_clone(workstation):
     home, checkout, env = workstation
     azure_profile = home / ".config" / "azure-service-health-slack-bot" / "azure"
@@ -504,7 +526,7 @@ def test_existing_checkout_setup_reuses_profiles_without_clone(workstation):
     assert checkout == home / "src" / "azure-service-health-slack-bot"
 
 
-@LINUX
+@SUPPORTED_POSIX
 @pytest.mark.parametrize(
     "failure",
     ["az bicep build", "az config set", "az extension add",
@@ -526,7 +548,7 @@ def test_stage0_failure_stops_paste_but_parent_shell_survives(workstation, failu
     assert b"deployment-target-pinned" not in result.stdout
 
 
-@LINUX
+@SUPPORTED_POSIX
 def test_stage0_installs_tested_bicep_in_empty_isolated_profile(workstation):
     home, _, env = workstation
     env["BICEP_MISSING"] = "1"
@@ -543,7 +565,7 @@ def test_stage0_installs_tested_bicep_in_empty_isolated_profile(workstation):
     )
 
 
-@LINUX
+@SUPPORTED_POSIX
 def test_starting_outside_checkout_never_compiles_unrelated_infra(workstation):
     home, checkout, env = workstation
     body = (
@@ -556,7 +578,7 @@ def test_starting_outside_checkout_never_compiles_unrelated_infra(workstation):
     assert not any(row[0] == "az" for row in commands(env))
 
 
-@LINUX
+@SUPPORTED_POSIX
 @pytest.mark.parametrize("problem", ["missing-template", "wrong-origin"])
 def test_bad_checkout_is_rejected_before_first_azure_command(workstation, problem):
     home, checkout, env = workstation
@@ -573,7 +595,7 @@ def test_bad_checkout_is_rejected_before_first_azure_command(workstation, proble
     assert not any(row[0] in {"az", "azd"} for row in commands(env))
 
 
-@LINUX
+@SUPPORTED_POSIX
 def test_arm_match_does_not_authorize_wrong_graph_tenant(workstation):
     home, _, env = workstation
     env["GRAPH_TENANT"] = "33333333-3333-4333-8333-333333333333"
@@ -586,7 +608,7 @@ def test_arm_match_does_not_authorize_wrong_graph_tenant(workstation):
     assert not any(row[1][:2] == ["env", "new"] for row in commands(env))
 
 
-@LINUX
+@SUPPORTED_POSIX
 @pytest.mark.parametrize("mode", [0o644, 0o666])
 def test_target_guard_rejects_nonprivate_env_before_any_cloud_call(workstation, mode):
     home, checkout, env = workstation
@@ -609,7 +631,7 @@ export AZD_CONFIG_DIR="$HOME/.config/azure-service-health-slack-bot/azd"
     assert not any(row[0] == "az" for row in commands(env))
 
 
-@LINUX
+@SUPPORTED_POSIX
 def test_failed_paste_returns_to_the_original_interactive_terminal():
     import pty
     import select
@@ -685,7 +707,7 @@ def deployment_walkthrough():
     return body
 
 
-@LINUX
+@SUPPORTED_POSIX
 def test_published_stages_through_signed_acceptance_and_authorized_cutover(workstation):
     home, _, env = workstation
     result = run_bash(
@@ -714,7 +736,7 @@ def test_published_stages_through_signed_acceptance_and_authorized_cutover(works
     assert signed < enabled
 
 
-@LINUX
+@SUPPORTED_POSIX
 @pytest.mark.parametrize(
     "failure",
     [
@@ -739,7 +761,7 @@ def test_failed_walkthrough_cannot_reach_baseline_enablement(workstation, failur
     ] for row in commands(env))
 
 
-@LINUX
+@SUPPORTED_POSIX
 def test_operations_and_decommission_use_retained_target_not_shell_defaults(workstation):
     home, checkout, env = workstation
     existing = blocks("Existing-environment setup")[0]
