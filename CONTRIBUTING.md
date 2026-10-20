@@ -4,8 +4,9 @@ Thank you for improving this community reference implementation.
 
 ## Local setup
 
-Use Python 3.13, the Azure CLI with Bicep, and Docker with a Linux container
-engine. Python is the canonical cross-platform interface for Secure Webhook
+Use Linux, macOS (Homebrew Bash 4.4+), or Ubuntu on WSL, with Python 3.12 or
+3.13, the Azure CLI, and Docker with a Linux container engine. Contributors
+need Bicep only to validate the templates; operators never do. Python is the canonical cross-platform interface for Secure Webhook
 setup and day-2 scope management, including the native AZD pre-provision hook.
 Create and activate a virtual environment, then install the application and
 test dependencies:
