@@ -69,6 +69,22 @@ workspace.
 
 Recovery:
 
+- `runbook_require_repo: command not found` means the terminal was restarted
+  and lost its state. Start the child shell from
+  [safe shell setup](00-setup.md#safe-shell-and-repository-setup), run the
+  [existing checkout](00-setup.md#existing-checkout) block, then restore the
+  Stage 1 values and the virtual environment (use your own values) and rerun
+  the failed block:
+
+  ```bash
+  export AZURE_ENV_NAME="<environment-name>"
+  export TARGET_TENANT_ID="<tenant-id>"
+  export TARGET_SUBSCRIPTION_ID="<subscription-id>"
+  export AZURE_LOCATION="<region>"
+  source .venv/bin/activate
+  runbook_require_target
+  ```
+
 - A `JSONDecodeError` identifies malformed JSON. Correct the indicated line and
   rerun both validators.
 - `InvalidRoutingConfiguration` identifies a missing channel, invalid rule, or
