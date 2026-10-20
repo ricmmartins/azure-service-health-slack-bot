@@ -171,3 +171,7 @@ Recovery:
 - Do not repeat a failing test in a tight loop. Azure Monitor retries eligible
   failures and can suppress calls to the endpoint for 15 minutes after
   exhausting the retry sequence.
+
+---
+
+[Previous: Stage 8](stage-8.md) | [Next: accept the deployment](../deployment-and-operations.md#accept-the-deployment)

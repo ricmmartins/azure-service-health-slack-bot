@@ -320,3 +320,7 @@ Recovery:
   workload provision and acceptance path, and reports `BootstrapRecovered`;
   it does not prompt for or write another token. Authentication,
   authorization, or control-plane read failures stop without provisioning.
+
+---
+
+[Previous: Stage 5](stage-5.md) | [Next: Stage 7](stage-7.md)

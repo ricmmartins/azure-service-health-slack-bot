@@ -2,48 +2,11 @@
 
 ## Prerequisites
 
-For deployment:
+See [Prerequisites](../deployment-and-operations.md#prerequisites) in the operator guide: supported workstation, required tools, permissions, and the information to collect first. Do not install or run Bicep yourself; Stage 0 prepares it.
 
-- Python 3.12 or 3.13 for local tooling; the production image is pinned to
-  Python 3.14
-- current stable [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
-  with its managed Bicep CLI at `0.46.1` or later and the `log-analytics`
-  extension
-- current stable [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
-- Docker with a Linux container engine
-- a dedicated Slack app with token rotation disabled, an `xoxb-` bot token, and
-  `chat:write`
-- an Azure subscription where you can create the resources in `infra/`
-- `Owner`, or `Contributor` plus `User Access Administrator`, at the target
-  subscription so Bicep can create resources and role assignments
-- Microsoft Entra `Application Administrator` while the Secure Webhook hook runs
+Supported: Linux with Bash 4.4 or later; macOS with Bash 4.4 or later installed through Homebrew; Windows through Ubuntu on WSL, with the checkout in the Linux filesystem (not `/mnt/c`). Native Windows shells and Git Bash are not supported.
 
-The operational CLIs have dependencies that are intentionally excluded from the
-runtime image. Install both `requirements.txt` and `requirements-ops.txt` in the
-same active virtual environment used to run `configure_secure_webhook.py`,
-`manage_slack_token.py`, and `manage_alert_scopes.py`.
-
-The deployment and operations commands support:
-
-- Linux with Bash 4.4 or later;
-- macOS with Bash 4.4 or later installed through Homebrew;
-- Windows through Ubuntu on WSL, using Linux-native tools.
-
-Native Windows shells and Git Bash are not supported. On WSL, keep the
-repository in the Linux filesystem, such as `~/src`, rather than a mounted
-Windows drive. Microsoft
-documents that the DrvFS automount root is configurable and Linux permission
-metadata is not enabled there by default, so a path-prefix check and
-`chmod 600` alone are insufficient. Stage 0 checks the actual mount type
-before any deployment work; `runbook_require_target` checks ownership, private
-permissions, symlinks, and the AZD state mount without reading file contents. See
-[Advanced settings configuration in WSL](https://learn.microsoft.com/windows/wsl/wsl-config#automount-settings)
-and [File Permissions for WSL](https://learn.microsoft.com/windows/wsl/file-permissions).
-Stage 1 pins the Azure subscription and AZD environment before registering the
-Container Apps resource providers.
-
-`Microsoft.ContainerService` is the Azure Kubernetes Service namespace and is
-not a general Container Apps prerequisite for this deployment.
+The operational CLIs need `requirements.txt` and `requirements-ops.txt` in the same virtual environment; Stage 3 installs them.
 
 ## Deploy with Azure Developer CLI
 
@@ -211,3 +174,7 @@ resources already exist, continue with
 [existing-environment setup](operations.md#existing-environment-setup) and repeat only the
 failed stage using its **Recovery** guidance. Do not repeat `git clone`,
 `azd env new`, or token bootstrap for an existing environment.
+
+---
+
+[Operator guide](../deployment-and-operations.md#first-deployment-path) | [Next: Stage 0](stage-0.md)

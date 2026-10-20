@@ -299,3 +299,7 @@ Recovery:
   registered, wait for propagation, and repeat the direct usage request.
 - On WSL, if the repository was cloned on a Windows drive, remove any local
   secret data from that copy and clone again under `~/src` before stage 4.
+
+---
+
+[Previous: Stage 0](stage-0.md) | [Next: Stage 2](stage-2.md)

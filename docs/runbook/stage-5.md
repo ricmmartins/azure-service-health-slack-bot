@@ -166,3 +166,7 @@ Recovery:
   clean run.
 - If preview shows a delete or the wrong subscription, stop, correct the AZD
   environment binding, and rerun preview.
+
+---
+
+[Previous: Stage 4](stage-4.md) | [Next: Stage 6](stage-6.md)
