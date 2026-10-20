@@ -17,15 +17,51 @@ from scripts.configure_secure_webhook import (
 
 
 ROOT = Path(__file__).resolve().parent.parent
-RUNBOOK = "docs/deployment-and-operations.md"
+GUIDE = "docs/deployment-and-operations.md"
+RUNBOOK = "docs/deployment-reference.md"
 
 
 def read(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
+def markdown_anchors(markdown: str) -> set[str]:
+    anchors = set()
+    counts = {}
+    for heading in re.findall(r"^#{1,6}\s+(.+?)\s*$", markdown, re.MULTILINE):
+        slug = heading.lower()
+        slug = re.sub(r"[^\w\s-]", "", slug)
+        slug = re.sub(r"\s+", "-", slug.strip())
+        slug = re.sub(r"-+", "-", slug)
+        count = counts.get(slug, 0)
+        counts[slug] = count + 1
+        anchors.add(slug if count == 0 else f"{slug}-{count}")
+    return anchors
+
+
+def assert_local_markdown_links(relative_path: str):
+    source = read(relative_path)
+    source_dir = (ROOT / relative_path).parent
+    for target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", source):
+        if target.startswith(("http://", "https://", "mailto:")):
+            continue
+        path_text, _, anchor = target.partition("#")
+        target_path = (
+            (source_dir / path_text).resolve()
+            if path_text
+            else (ROOT / relative_path).resolve()
+        )
+        assert target_path.is_file(), f"{relative_path}: missing {target}"
+        if anchor and target_path.suffix.lower() == ".md":
+            markdown = target_path.read_text(encoding="utf-8")
+            assert anchor in markdown_anchors(markdown), (
+                f"{relative_path}: missing anchor {target}"
+            )
+
+
 def test_readme_is_a_concise_landing_page_for_the_complete_runbook():
     readme = read("README.md")
+    guide = read(GUIDE)
     runbook = read(RUNBOOK)
     docs_index = read("docs/README.md")
     overview = read("img/architecture-overview.svg")
@@ -38,6 +74,12 @@ def test_readme_is_a_concise_landing_page_for_the_complete_runbook():
     assert "(docs/deployment-and-operations.md#decommission)" in readme
     assert "(docs/deployment-and-operations.md#manage-alert-scopes)" in readme
     assert "(img/architecture-overview.svg)" in readme
+    assert len(guide.splitlines()) <= 350
+    assert "[validated command reference](deployment-reference.md)" in guide
+    assert "## First deployment path" in guide
+    assert "## Manage alert scopes" in guide
+    assert "## Operations" in guide
+    assert "## Decommission" in guide
     assert "(../img/architecture-flow.svg)" in runbook
     assert "Install from scratch" in docs_index
     assert "Resume after a stage stopped" in docs_index
@@ -46,6 +88,16 @@ def test_readme_is_a_concise_landing_page_for_the_complete_runbook():
     assert "MGs expand to descendants" in detailed
     assert "Operation lock storage" in detailed
     assert "Management Groups are logical input only" in overview
+
+
+def test_operator_documentation_links_resolve():
+    for relative_path in (
+        "README.md",
+        "docs/README.md",
+        GUIDE,
+        RUNBOOK,
+    ):
+        assert_local_markdown_links(relative_path)
 
 
 def test_scope_docs_explain_incremental_management_group_adoption():
@@ -76,11 +128,15 @@ def test_scope_docs_explain_incremental_management_group_adoption():
 
 def test_docs_separate_fresh_existing_and_resume_paths():
     readme = read("README.md")
+    guide = read(GUIDE)
     runbook = read(RUNBOOK)
     docs_index = read("docs/README.md")
     setup = markdown_section(runbook, "Safe shell and repository setup")
 
-    assert "You do not need to know or edit Bicep" in readme
+    normalized_readme = re.sub(r"\s+", " ", readme)
+    assert "You do not need to know, edit, or run Bicep" in normalized_readme
+    assert "You do not need to know" in guide
+    assert "edit, or run Bicep" in guide
     assert "You do not need to author or understand Bicep" in runbook
     assert "#### Fresh checkout" in setup
     assert "#### Existing checkout" in setup
@@ -97,8 +153,31 @@ def test_docs_separate_fresh_existing_and_resume_paths():
         in re.sub(r"\s+", " ", setup)
     )
     assert "### Resume after a stopped stage" in runbook
-    assert "do not run `azd env new` again" in runbook
-    assert "Copy its Bash blocks directly" in docs_index
+    assert "Do not repeat `git clone`" in runbook
+    assert "`azd env new`, or token bootstrap" in runbook
+    assert "Copy commands from" in docs_index
+
+
+def test_operator_surface_is_azd_cli_on_supported_posix_hosts():
+    readme = read("README.md")
+    guide = read(GUIDE)
+    runbook = read(RUNBOOK)
+    guard = read("scripts/runbook_guard.sh")
+
+    assert "Linux or macOS" in readme
+    assert "Windows, use Ubuntu on WSL" in readme
+    assert "You do not need to know, edit, or run Bicep" in readme
+    assert "Linux | Native Bash 4.4+" in guide
+    assert "macOS | Homebrew Bash 4.4+" in guide
+    assert "Windows | Ubuntu on WSL" in guide
+    assert "macOS with Bash 4.4 or later" in runbook
+    assert "Native Windows shells and Git Bash are not supported" in runbook
+    assert (
+        "you do not need to install or run Bicep yourself"
+        in re.sub(r"\s+", " ", runbook)
+    )
+    assert "Linux|Darwin" in guard
+    assert "runbook_require_local_path" in guard
 
 
 def markdown_section(markdown: str, heading: str) -> str:
@@ -233,7 +312,16 @@ def test_stage0_fails_closed_for_stale_azure_cli_managed_bicep():
     assert "az config set bicep.use_binary_from_path=false" in stage
     assert '"$BICEP_VERSION" "$BICEP_MIN_VERSION"' in shell
     assert "az bicep upgrade" in stage
-    assert "az bicep install --version v0.46.1" in stage
+    assert 'az bicep install --version "v$BICEP_TESTED_VERSION"' in shell
+    assert (
+        shell.index("az bicep version 2>/dev/null")
+        < shell.index('az bicep install --version "v$BICEP_TESTED_VERSION"')
+        < shell.index("Could not install Azure CLI-managed Bicep")
+    )
+    assert (
+        "This does not deploy or change Azure resources"
+        in re.sub(r"\s+", " ", stage)
+    )
     assert "standalone" in stage
     assert "air-gapped" in stage
     assert "SHA-256" in stage

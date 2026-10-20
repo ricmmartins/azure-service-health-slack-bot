@@ -41,11 +41,11 @@ Management Group.
 
 ## Deployment at a glance
 
-The supported deployment path uses Azure Developer CLI (`azd`) from a WSL
-Linux filesystem. The complete runbook is deliberately fail-closed and is the
-source of truth for required permissions, versions, previews, and acceptance
-evidence. You do not need to know or edit Bicep: the repository owns the
-templates, while Azure CLI compiles them as a compatibility check.
+The supported deployment path uses Bash, Azure CLI, and Azure Developer CLI
+(`azd`) on Linux or macOS. On Windows, use Ubuntu on WSL with the repository in
+the Linux filesystem. The runbook is the source of truth for permissions,
+previews, and acceptance evidence. You do not need to know, edit, or run Bicep:
+`azd` uses the repository templates internally.
 
 Have these ready before starting:
 
@@ -55,7 +55,7 @@ Have these ready before starting:
 - a dedicated Slack app, bot token, workspace ID, and destination channel ID;
 - an independent operations Action Group receiver and its primary/backup
   owners;
-- Docker Desktop with WSL integration and the supported Linux-native CLI tools.
+- Docker with a running Linux container engine.
 
 1. Start the safe child shell, clone and enter the repository, isolate CLI profiles, then validate the tools.
 2. Select and pin the tenant, subscription, location, and AZD environment.

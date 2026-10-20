@@ -1,8 +1,37 @@
 #!/usr/bin/env bash
 # Source only in the dedicated runbook shell, never in the user's login shell.
 
+runbook_require_supported_host() {
+  case "$(uname -s)" in
+    Linux|Darwin) ;;
+    *) echo "Stop: use Linux, macOS, or Ubuntu on WSL." >&2; return 1 ;;
+  esac
+}
+
+runbook_require_local_path() {
+  local path="$1" source_type
+  case "$(uname -s)" in
+    Linux)
+      source_type="$(findmnt -T "$path" -n -o FSTYPE)" || return 1
+      case "$source_type" in
+        ext2|ext3|ext4|xfs|btrfs|zfs|overlay|tmpfs|apfs) ;;
+        *) echo "Stop: use a local Linux filesystem, not a Windows/network mount." >&2; return 1 ;;
+      esac
+      ;;
+    Darwin)
+      source_type="$(df -P "$path" | awk 'NR == 2 {print $1}')" || return 1
+      case "$source_type" in
+        /dev/*) ;;
+        *) echo "Stop: use a local macOS volume, not a network mount." >&2; return 1 ;;
+      esac
+      ;;
+    *) runbook_require_supported_host || return 1 ;;
+  esac
+}
+
 runbook_require_repo() {
   local root origin
+  runbook_require_supported_host || return 1
   root="$(git rev-parse --show-toplevel)" || return 1
   test "$(pwd -P)" = "$(cd "$root" && pwd -P)" || {
     echo "Stop: run this block at the repository root." >&2
@@ -24,10 +53,7 @@ runbook_require_repo() {
       return 1
     }
   done
-  case "$(findmnt -T "$(pwd -P)" -n -o FSTYPE)" in
-    ext2|ext3|ext4|xfs|btrfs|zfs|overlay|tmpfs) ;;
-    *) echo "Stop: use a Linux filesystem, not a Windows/network mount." >&2; return 1 ;;
-  esac
+  runbook_require_local_path "$(pwd -P)" || return 1
 }
 
 runbook_require_profiles() {
@@ -69,13 +95,9 @@ for value in sys.argv[1:]:
             or stat.S_IMODE(metadata.st_mode) & 0o077):
         raise SystemExit("Stop: CLI/AZD state must be owner-only and not symlinked.")
 PY
-  local state_mount state_path
+  local state_path
   for state_path in "$AZURE_CONFIG_DIR" "$AZD_CONFIG_DIR" ".azure/$AZURE_ENV_NAME"; do
-    state_mount="$(findmnt -T "$state_path" -n -o FSTYPE)" || return 1
-    case "$state_mount" in
-      ext2|ext3|ext4|xfs|btrfs|zfs|overlay|tmpfs) ;;
-      *) echo "Stop: CLI/AZD state is not on a Linux filesystem." >&2; return 1 ;;
-    esac
+    runbook_require_local_path "$state_path" || return 1
   done
   local account_tenant account_subscription graph_tenant name expected actual
   actual="$(az cloud show --query name -o tsv)" || return 1
