@@ -1,4 +1,4 @@
-### Stage 0: verify the workstation
+# Stage 0: verify the workstation
 
 Prerequisites:
 

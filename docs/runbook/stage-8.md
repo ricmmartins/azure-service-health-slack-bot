@@ -1,4 +1,4 @@
-### Stage 8: verify probes and the authentication boundary
+# Stage 8: verify probes and the authentication boundary
 
 Prerequisites: stage 7 shows one active revision.
 

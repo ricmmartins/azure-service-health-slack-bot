@@ -1,4 +1,4 @@
-### Stage 1: pin the Azure and AZD deployment target
+# Stage 1: pin the Azure and AZD deployment target
 
 Prerequisites:
 

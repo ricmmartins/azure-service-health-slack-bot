@@ -1,4 +1,4 @@
-### Stage 6: provision infrastructure and transfer the Slack token
+# Stage 6: provision infrastructure and transfer the Slack token
 
 Prerequisites: the infrastructure-only stage 5 preview was reviewed and
 approved.

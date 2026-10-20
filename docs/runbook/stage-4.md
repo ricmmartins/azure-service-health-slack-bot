@@ -1,4 +1,4 @@
-### Stage 4: load nonsecret inputs
+# Stage 4: load nonsecret inputs
 
 Prerequisites:
 
