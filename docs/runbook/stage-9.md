@@ -1,4 +1,4 @@
-### Stage 9: send the signed Service Health test
+# Stage 9: send the signed Service Health test
 
 Prerequisites:
 

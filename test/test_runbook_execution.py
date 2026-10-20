@@ -56,8 +56,9 @@ SUPPORTED_POSIX = pytest.mark.skipif(
 def blocks(section=None):
     text = doc_text()
     if section:
-        text = text.split(f"### {section}\n", 1)[1]
-        text = re.split(r"^###? ", text, maxsplit=1, flags=re.M)[0]
+        found = re.search(rf"^#{{1,3}} {re.escape(section)}\n", text, re.M)
+        text = text[found.end():]
+        text = re.split(r"^#{1,3} ", text, maxsplit=1, flags=re.M)[0]
     return re.findall(r"```bash\n(.*?)```", text, re.S)
 
 
@@ -133,7 +134,7 @@ def test_cutover_is_explicit_after_signed_acceptance_and_persists_enabled_state(
         'azd provision -e "$AZURE_ENV_NAME"'
     )
     assert "baseline-coverage-enabled" in cutover
-    assert text.index("### Stage 9:") < text.index(
+    assert text.index("# Stage 9:") < text.index(
         "### Authorize and enable baseline coverage"
     )
 

@@ -195,9 +195,9 @@ def test_operator_surface_is_azd_cli_on_supported_posix_hosts():
 
 
 def markdown_section(markdown: str, heading: str) -> str:
-    marker = f"### {heading}\n"
-    start = markdown.index(marker) + len(marker)
-    match = re.search(r"^###? ", markdown[start:], re.MULTILINE)
+    found = re.search(rf"^#{{1,3}} {re.escape(heading)}\n", markdown, re.M)
+    start = found.end()
+    match = re.search(r"^#{1,3} ", markdown[start:], re.MULTILINE)
     end = start + match.start() if match else len(markdown)
     return markdown[start:end]
 

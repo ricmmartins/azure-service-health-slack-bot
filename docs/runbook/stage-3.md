@@ -1,4 +1,4 @@
-### Stage 3: install dependencies and validate the routing file
+# Stage 3: install dependencies and validate the routing file
 
 Prerequisites: stages 0 through 2 are complete.
 

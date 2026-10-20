@@ -1,4 +1,4 @@
-### Stage 7: build and deploy the application
+# Stage 7: build and deploy the application
 
 Prerequisites:
 

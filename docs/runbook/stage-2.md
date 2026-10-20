@@ -1,4 +1,4 @@
-### Stage 2: create and authorize the Slack app
+# Stage 2: create and authorize the Slack app
 
 Prerequisites:
 
