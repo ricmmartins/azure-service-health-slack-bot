@@ -52,10 +52,10 @@ shopt -s inherit_errexit
 runbook_require_repo
 python -m json.tool config/service_health_routes.json >/dev/null &&
 python -c 'import json; from pathlib import Path; from service_health.routing import RoutingConfig; RoutingConfig.from_dict(json.loads(Path("config/service_health_routes.json").read_text())); print("routing-valid")' &&
-! grep -Eq \
+! grep -nE \
   'C0123456789|C1111111111|C2222222222|00000000-0000-0000-0000-000000000000' \
   config/service_health_routes.json &&
-echo "routing-checkpoint-passed" || { echo "Routing validation failed." >&2; exit 1; }
+echo "routing-checkpoint-passed" || { echo "Routing validation failed; replace any example value listed above." >&2; exit 1; }
 }
 ```
 
@@ -89,8 +89,9 @@ Recovery:
   rerun both validators.
 - `InvalidRoutingConfiguration` identifies a missing channel, invalid rule, or
   invalid priority.
-- If the placeholder scan stops the command before the final line, replace the
-  remaining example value.
+- If the placeholder scan stops the command before the final line, it lists
+  each remaining example value with its line number. Replace them and rerun.
+  The failure ends the child shell; restart it as described above.
 
 ---
 
