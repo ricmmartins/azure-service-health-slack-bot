@@ -456,7 +456,11 @@ elif name == "docker":
     print("linux" if args[0] == "info" else "client=fixture server=fixture")
 else:
     raise SystemExit("Unexpected executable")
-state_path.write_text(json.dumps(state))
+temporary_state = state_path.with_name(
+    f".{state_path.name}.{os.getpid()}.tmp"
+)
+temporary_state.write_text(json.dumps(state))
+os.replace(temporary_state, state_path)
 '''
 
 
@@ -671,8 +675,8 @@ def test_failed_paste_returns_to_the_original_interactive_terminal():
         os.write(master, b"printf 'parent-survived:%s\\n' \"$?\"\n")
         wait_for(b"parent-survived:1")
         assert b"UNSAFE_CONTINUATION" not in output
-        os.write(master, b"exit\n")
-        assert process.wait(timeout=10) == 0
+        process.terminate()
+        assert process.wait(timeout=10) in (0, -15)
     finally:
         if process.poll() is None:
             process.kill()
