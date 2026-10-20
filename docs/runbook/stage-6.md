@@ -133,6 +133,19 @@ the lifecycle CLI. The bootstrap command then:
    `bootstrap` after a final provision failure resumes token-free instead of
    requesting or writing another credential.
 
+If bootstrap stops with `KeyBasedAuthenticationNotPermitted`, a subscription
+policy disabled shared-key access on the lock Storage account. Nothing was
+written. The CLI then authenticates with your `az login` identity, which needs
+the **Storage Blob Data Contributor** role on that account. Grant it, wait a
+few minutes for propagation, and rerun only the bootstrap command:
+
+```text
+LOCK_SA="$(az storage account list -g "rg-$AZURE_ENV_NAME" \
+  --query "[?tags.\"service-health-purpose\"=='operation-lock'].id | [0]" -o tsv)"
+az role assignment create --assignee "$(az ad signed-in-user show --query id -o tsv)" \
+  --role "Storage Blob Data Contributor" --scope "$LOCK_SA"
+```
+
 The hidden token prompt accepts only the Slack **Bot User OAuth Token**, whose
 value starts with `xoxb-`. Copy it from **OAuth & Permissions**, paste it
 directly into the hidden prompt, and never place it in a command, shell variable,
