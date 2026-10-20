@@ -119,7 +119,7 @@ resource webhookFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01'
     evaluationFrequency: 'PT5M'
     windowSize: 'PT5M'
     scopes: [
-      applicationInsightsId
+      logAnalyticsId
     ]
     criteria: {
       allOf: [
@@ -135,6 +135,7 @@ resource webhookFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01'
         }
       ]
     }
+    skipQueryValidation: true
     autoMitigate: true
     actions: {
       actionGroups: [
@@ -156,7 +157,7 @@ resource dependencyFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-
     evaluationFrequency: 'PT5M'
     windowSize: 'PT5M'
     scopes: [
-      applicationInsightsId
+      logAnalyticsId
     ]
     criteria: {
       allOf: [
@@ -172,6 +173,7 @@ resource dependencyFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-
         }
       ]
     }
+    skipQueryValidation: true
     autoMitigate: true
     actions: {
       actionGroups: [
@@ -193,7 +195,7 @@ resource availabilityFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-1
     evaluationFrequency: 'PT5M'
     windowSize: 'PT15M'
     scopes: [
-      applicationInsightsId
+      logAnalyticsId
     ]
     criteria: {
       allOf: [
@@ -209,6 +211,7 @@ resource availabilityFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-1
         }
       ]
     }
+    skipQueryValidation: true
     autoMitigate: true
     actions: {
       actionGroups: [
