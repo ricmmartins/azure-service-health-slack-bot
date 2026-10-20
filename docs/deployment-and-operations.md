@@ -90,7 +90,7 @@ checkpoint: stop on an error and do not skip ahead.
 10. **Verify health and authentication.**
     Run [Stage 8](runbook/stage-8.md#stage-8-verify-probes-and-the-authentication-boundary).
 11. **Send the signed test and accept the deployment.**
-    Run [Stage 9](#stage-9-send-the-signed-service-health-test), then
+    Follow [Accept the deployment](#accept-the-deployment): signed test, then
     [authorize baseline coverage](#authorize-and-enable-baseline-coverage).
 
 Do not replace this sequence with a direct `azd up`. The staged path keeps the
@@ -117,17 +117,11 @@ Start a new child Bash and copy the
 only `REPOSITORY_PATH` if your checkout uses another local path. The dedicated
 Azure CLI and AZD profile paths must remain unchanged.
 
-### Resume after a stopped stage
+## Accept the deployment
 
-Do not skip forward. Restore the [existing checkout](#existing-checkout). If
-the AZD environment or Azure resources already exist, use
-[existing-environment setup](#existing-environment-setup), then repeat only
-the failed stage using its **Recovery** guidance. Do not repeat `git clone`,
-`azd env new`, or token bootstrap for an existing environment.
+### Send the signed Service Health test
 
-### Stage 9: send the signed Service Health test
-
-Use the [signed test command](runbook/stage-9.md#stage-9-send-the-signed-service-health-test).
+Run the [signed test command](runbook/stage-9.md#stage-9-send-the-signed-service-health-test).
 The deployment is not accepted until:
 
 - the Action Group test reports a successful Secure Webhook action;
@@ -144,6 +138,14 @@ After the signed test, follow the
 [baseline cutover](runbook/stage-9.md#authorize-and-enable-baseline-coverage).
 Real Service Health delivery remains disabled until the explicit acceptance and
 preview gates pass.
+
+## Resume after a stopped stage
+
+Do not skip forward. Restore the [existing checkout](#existing-checkout). If
+the AZD environment or Azure resources already exist, use
+[existing-environment setup](#existing-environment-setup), then repeat only
+the failed stage using its **Recovery** guidance. Do not repeat `git clone`,
+`azd env new`, or token bootstrap for an existing environment.
 
 ## Manage alert scopes
 

@@ -25,7 +25,7 @@ runbook from top to bottom.
 - [First deployment path](deployment-and-operations.md#first-deployment-path)
 - [Fresh checkout](deployment-and-operations.md#fresh-checkout)
 - [Existing checkout](deployment-and-operations.md#existing-checkout)
-- [Signed Service Health acceptance test](deployment-and-operations.md#stage-9-send-the-signed-service-health-test)
+- [Signed Service Health acceptance test](deployment-and-operations.md#send-the-signed-service-health-test)
 - [Authorize baseline coverage](deployment-and-operations.md#authorize-and-enable-baseline-coverage)
 
 ## Expand coverage
