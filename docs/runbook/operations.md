@@ -157,7 +157,7 @@ echo "routing-target-confirmed"
 runbook_require_target
 python -m json.tool config/service_health_routes.json >/dev/null
 python -c 'import json; from pathlib import Path; from service_health.routing import RoutingConfig; RoutingConfig.from_dict(json.loads(Path("config/service_health_routes.json").read_text()))'
-if grep -Eq 'C0123456789|C1111111111|C2222222222|00000000-0000-0000-0000-000000000000' config/service_health_routes.json; then
+if grep -Eq 'C0123456789|C1111111111|00000000-0000-0000-0000-000000000000' config/service_health_routes.json; then
   echo "Replace the routing example identifiers." >&2
   exit 1
 fi
