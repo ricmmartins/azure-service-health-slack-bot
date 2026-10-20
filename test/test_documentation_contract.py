@@ -18,10 +18,24 @@ from scripts.configure_secure_webhook import (
 
 ROOT = Path(__file__).resolve().parent.parent
 GUIDE = "docs/deployment-and-operations.md"
-RUNBOOK = "docs/deployment-reference.md"
+RUNBOOK = "docs/runbook"
+DESIGN = "docs/design.md"
+
+
+def runbook_files() -> list[str]:
+    return [
+        DESIGN,
+        "docs/local-development.md",
+        *sorted(
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / RUNBOOK).glob("*.md")
+        ),
+    ]
 
 
 def read(relative_path: str) -> str:
+    if relative_path == RUNBOOK:
+        return "\n".join(read(path) for path in runbook_files())
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
@@ -75,7 +89,7 @@ def test_readme_is_a_concise_landing_page_for_the_complete_runbook():
     assert "(docs/deployment-and-operations.md#manage-alert-scopes)" in readme
     assert "(img/architecture-overview.svg)" in readme
     assert len(guide.splitlines()) <= 350
-    assert "[validated command reference](deployment-reference.md)" in guide
+    assert "[validated command reference](runbook/README.md)" in guide
     assert "## First deployment path" in guide
     assert "## Manage alert scopes" in guide
     assert "## Operations" in guide
@@ -95,7 +109,7 @@ def test_operator_documentation_links_resolve():
         "README.md",
         "docs/README.md",
         GUIDE,
-        RUNBOOK,
+        *runbook_files(),
     ):
         assert_local_markdown_links(relative_path)
 

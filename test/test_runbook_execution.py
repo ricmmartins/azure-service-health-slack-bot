@@ -18,7 +18,13 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parent.parent
-DOC = ROOT / "docs" / "deployment-reference.md"
+DOC = ROOT / "docs" / "runbook"
+
+
+def doc_text() -> str:
+    return "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(DOC.glob("*.md"))
+    )
 
 
 def supported_bash():
@@ -48,7 +54,7 @@ SUPPORTED_POSIX = pytest.mark.skipif(
 
 
 def blocks(section=None):
-    text = DOC.read_text(encoding="utf-8")
+    text = doc_text()
     if section:
         text = text.split(f"### {section}\n", 1)[1]
         text = re.split(r"^###? ", text, maxsplit=1, flags=re.M)[0]
@@ -80,7 +86,7 @@ def test_every_paste_block_is_a_complete_strict_compound_command():
 
 
 def test_repository_setup_precedes_first_deployment_template_command():
-    text = DOC.read_text(encoding="utf-8").split(
+    text = doc_text().split(
         "## Deploy with Azure Developer CLI\n", 1
     )[1]
     assert text.index("git clone ") < text.index("az bicep build ")
@@ -103,7 +109,7 @@ def test_every_arm_preview_opts_out_of_mutating_hooks():
 
 
 def test_documented_repository_scripts_and_templates_exist():
-    text = DOC.read_text(encoding="utf-8")
+    text = doc_text()
     references = re.findall(
         r"\b(?:scripts/[\w.-]+\.(?:py|sh)|infra/[\w./-]+\.(?:bicep|json))",
         text,
@@ -114,7 +120,7 @@ def test_documented_repository_scripts_and_templates_exist():
 
 
 def test_cutover_is_explicit_after_signed_acceptance_and_persists_enabled_state():
-    text = DOC.read_text(encoding="utf-8")
+    text = doc_text()
     stage9 = blocks("Stage 9: send the signed Service Health test")[0]
     cutover = blocks("Authorize and enable baseline coverage")[0]
     assert 'SIGNED_TEST_AT="$(date -u +%s)"' in stage9

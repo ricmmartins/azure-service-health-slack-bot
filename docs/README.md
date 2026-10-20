@@ -46,6 +46,6 @@ runbook from top to bottom.
 
 Use the concise [deployment and operations guide](deployment-and-operations.md)
 to choose and follow a task. Its links open the exact blocks in the
-[validated command reference](deployment-reference.md). Copy commands from
+[validated command reference](runbook/README.md). Copy commands from
 those fenced blocks directly; do not copy rendered command text from chat,
 email, or rich-text editors that may escape underscores or alter quotes.
