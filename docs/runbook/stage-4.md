@@ -199,7 +199,9 @@ echo "operations-verifier-ready"
 }
 ```
 
-Then create the Action Group:
+Then create the Action Group. Note: Azure emails a confirmation link to the
+receiver address when the group is created. Confirm it before the receiver test,
+or the test fails with `There are no valid receivers in the request`.
 
 ```bash
 {
@@ -294,10 +296,13 @@ echo "operations-action-group-created"
 }
 ```
 
-Azure sends a one-time-passcode (OTP) confirmation email to a new email
-receiver. **Open that email and confirm the address first, and wait a few
-minutes.** Until the receiver is confirmed, the test fails with
-`There are no valid receivers in the request`. If that happens, confirm the
+> **Note:** Azure sends a confirmation email to the new receiver address.
+> Until you confirm it, the test below always fails with
+> `There are no valid receivers in the request`. Open the email (check spam),
+> confirm, wait a few minutes, and check that the status is `Enabled`:
+> `az monitor action-group show -g "$OPERATIONS_RESOURCE_GROUP" -n "$OPERATIONS_ACTION_GROUP_NAME" --query "emailReceivers[].status" -o tsv`.
+
+If the test already failed, confirm the
 address, start a new child shell, run the [existing checkout](00-setup.md#existing-checkout)
 block, restore the Stage 1 values and the variables from the first Stage 4
 block, run the verifier block above, and rerun only the test below. Microsoft
