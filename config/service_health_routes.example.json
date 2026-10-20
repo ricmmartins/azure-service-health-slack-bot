@@ -13,13 +13,6 @@
       "regions": [
         "East US"
       ]
-    },
-    {
-      "channel_id": "C2222222222",
-      "priority": 50,
-      "services": [
-        "Azure Storage"
-      ]
     }
   ]
 }
