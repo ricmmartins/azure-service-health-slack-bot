@@ -234,7 +234,16 @@ def test_stage0_fails_closed_for_stale_azure_cli_managed_bicep():
     assert "az config set bicep.use_binary_from_path=false" in stage
     assert '"$BICEP_VERSION" "$BICEP_MIN_VERSION"' in shell
     assert "az bicep upgrade" in stage
-    assert "az bicep install --version v0.46.1" in stage
+    assert 'az bicep install --version "v$BICEP_TESTED_VERSION"' in shell
+    assert (
+        shell.index("az bicep version 2>/dev/null")
+        < shell.index('az bicep install --version "v$BICEP_TESTED_VERSION"')
+        < shell.index("Could not install Azure CLI-managed Bicep")
+    )
+    assert (
+        "This does not deploy or change Azure resources"
+        in re.sub(r"\s+", " ", stage)
+    )
     assert "standalone" in stage
     assert "air-gapped" in stage
     assert "SHA-256" in stage

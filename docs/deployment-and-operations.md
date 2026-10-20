@@ -526,6 +526,11 @@ Prerequisites:
 - Git
 - `findmnt` from `util-linux` for the Linux filesystem gate
 
+The dedicated Azure CLI profile starts empty and does not reuse Bicep from your
+normal CLI profile. On the first run, this stage installs the repository-tested
+Bicep version into that dedicated local profile. This does not deploy or change
+Azure resources.
+
 Run:
 
 ```bash
@@ -566,9 +571,16 @@ test "$(printf '%s\n' "$BICEP_FROM_PATH" | \
   echo "Azure CLI is configured to run bicep from PATH; stop." >&2
   exit 1
 }
-BICEP_VERSION_OUTPUT="$(az bicep version)" || {
-  echo "Azure CLI-managed Bicep is not installed; stop at Stage 0." >&2
-  exit 1
+BICEP_VERSION_OUTPUT="$(az bicep version 2>/dev/null)" || {
+  echo "Installing Azure CLI-managed Bicep $BICEP_TESTED_VERSION..."
+  az bicep install --version "v$BICEP_TESTED_VERSION" || {
+    echo "Could not install Azure CLI-managed Bicep; stop." >&2
+    exit 1
+  }
+  BICEP_VERSION_OUTPUT="$(az bicep version)" || {
+    echo "Azure CLI-managed Bicep is still unavailable; stop." >&2
+    exit 1
+  }
 }
 BICEP_VERSION="$(printf '%s\n' "$BICEP_VERSION_OUTPUT" | \
   sed -nE 's/^Bicep CLI version ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')"
@@ -656,8 +668,8 @@ Recovery:
   `az config set bicep.use_binary_from_path=false`, recheck the setting, and
   rerun the complete Stage 0 block. Do not run a Bicep command before this gate
   passes.
-- If `az bicep version` fails, install the repository-tested version with
-  `az bicep install --version v0.46.1`, then rerun the complete Stage 0 block.
+- If the automatic Bicep installation fails, correct network or Azure CLI
+  policy access, then rerun the complete Stage 0 block.
 - If `az bicep version` reports less than `0.46.1`, run the idempotent
   `az bicep upgrade`, recheck `az bicep version`, and rerun all four build/lint
   commands in the Stage 0 block. Stop if the upgrade or any recheck fails.

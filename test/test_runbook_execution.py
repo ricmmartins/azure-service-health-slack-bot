@@ -255,7 +255,13 @@ elif name == "az":
     elif args[:2] == ["config", "get"]:
         print("false")
     elif args[:2] == ["bicep", "version"]:
+        if (os.environ.get("BICEP_MISSING") == "1"
+                and not state.get("bicep_installed")):
+            raise SystemExit(1)
         print("Bicep CLI version " + os.environ.get("BICEP_VERSION", "0.46.1"))
+    elif args[:2] == ["bicep", "install"]:
+        assert argument("--version") == "v0.46.1"
+        state["bicep_installed"] = True
     elif args[0] == "bicep" and args[1] in {"build", "lint"}:
         assert Path.cwd() == Path(os.environ["STUB_CHECKOUT"])
         assert Path(args[args.index("--file") + 1]).is_file()
@@ -518,6 +524,23 @@ def test_stage0_failure_stops_paste_but_parent_shell_survives(workstation, failu
     assert b"parent-alive:" in result.stdout
     assert b"UNSAFE_CONTINUATION" not in result.stdout
     assert b"deployment-target-pinned" not in result.stdout
+
+
+@LINUX
+def test_stage0_installs_tested_bicep_in_empty_isolated_profile(workstation):
+    home, _, env = workstation
+    env["BICEP_MISSING"] = "1"
+
+    result = run_bash(initial_setup() + stage0(), cwd=home, env=env)
+
+    assert result.returncode == 0, result.stderr.decode()
+    assert b"Installing Azure CLI-managed Bicep 0.46.1" in result.stdout
+    assert any(
+        row[0] == "az"
+        and row[1][:2] == ["bicep", "install"]
+        and row[1][-1] == "v0.46.1"
+        for row in commands(env)
+    )
 
 
 @LINUX
