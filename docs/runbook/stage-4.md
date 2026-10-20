@@ -13,6 +13,27 @@ must not be the bot Secure Webhook Action Group
 `ag-${AZURE_ENV_NAME}-service-health`, because that path is one of the
 components the operations alerts must monitor.
 
+An [Action Group](https://learn.microsoft.com/azure/azure-monitor/alerts/action-groups)
+is an Azure Monitor resource that lists who is notified, here by email, when an
+alert fires. This one watches the health of the bot itself, so it must live
+apart from the bot. Every value below is a label or contact you choose; the
+examples are only illustrations.
+
+| Variable | What it is | Example |
+|---|---|---|
+| `OPERATIONS_RESOURCE_GROUP` | Name of a new or existing [resource group](https://learn.microsoft.com/azure/azure-resource-manager/management/overview#resource-groups) that will hold the operations Action Group. Must differ from `rg-<AZURE_ENV_NAME>`, so removing the bot never removes your alerting. Created if missing. | `rg-ricardolab-ops` |
+| `OPERATIONS_LOCATION` | Azure region for that resource group, written as in [Stage 1](stage-1.md). | `eastus` |
+| `OPERATIONS_ACTION_GROUP_NAME` | Name of the Action Group to create. Must not already exist. Letters, numbers, `.`, `_`, `-`. | `ag-ricardolab-ops` |
+| `OPERATIONS_ACTION_GROUP_SHORT_NAME` | Short label shown in the notification (for example in an SMS or email header). 1 to 12 letters, numbers, `_`, `-`. | `rlab-ops` |
+| `OPERATIONS_EMAIL_ADDRESS` | Mailbox that receives the operations alerts and the test message. Prefer a shared role mailbox. Keep it out of the repository. | `oncall@contoso.com` |
+| `OPERATIONS_PRIMARY_OWNER` | Person, team, or alias accountable for answering these alerts. Recorded as evidence only. | `platform-team` |
+| `OPERATIONS_BACKUP_OWNER` | A different person, team, or alias who covers when the primary is unavailable. Must differ from the primary. | `sre-backup` |
+| `OPERATIONS_RUNBOOK_URI` | `https://` link to your own incident procedure that explains what to do when an alert arrives. Any page you maintain works. | `https://wiki.contoso.com/sh-bot` |
+
+Leave `OPERATIONS_EMAIL_RECEIVER_NAME` and `OPERATIONS_ON_CALL_DESTINATION`
+unchanged. They name the email receiver the commands create.
+
+See also [`az monitor action-group create`](https://learn.microsoft.com/cli/azure/monitor/action-group#az-monitor-action-group-create).
 The minimum new-adopter receiver below is an approved on-call email mailbox.
 Replace every placeholder in the current shell only. Use a role mailbox rather
 than a personal address when policy permits, do not enable shell tracing, and
