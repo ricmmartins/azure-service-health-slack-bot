@@ -13,6 +13,21 @@ must not be the bot Secure Webhook Action Group
 `ag-${AZURE_ENV_NAME}-service-health`, because that path is one of the
 components the operations alerts must monitor.
 
+An [Action Group](https://learn.microsoft.com/azure/azure-monitor/alerts/action-groups)
+is an Azure Monitor resource that lists who is notified, here by email, when an
+alert fires. Values to choose (all are labels you invent; examples only):
+
+| Variable | Meaning | Example |
+|---|---|---|
+| `OPERATIONS_RESOURCE_GROUP` | [Resource group](https://learn.microsoft.com/azure/azure-resource-manager/management/overview#resource-groups) for the operations alerts; created if missing. Not `rg-<env>`. | `rg-ricardolab-ops` |
+| `OPERATIONS_LOCATION` | Region name, as in [Stage 1](stage-1.md). | `eastus` |
+| `OPERATIONS_ACTION_GROUP_NAME` | New Action Group name: letters, numbers, `.`, `_`, `-`. | `ag-ricardolab-ops` |
+| `OPERATIONS_ACTION_GROUP_SHORT_NAME` | Display name used in notifications, 1 to 12 characters. | `rlab-ops` |
+| `OPERATIONS_EMAIL_ADDRESS` | Mailbox that receives operations alerts. | `oncall@contoso.com` |
+| `OPERATIONS_PRIMARY_OWNER`, `OPERATIONS_BACKUP_OWNER` | Two different people or roles responsible for the alerts. | `platform-team`, `sre-backup` |
+| `OPERATIONS_RUNBOOK_URI` | HTTPS link to your own incident procedure. | `https://wiki.contoso.com/sh-bot` |
+
+See also [`az monitor action-group create`](https://learn.microsoft.com/cli/azure/monitor/action-group#az-monitor-action-group-create).
 The minimum new-adopter receiver below is an approved on-call email mailbox.
 Replace every placeholder in the current shell only. Use a role mailbox rather
 than a personal address when policy permits, do not enable shell tracing, and
