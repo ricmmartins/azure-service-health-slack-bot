@@ -44,7 +44,8 @@ runbook from top to bottom.
 - [Troubleshooting](deployment-and-operations.md#troubleshooting)
 - [Decommission](deployment-and-operations.md#decommission)
 
-The [complete deployment and operations runbook](deployment-and-operations.md)
-is the command source of truth. Copy its Bash blocks directly; do not copy
-rendered command text from chat, email, or rich-text editors that may escape
-underscores or alter quotes.
+Use the concise [deployment and operations guide](deployment-and-operations.md)
+to choose and follow a task. Its links open the exact blocks in the
+[validated command reference](deployment-reference.md). Copy commands from
+those fenced blocks directly; do not copy rendered command text from chat,
+email, or rich-text editors that may escape underscores or alter quotes.
