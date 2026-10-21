@@ -576,11 +576,6 @@ class ScopeManager:
     def _assert_review_context_unchanged(self) -> None:
         if self._review_context is None:
             return
-        if self._review_context["expiresAt"] <= int(self.clock()):
-            raise ScopeManagerError(
-                "The reviewed execution fingerprint expired during the "
-                "operation; no further mutation was attempted."
-            )
         account = self.azure.invoke("account", "show")
         current_target = {
             "tenantId": normalized_id(member(account, "tenantId")),
@@ -1686,7 +1681,7 @@ class ScopeManager:
             "--subscription",
             target_subscription_id,
             "--name",
-            f"service-health-{suffix}",
+            f"service-health-{suffix}-{self.central['Location']}",
             "--location",
             self.central["Location"],
             "--template-file",

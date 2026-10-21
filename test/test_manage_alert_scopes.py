@@ -1978,6 +1978,32 @@ def test_review_context_rechecks_managed_scope_before_each_mutation(
         instance.assert_operation_membership_unchanged()
 
 
+def test_review_context_does_not_abort_started_operation_after_expiry(
+    monkeypatch,
+):
+    clock = {"now": 1000.0}
+    instance = reviewed_manager(monkeypatch, clock=lambda: clock["now"])
+    expires_at = 1500
+    payload = instance._review_payload(
+        "add-subscription",
+        TARGET_SUBSCRIPTION,
+        None,
+        expires_at,
+    )
+    instance._review_context = {
+        "expiresAt": expires_at,
+        "target": payload["target"],
+        "command": payload["command"],
+        "managementGroup": None,
+        "managedScopes": payload["managedScopes"],
+        "artifacts": payload["artifacts"],
+    }
+    monkeypatch.setattr(instance, "get_managed_scopes", lambda: [])
+    clock["now"] = 5000.0
+
+    instance.assert_operation_membership_unchanged()
+
+
 def test_post_mutation_transition_rejects_unrelated_scope_drift(
     monkeypatch,
 ):
