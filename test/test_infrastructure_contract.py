@@ -51,10 +51,10 @@ def test_reprovision_preserves_the_deployed_image_and_bootstrap_is_pinned():
     container_app = read("infra/modules/container-app.bicep")
 
     assert "param containerAppExists bool" in container_app
-    assert (
-        "existingContainerApp!.properties.template.containers[0].image"
-        in container_app
-    )
+    assert "existing-container-image.bicep" in container_app
+    assert "existingContainerApp" not in container_app
+    existing_image = read("infra/modules/existing-container-image.bicep")
+    assert "existingApp!.properties.template.containers[0].image" in existing_image
     assert "containerapps-helloworld@sha256:" in container_app
     assert "containerapps-helloworld:latest" not in container_app
 
