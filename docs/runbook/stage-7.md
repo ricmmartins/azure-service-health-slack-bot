@@ -35,6 +35,7 @@ Inspect active revisions:
 set -eEuo pipefail
 shopt -s inherit_errexit
 runbook_require_target
+runbook_load_outputs
 az containerapp revision list \
   --resource-group "$RESOURCE_GROUP" \
   --name "$APP_NAME" \
