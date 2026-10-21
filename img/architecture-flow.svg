@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1100" role="img" aria-labelledby="diagram-title diagram-desc">
   <title id="diagram-title">Azure Service Health to Slack operator architecture</title>
-  <desc id="diagram-desc">Numbered Service Health events cross global, subscription-scoped Azure Monitor resources into an Easy Auth protected Container App in the selected Azure region, then reach Slack. Management Groups are expanded into descendant subscription alert paths. Separate delivery, private network, managed identity RBAC, data, operations, and observability paths explain the supporting resources.</desc>
+  <desc id="diagram-desc">Numbered Service Health events cross global, subscription-scoped Azure Monitor resources into an Entra-authenticated Container App in the selected Azure region, then reach Slack. Management Groups are expanded into descendant subscription alert paths. Separate delivery, private network, managed identity RBAC, data, operations, and observability paths explain the supporting resources.</desc>
   <metadata>Source: Microsoft Azure Architecture Icons V24, https://arch-center.azureedge.net/icons/Azure_Public_Service_Icons_V24.zip. Terms: https://learn.microsoft.com/azure/architecture/icons/#icon-terms. Official product artwork is embedded unmodified, uniformly scaled, and shown beside its Azure product name.</metadata>
 
   <defs>
@@ -315,7 +315,7 @@
     <use href="#icon-app-insights" x="327" y="941" width="32" height="32"/>
     <text class="node-title" x="371" y="945">Application Insights</text>
     <text class="tiny" x="371" y="963">OpenTelemetry application telemetry</text>
-    <text class="tiny" x="371" y="978">Drives Failure Anomalies alert</text>
+    <text class="tiny" x="371" y="978">Queried by webhook and dependency alerts</text>
   </g>
 
   <g>
