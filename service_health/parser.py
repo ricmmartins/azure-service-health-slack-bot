@@ -27,6 +27,25 @@ _LEVEL_BY_NUMBER = {
 }
 
 
+_BREAK_TAG = re.compile(r"<\s*(?:br\s*/?|/p|/div|/h[1-6]|/tr)\s*>", re.I)
+_LIST_ITEM_TAG = re.compile(r"<\s*li(?:\s[^>]*)?>", re.I)
+_ANY_TAG = re.compile(r"<\s*/?\s*[a-z][^<>]*>", re.I)
+
+
+def _html_to_text(value):
+    """Turn Azure's HTML communication into plain text for Slack.
+
+    Tags are removed before entities are decoded, so escaped text such as
+    `&lt;b&gt;` stays visible as literal text.
+    """
+    text = _BREAK_TAG.sub("\n", value)
+    text = _LIST_ITEM_TAG.sub("\n\u2022 ", text)
+    text = _ANY_TAG.sub("", text)
+    text = html.unescape(text).replace("\xa0", " ")
+    lines = [" ".join(line.split()) for line in text.splitlines()]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def _required_string(mapping, key):
     value = mapping.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -220,8 +239,8 @@ def parse_service_health_alert(payload):
         title=html.unescape(_required_string(properties, "title")),
         impact_start_time=_parse_datetime(
             properties.get("impactStartTime"), "impactStartTime"),
-        communication=html.unescape(
-            _required_string(properties, "communication")),
+        communication=_html_to_text(
+            _required_string(properties, "communication")) or "-",
         impacted_services=_parse_impacted_services(
             properties.get("impactedServices")),
         submission_time=_parse_datetime(

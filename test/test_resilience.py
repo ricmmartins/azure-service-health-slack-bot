@@ -872,3 +872,25 @@ def test_malformed_persisted_state_is_nonretryable_processing_failure():
 
     with pytest.raises(PermanentProcessingError, match="operator repair"):
         processor.process(parse_service_health_alert(common_alert()))
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("<p>This is a test from Service Health Alert</p>",
+         "This is a test from Service Health Alert"),
+        ("<p>One</p><p>Two &amp; three</p>", "One\nTwo & three"),
+        ("Line<br/>Next<BR>Last", "Line\nNext\nLast"),
+        ("<ul><li>A</li><li>B</li></ul>", "\u2022 A\n\u2022 B"),
+        ('<a href="https://x.test/?a=1&amp;b=2">link</a> text',
+         "link text"),
+        ("&lt;b&gt;literal&lt;/b&gt;", "<b>literal</b>"),
+        ("plain text unchanged", "plain text unchanged"),
+        ("<p></p>", "-"),
+    ],
+)
+def test_communication_html_is_rendered_as_plain_text(raw, expected):
+    payload = common_alert()
+    payload["data"]["alertContext"]["properties"]["communication"] = raw
+    event = parse_service_health_alert(payload)
+    assert event.communication == expected
