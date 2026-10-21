@@ -1405,6 +1405,15 @@ def test_parse_dotenv_value_strips_matching_quotes_only():
         parse_dotenv_value('"unterminated')
 
 
+def test_parse_dotenv_value_unescapes_double_quoted_azd_json():
+    raw = '"{\\"status\\":\\"Succeeded\\",\\"path\\":\\"a\\\\\\\\b\\"}"'
+    assert json.loads(parse_dotenv_value(raw)) == {
+        "status": "Succeeded",
+        "path": "a\\b",
+    }
+    assert parse_dotenv_value("'{\\\"a\\\"}'") == '{\\"a\\"}'
+
+
 def test_migrate_reads_local_token_removes_line_and_writes_secret(tmp_path):
     dotenv_path = tmp_path / ".env"
     dotenv_path.write_text("SLACK_BOT_TOKEN=" + VALID_TOKEN + "\n", encoding="utf-8")
