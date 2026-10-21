@@ -187,8 +187,8 @@ Always pass `--environment-name`; do not rely on discovery when more than one
 deployment can exist. Use `--json` for machine-readable output.
 
 All mutating scope commands require the exact `ExecutionFingerprint` from a
-reviewed `--what-if --json` result. The fingerprint expires after 15 minutes and
-binds the tenant, subscription, environment, command parameters, Management
+reviewed `--what-if --json` result. The fingerprint must be used to start the
+execution within 15 minutes and binds the tenant, subscription, environment, command parameters, Management
 Group descendants, current managed scopes, and the manager/Bicep artifact
 hashes. The command rechecks those bindings before every serial deploy, enable,
 or delete and stops on drift. `--what-if` never acquires the lock or writes a
@@ -221,3 +221,15 @@ uses a synthetic subscription ID, so it cannot validate a real
 subscription-specific rule. It normally exercises the default route, although
 a service or region rule that matches the synthetic payload can take
 precedence.
+
+### Recipients for added subscriptions
+
+Every added subscription sends its Service Health alerts only to the bot
+through a Secure Webhook. Choose the Slack destination with the routing rules
+(`subscription_ids`, `services`, `regions`), not with the scope commands:
+the scope commands create and remove Azure alert resources and never change the
+destination. Day-2 Action Groups have no email receiver. Email notifications
+for platform operations are configured once on the central operations Action
+group, not per subscription. To receive Service Health email for an added
+subscription, create a separate Action Group with an email receiver in the
+Azure portal; the bot does not manage it.
