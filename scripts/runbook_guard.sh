@@ -136,3 +136,18 @@ PY
     }
   done
 }
+
+# Re-derive the deployed names so a stage block also works in a fresh shell.
+runbook_load_outputs() {
+  RESOURCE_GROUP="$(azd env get-value AZURE_RESOURCE_GROUP \
+    -e "$AZURE_ENV_NAME" --no-prompt)" || return 1
+  APP_NAME="$(azd env get-value SERVICE_APP_NAME \
+    -e "$AZURE_ENV_NAME" --no-prompt)" || return 1
+  APP_URI="$(azd env get-value SERVICE_APP_URI \
+    -e "$AZURE_ENV_NAME" --no-prompt)" || return 1
+  ACTION_GROUP="ag-${AZURE_ENV_NAME}-service-health"
+  test -n "$RESOURCE_GROUP" && test -n "$APP_NAME" && test -n "$APP_URI" || {
+    echo "Stop: deployed outputs are not recorded; finish Stage 6 first." >&2
+    return 1
+  }
+}
