@@ -92,7 +92,7 @@ a signed test, query the workspace directly:
 set -eEuo pipefail
 shopt -s inherit_errexit
 runbook_require_target
-test -n "$RESOURCE_GROUP"
+runbook_load_outputs
 WORKSPACE_ID="$(az monitor log-analytics workspace list \
   --resource-group "$RESOURCE_GROUP" \
   --query '[0].customerId' -o tsv)"
