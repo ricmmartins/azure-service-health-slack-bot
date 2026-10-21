@@ -63,14 +63,20 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: keyVaultName
 }
 
-resource existingContainerApp 'Microsoft.App/containerApps@2024-03-01' existing = if (containerAppExists) {
-  name: 'ca-${environmentName}'
+var bootstrapImage = 'mcr.microsoft.com/azuredocs/containerapps-helloworld@sha256:e9b3e7c34664c7cffd7144864b0e4eec369bfde80068f9095dc63b37058bec48'
+
+// Read the current image in a separate deployment; referencing the app's own
+// resource from itself creates a circular dependency on re-provision.
+module existingImage 'existing-container-image.bicep' = {
+  name: 'existing-container-image'
+  params: {
+    name: 'ca-${environmentName}'
+    exists: containerAppExists
+    fallbackImage: bootstrapImage
+  }
 }
 
-var bootstrapImage = 'mcr.microsoft.com/azuredocs/containerapps-helloworld@sha256:e9b3e7c34664c7cffd7144864b0e4eec369bfde80068f9095dc63b37058bec48'
-var containerImage = containerAppExists
-  ? existingContainerApp!.properties.template.containers[0].image
-  : bootstrapImage
+var containerImage = existingImage.outputs.image
 
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: 'ca-${environmentName}'

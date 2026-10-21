@@ -339,8 +339,8 @@ def test_stage0_fails_closed_for_stale_azure_cli_managed_bicep():
     assert "standalone" in stage
     assert "air-gapped" in stage
     assert "SHA-256" in stage
-    assert "existingContainerApp!.properties" in read(
-        "infra/modules/container-app.bicep"
+    assert "existingApp!.properties" in read(
+        "infra/modules/existing-container-image.bicep"
     )
 
     expected_commands = {
