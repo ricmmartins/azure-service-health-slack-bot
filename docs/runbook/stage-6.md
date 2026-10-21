@@ -297,6 +297,7 @@ Run an independent nonsecret cleanup checkpoint:
 set -eEuo pipefail
 shopt -s inherit_errexit
 runbook_require_target
+RESOURCE_GROUP="rg-$AZURE_ENV_NAME"
 KEY_VAULT_NAME="$(azd env get-value SERVICE_HEALTH_KEY_VAULT_NAME \
   -e "$AZURE_ENV_NAME" --no-prompt)"
 KEY_VAULT_ID="$(az keyvault show --name "$KEY_VAULT_NAME" \
