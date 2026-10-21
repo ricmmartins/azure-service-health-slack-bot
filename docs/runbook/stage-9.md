@@ -15,6 +15,7 @@ Group itself must be enabled so the synthetic test can run:
 set -eEuo pipefail
 shopt -s inherit_errexit
 runbook_require_target
+runbook_load_outputs
 test "$(az monitor activity-log alert show \
   --resource-group "$RESOURCE_GROUP" \
   --name "ala-$AZURE_ENV_NAME-service-health" \
@@ -86,6 +87,7 @@ Inspect recent application logs:
 set -eEuo pipefail
 shopt -s inherit_errexit
 runbook_require_target
+runbook_load_outputs
 az containerapp logs show \
   --resource-group "$RESOURCE_GROUP" \
   --name "$APP_NAME" \
@@ -139,6 +141,7 @@ SERVICE_HEALTH_READ_ONLY_PREVIEW=true azd provision --preview \
 read -r -p "Type ENABLE only if preview enables only the baseline, without image/secret changes: " CUTOVER
 test "$CUTOVER" = ENABLE
 runbook_require_target
+runbook_load_outputs
 azd provision -e "$AZURE_ENV_NAME" \
   --subscription "$TARGET_SUBSCRIPTION_ID" \
   --location "$AZURE_LOCATION" --no-prompt

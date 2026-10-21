@@ -9,6 +9,7 @@ Run:
 set -eEuo pipefail
 shopt -s inherit_errexit
 runbook_require_target
+runbook_load_outputs
 RESPONSE_FILE="$(mktemp)"
 trap 'rm -f "$RESPONSE_FILE"' EXIT
 test "$(curl --connect-timeout 10 --max-time 60 -fsS "$APP_URI/healthz")" = '{"status":"healthy"}' &&
