@@ -646,8 +646,21 @@ def parse_dotenv_value(raw: str) -> str:
             raise ScopeManagerError(
                 "Malformed local dotenv value: unterminated quote."
             )
-        return value[1:-1]
+        inner = value[1:-1]
+        if value[0] == '"':
+            # AZD writes double-quoted values with backslash escapes.
+            return re.sub(
+                r"\\(.)",
+                lambda match: DOTENV_ESCAPES.get(
+                    match.group(1), match.group(0)
+                ),
+                inner,
+            )
+        return inner
     return value
+
+
+DOTENV_ESCAPES = {'"': '"', "\\": "\\", "n": "\n", "r": "\r", "t": "\t"}
 
 
 def local_dotenv_value_present(
