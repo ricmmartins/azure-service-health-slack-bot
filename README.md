@@ -37,6 +37,7 @@ Management Group.
 | Understand the design | [Architecture and resources](docs/deployment-and-operations.md#architecture) |
 | Troubleshoot | [Troubleshooting](docs/deployment-and-operations.md#troubleshooting) |
 | Review security controls | [Security model](docs/deployment-and-operations.md#security-model) |
+| Read the design story | [Know before your customers do: a secure Azure Service Health to Slack pipeline](https://techcommunity.microsoft.com/blog/startupsatmicrosoftblog/know-before-your-customers-do-a-secure-azure-service-health-to-slack-pipeline/4566890) |
 | Browse all documentation | [Documentation index](docs/README.md) |
 
 ## Deployment at a glance
