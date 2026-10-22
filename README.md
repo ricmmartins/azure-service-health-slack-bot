@@ -8,6 +8,9 @@ This is a community reference implementation. Azure Service Health remains the
 source of truth; the bot does not acknowledge incidents, open support requests,
 or replace an incident management platform.
 
+📖 **Behind the design:** read the companion article,
+[Know before your customers do: a secure Azure Service Health to Slack pipeline](https://techcommunity.microsoft.com/blog/startupsatmicrosoftblog/know-before-your-customers-do-a-secure-azure-service-health-to-slack-pipeline/4566890).
+
 ## How it works
 
 ![Azure Service Health events flow through subscription alerts and an authenticated Container App into Slack.](img/architecture-overview.svg)
