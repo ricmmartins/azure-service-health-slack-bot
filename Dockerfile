@@ -32,7 +32,8 @@ RUN apt-get update \
 COPY requirements.txt .
 COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt \
-    && rm -rf /wheels
+    && rm -rf /wheels \
+    && pip uninstall -y pip
 
 COPY --chown=app:app app.py .
 COPY --chown=app:app service_health ./service_health
